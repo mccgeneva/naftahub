@@ -1,7 +1,7 @@
 "use server"
 
 import { cookies } from "next/headers"
-import { pool } from "@/lib/db"
+import { pool, isDatabaseConfigured } from "@/lib/db"
 import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { getUserBySessionToken, getUserById, type UserProfile } from "@/lib/users"
@@ -21,6 +21,42 @@ async function requireAdmin(passcode: string): Promise<UserProfile> {
   if (!user) throw new Error("Your session has expired. Please sign in again.")
   if (String(passcode) !== ADMIN_PASSCODE) throw new Error("Administrator authorization failed.")
   return user
+}
+
+// --- Table bootstrap --------------------------------------------------------
+
+let ensured = false
+
+const DB_NOT_CONFIGURED_MSG =
+  "The database is not connected yet. Add the Neon connection string (DATABASE_URL) in Project Settings → Environment Variables, then try again."
+
+/**
+ * Lazily create the ledger_entries table on first use. Mirrors the pattern used
+ * by gateway/reconciliation/admin-users so the table exists before any read or
+ * write — otherwise queries throw and reads silently return empty, which makes
+ * edit/reverse report "entry does not exist".
+ */
+async function ensureTable(): Promise<void> {
+  if (ensured) return
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS ledger_entries (
+       user_id      text        NOT NULL,
+       entry_id     text        NOT NULL,
+       direction    text        NOT NULL,
+       amount       numeric     NOT NULL DEFAULT 0,
+       currency     text        NOT NULL DEFAULT 'USD',
+       status       text        NOT NULL DEFAULT 'completed',
+       entry_date   timestamptz NOT NULL DEFAULT now(),
+       counterparty text,
+       account      text,
+       bank         text,
+       reference    text,
+       comment      text,
+       category     text,
+       PRIMARY KEY (user_id, entry_id)
+     )`,
+  )
+  ensured = true
 }
 
 // --- Row mapping ------------------------------------------------------------
@@ -43,6 +79,7 @@ function rowToEntry(row: Record<string, unknown>): LedgerEntry {
 }
 
 async function readLedger(userId: string): Promise<LedgerEntry[]> {
+  await ensureTable()
   const { rows } = await pool.query(
     `SELECT * FROM ledger_entries WHERE user_id = $1 ORDER BY entry_date DESC`,
     [userId],
@@ -51,6 +88,7 @@ async function readLedger(userId: string): Promise<LedgerEntry[]> {
 }
 
 async function upsertEntry(userId: string, entry: LedgerEntry): Promise<void> {
+  await ensureTable()
   await pool.query(
     `INSERT INTO ledger_entries
        (user_id, entry_id, direction, amount, currency, status, entry_date,
@@ -118,6 +156,7 @@ export async function removeMyLedgerEntry(entryId: string): Promise<{ ok: boolea
   const user = await getSessionUser()
   if (!user) return { ok: false }
   try {
+    await ensureTable()
     await pool.query(`DELETE FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [user.id, entryId])
     return { ok: true }
   } catch (err) {
@@ -160,6 +199,10 @@ export async function addLedgerEntryForUserAdmin(
     return { ok: false, error: "Enter a valid amount." }
   }
 
+  if (!isDatabaseConfigured) {
+    return { ok: false, error: DB_NOT_CONFIGURED_MSG }
+  }
+
   try {
     await upsertEntry(userId, { ...entry, amount })
     const target = getUserById(userId)
@@ -195,6 +238,7 @@ export async function removeLedgerEntryForUserAdmin(
     return { ok: false, error: (err as Error).message }
   }
   try {
+    await ensureTable()
     await pool.query(`DELETE FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [userId, entryId])
     return { ok: true, entries: await readLedger(userId) }
   } catch (err) {
@@ -223,6 +267,10 @@ export async function updateLedgerEntryForUserAdmin(
   const amount = Number(entry.amount)
   if (!Number.isFinite(amount) || amount <= 0) {
     return { ok: false, error: "Enter a valid amount." }
+  }
+
+  if (!isDatabaseConfigured) {
+    return { ok: false, error: DB_NOT_CONFIGURED_MSG }
   }
 
   try {
