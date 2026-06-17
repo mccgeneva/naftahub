@@ -75,7 +75,7 @@ const bankPartners = [
 
 const plans = [
   {
-    name: "Golden",
+    name: "Standard",
     price: "€100,000",
     description: "Entry-level trading platform access",
     features: [
@@ -96,7 +96,7 @@ const plans = [
     price: "€500,000",
     description: "Full platform access for serious traders",
     features: [
-      "Everything in Golden, plus:",
+      "Everything in Standard, plus:",
       "Extended bank network: HSBC, UBS, JP Morgan",
       "Fiduciary asset management",
       "Unlimited bank instruments trading",

@@ -42,49 +42,45 @@ export function LiveRates() {
   }, [])
 
   return (
-    <Card className="bg-card border-border">
-      <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <div>
-          <CardTitle className="text-lg font-semibold">Live FX Rates</CardTitle>
-          <p className="text-xs text-muted-foreground mt-1">
-            Updated {lastUpdate.toLocaleTimeString()}
-          </p>
+    <Card className="bg-card border-border gap-0 py-0 overflow-hidden">
+      <CardHeader className="flex flex-row items-center justify-between border-b border-border px-4 py-2.5 [.border-b]:pb-2.5">
+        <div className="flex items-center gap-2">
+          <span className="h-3.5 w-1 rounded-full bg-primary" aria-hidden="true" />
+          <div>
+            <CardTitle className="text-xs font-semibold uppercase tracking-wider">Live FX Rates</CardTitle>
+            <p className="font-mono text-[10px] text-muted-foreground">
+              {lastUpdate.toLocaleTimeString("en-GB", { hour12: false })} UTC
+            </p>
+          </div>
         </div>
         <Button
           variant="ghost"
           size="icon"
+          className="h-7 w-7"
           onClick={refreshRates}
           disabled={isRefreshing}
         >
-          <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
+          <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")} />
         </Button>
       </CardHeader>
-      <CardContent>
-        <div className="space-y-3">
+      <CardContent className="p-0">
+        <div className="divide-y divide-border">
           {rates.map((rate) => (
             <div
               key={rate.pair}
-              className="flex items-center justify-between py-2 border-b border-border last:border-0"
+              className="flex items-center justify-between px-4 py-2 transition-colors hover:bg-secondary/50"
             >
-              <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary">
-                  <span className="text-xs font-medium text-foreground">
-                    {rate.pair.split("/")[0]}
-                  </span>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-foreground">{rate.pair}</p>
-                  <p className="text-xs text-muted-foreground">Live rate</p>
-                </div>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs font-semibold text-foreground">{rate.pair}</span>
               </div>
-              <div className="text-right">
-                <p className="text-sm font-mono font-semibold text-foreground">
+              <div className="flex items-center gap-4">
+                <span className="font-mono text-sm font-semibold tabular-nums text-foreground">
                   {rate.rate.toFixed(4)}
-                </p>
-                <p
+                </span>
+                <span
                   className={cn(
-                    "flex items-center justify-end text-xs font-medium",
-                    rate.direction === "up" ? "text-green-500" : "text-red-500"
+                    "flex w-16 items-center justify-end font-mono text-xs font-medium tabular-nums",
+                    rate.direction === "up" ? "text-success" : "text-destructive"
                   )}
                 >
                   {rate.direction === "up" ? (
@@ -93,7 +89,7 @@ export function LiveRates() {
                     <ArrowDownRight className="h-3 w-3" />
                   )}
                   {Math.abs(rate.change).toFixed(2)}%
-                </p>
+                </span>
               </div>
             </div>
           ))}

@@ -24,7 +24,7 @@ const BRAND = {
   name: "MCC Capital",
   tagline: "MCC Banking & Trade Platform",
   address: "Rue du Rhone 14, 1204 Geneva, Switzerland",
-  gold: [197, 160, 71] as [number, number, number],
+  gold: [245, 140, 0] as [number, number, number],
   ink: [17, 17, 17] as [number, number, number],
   slate: [110, 116, 128] as [number, number, number],
   line: [225, 227, 231] as [number, number, number],

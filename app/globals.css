@@ -4,90 +4,90 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  /* Premium Banking Dark Theme - Inspired by Swiss Financial Institutions */
-  --background: oklch(0.13 0.01 260);
-  --foreground: oklch(0.95 0 0);
-  --card: oklch(0.16 0.01 260);
-  --card-foreground: oklch(0.95 0 0);
-  --popover: oklch(0.18 0.01 260);
-  --popover-foreground: oklch(0.95 0 0);
-  --primary: oklch(0.75 0.15 85);
-  --primary-foreground: oklch(0.13 0.01 260);
-  --secondary: oklch(0.22 0.01 260);
-  --secondary-foreground: oklch(0.85 0 0);
-  --muted: oklch(0.20 0.01 260);
-  --muted-foreground: oklch(0.60 0 0);
-  --accent: oklch(0.75 0.15 85);
-  --accent-foreground: oklch(0.13 0.01 260);
-  --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.95 0 0);
-  --border: oklch(0.25 0.01 260);
-  --input: oklch(0.20 0.01 260);
-  --ring: oklch(0.75 0.15 85);
-  --chart-1: oklch(0.75 0.15 85);
-  --chart-2: oklch(0.65 0.18 160);
-  --chart-3: oklch(0.55 0.20 280);
-  --chart-4: oklch(0.70 0.15 45);
-  --chart-5: oklch(0.60 0.12 200);
-  --radius: 0.75rem;
-  --sidebar: oklch(0.11 0.01 260);
-  --sidebar-foreground: oklch(0.85 0 0);
-  --sidebar-primary: oklch(0.75 0.15 85);
-  --sidebar-primary-foreground: oklch(0.13 0.01 260);
-  --sidebar-accent: oklch(0.18 0.01 260);
-  --sidebar-accent-foreground: oklch(0.95 0 0);
-  --sidebar-border: oklch(0.22 0.01 260);
-  --sidebar-ring: oklch(0.75 0.15 85);
-  
-  /* Custom Banking Colors */
-  --success: oklch(0.65 0.20 145);
-  --success-foreground: oklch(0.13 0.01 260);
-  --warning: oklch(0.75 0.15 85);
-  --warning-foreground: oklch(0.13 0.01 260);
-  --gold: oklch(0.78 0.14 80);
-  --gold-foreground: oklch(0.13 0.01 260);
+  /* Bloomberg Terminal Theme — amber on near-black, dense data-terminal feel */
+  --background: oklch(0.12 0.005 250);
+  --foreground: oklch(0.94 0.005 250);
+  --card: oklch(0.15 0.006 250);
+  --card-foreground: oklch(0.94 0.005 250);
+  --popover: oklch(0.16 0.006 250);
+  --popover-foreground: oklch(0.94 0.005 250);
+  --primary: oklch(0.74 0.17 58);
+  --primary-foreground: oklch(0.14 0.01 60);
+  --secondary: oklch(0.20 0.006 250);
+  --secondary-foreground: oklch(0.88 0.005 250);
+  --muted: oklch(0.19 0.006 250);
+  --muted-foreground: oklch(0.62 0.008 250);
+  --accent: oklch(0.74 0.17 58);
+  --accent-foreground: oklch(0.14 0.01 60);
+  --destructive: oklch(0.58 0.22 25);
+  --destructive-foreground: oklch(0.96 0 0);
+  --border: oklch(0.24 0.006 250);
+  --input: oklch(0.19 0.006 250);
+  --ring: oklch(0.74 0.17 58);
+  --chart-1: oklch(0.74 0.17 58);
+  --chart-2: oklch(0.68 0.16 150);
+  --chart-3: oklch(0.62 0.14 230);
+  --chart-4: oklch(0.66 0.20 30);
+  --chart-5: oklch(0.78 0.12 90);
+  --radius: 0.25rem;
+  --sidebar: oklch(0.10 0.005 250);
+  --sidebar-foreground: oklch(0.86 0.005 250);
+  --sidebar-primary: oklch(0.74 0.17 58);
+  --sidebar-primary-foreground: oklch(0.14 0.01 60);
+  --sidebar-accent: oklch(0.18 0.006 250);
+  --sidebar-accent-foreground: oklch(0.96 0.005 250);
+  --sidebar-border: oklch(0.21 0.006 250);
+  --sidebar-ring: oklch(0.74 0.17 58);
+
+  /* Financial semantic colors */
+  --success: oklch(0.70 0.18 150);
+  --success-foreground: oklch(0.12 0.005 250);
+  --warning: oklch(0.78 0.15 75);
+  --warning-foreground: oklch(0.14 0.01 60);
+  --gold: oklch(0.74 0.17 58);
+  --gold-foreground: oklch(0.14 0.01 60);
 }
 
 .dark {
-  --background: oklch(0.13 0.01 260);
-  --foreground: oklch(0.95 0 0);
-  --card: oklch(0.16 0.01 260);
-  --card-foreground: oklch(0.95 0 0);
-  --popover: oklch(0.18 0.01 260);
-  --popover-foreground: oklch(0.95 0 0);
-  --primary: oklch(0.75 0.15 85);
-  --primary-foreground: oklch(0.13 0.01 260);
-  --secondary: oklch(0.22 0.01 260);
-  --secondary-foreground: oklch(0.85 0 0);
-  --muted: oklch(0.20 0.01 260);
-  --muted-foreground: oklch(0.60 0 0);
-  --accent: oklch(0.75 0.15 85);
-  --accent-foreground: oklch(0.13 0.01 260);
-  --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.95 0 0);
-  --border: oklch(0.25 0.01 260);
-  --input: oklch(0.20 0.01 260);
-  --ring: oklch(0.75 0.15 85);
-  --chart-1: oklch(0.75 0.15 85);
-  --chart-2: oklch(0.65 0.18 160);
-  --chart-3: oklch(0.55 0.20 280);
-  --chart-4: oklch(0.70 0.15 45);
-  --chart-5: oklch(0.60 0.12 200);
-  --sidebar: oklch(0.11 0.01 260);
-  --sidebar-foreground: oklch(0.85 0 0);
-  --sidebar-primary: oklch(0.75 0.15 85);
-  --sidebar-primary-foreground: oklch(0.13 0.01 260);
-  --sidebar-accent: oklch(0.18 0.01 260);
-  --sidebar-accent-foreground: oklch(0.95 0 0);
-  --sidebar-border: oklch(0.22 0.01 260);
-  --sidebar-ring: oklch(0.75 0.15 85);
-  
-  --success: oklch(0.65 0.20 145);
-  --success-foreground: oklch(0.13 0.01 260);
-  --warning: oklch(0.75 0.15 85);
-  --warning-foreground: oklch(0.13 0.01 260);
-  --gold: oklch(0.78 0.14 80);
-  --gold-foreground: oklch(0.13 0.01 260);
+  --background: oklch(0.12 0.005 250);
+  --foreground: oklch(0.94 0.005 250);
+  --card: oklch(0.15 0.006 250);
+  --card-foreground: oklch(0.94 0.005 250);
+  --popover: oklch(0.16 0.006 250);
+  --popover-foreground: oklch(0.94 0.005 250);
+  --primary: oklch(0.74 0.17 58);
+  --primary-foreground: oklch(0.14 0.01 60);
+  --secondary: oklch(0.20 0.006 250);
+  --secondary-foreground: oklch(0.88 0.005 250);
+  --muted: oklch(0.19 0.006 250);
+  --muted-foreground: oklch(0.62 0.008 250);
+  --accent: oklch(0.74 0.17 58);
+  --accent-foreground: oklch(0.14 0.01 60);
+  --destructive: oklch(0.58 0.22 25);
+  --destructive-foreground: oklch(0.96 0 0);
+  --border: oklch(0.24 0.006 250);
+  --input: oklch(0.19 0.006 250);
+  --ring: oklch(0.74 0.17 58);
+  --chart-1: oklch(0.74 0.17 58);
+  --chart-2: oklch(0.68 0.16 150);
+  --chart-3: oklch(0.62 0.14 230);
+  --chart-4: oklch(0.66 0.20 30);
+  --chart-5: oklch(0.78 0.12 90);
+  --sidebar: oklch(0.10 0.005 250);
+  --sidebar-foreground: oklch(0.86 0.005 250);
+  --sidebar-primary: oklch(0.74 0.17 58);
+  --sidebar-primary-foreground: oklch(0.14 0.01 60);
+  --sidebar-accent: oklch(0.18 0.006 250);
+  --sidebar-accent-foreground: oklch(0.96 0.005 250);
+  --sidebar-border: oklch(0.21 0.006 250);
+  --sidebar-ring: oklch(0.74 0.17 58);
+
+  --success: oklch(0.70 0.18 150);
+  --success-foreground: oklch(0.12 0.005 250);
+  --warning: oklch(0.78 0.15 75);
+  --warning-foreground: oklch(0.14 0.01 60);
+  --gold: oklch(0.74 0.17 58);
+  --gold-foreground: oklch(0.14 0.01 60);
 }
 
 @theme inline {
@@ -117,9 +117,9 @@
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
   --radius-xl: calc(var(--radius) + 4px);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
@@ -137,6 +137,7 @@
   --color-gold-foreground: var(--gold-foreground);
   --animate-collapsible-down: collapsible-down 0.2s ease-out;
   --animate-collapsible-up: collapsible-up 0.2s ease-out;
+  --animate-ticker: ticker 40s linear infinite;
 }
 
 @keyframes collapsible-down {
@@ -157,6 +158,15 @@
   }
 }
 
+@keyframes ticker {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -164,24 +174,33 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Tabular figures for financial data across the terminal */
+  table,
+  .font-mono,
+  [class*="tabular"] {
+    font-variant-numeric: tabular-nums;
+  }
 }
 
-/* Custom scrollbar for the banking platform */
+/* Terminal scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--muted);
-  border-radius: 3px;
+  background: var(--background);
 }
 
 ::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 3px;
+  border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--muted-foreground);
+}
+
+.ticker-track:hover {
+  animation-play-state: paused;
 }
