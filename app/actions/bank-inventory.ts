@@ -24,7 +24,7 @@ import { PARTNER_BANKS, partnerBankByKey, banksForCurrency } from "@/lib/partner
 // ---------------------------------------------------------------------------
 
 /** Default issuable-account capacity for a bank+currency with no explicit row. */
-export const DEFAULT_BANK_CAPACITY = 25
+const DEFAULT_BANK_CAPACITY = 25
 
 export interface BankInventoryRow {
   bankKey: string

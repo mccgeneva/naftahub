@@ -293,7 +293,7 @@ export default function GatewayPage() {
               Request Account
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-lg">
+          <DialogContent className="flex max-h-[90dvh] flex-col gap-0 sm:max-w-lg">
             <DialogHeader>
               <DialogTitle>Request a Gateway Account</DialogTitle>
               <DialogDescription>
@@ -301,7 +301,7 @@ export default function GatewayPage() {
                 coordinates on approval.
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 py-2">
+            <div className="flex-1 space-y-4 overflow-y-auto py-2 pr-1">
               <div className="space-y-2">
                 <Label>Account type</Label>
                 <div className="grid gap-2">
@@ -385,7 +385,7 @@ export default function GatewayPage() {
                 />
               </div>
             </div>
-            <DialogFooter>
+            <DialogFooter className="mt-2 border-t border-border pt-4">
               <Button variant="outline" onClick={() => setOpen(false)}>
                 Cancel
               </Button>

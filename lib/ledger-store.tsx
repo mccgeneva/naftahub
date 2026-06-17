@@ -84,6 +84,9 @@ interface LedgerContextValue {
   totalIn: (currency: string) => number
   /** All currencies that have at least one entry. */
   currencies: string[]
+  /** Re-read the persisted ledger from storage (e.g. after an admin edit to the
+   *  currently signed-in account) so the live view reflects the change. */
+  refresh: () => void
   hydrated: boolean
 }
 
@@ -142,9 +145,21 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   const totalIn = (currency: string) =>
     currencies.reduce((sum, cur) => sum + convertCurrency(balanceFor(cur), cur, currency), 0)
 
+  // Re-read persisted entries from storage. Used after an out-of-band write
+  // (e.g. an administrator editing the signed-in account's ledger) so the live
+  // view reflects the change without a full reload.
+  const refresh = () => {
+    try {
+      const stored = window.localStorage.getItem(storageKey())
+      setEntries(stored ? (JSON.parse(stored) as LedgerEntry[]) : [])
+    } catch {
+      // ignore availability errors
+    }
+  }
+
   return (
     <LedgerContext.Provider
-      value={{ entries, setEntries, addReceipt, addDebit, balanceFor, totalIn, currencies, hydrated }}
+      value={{ entries, setEntries, addReceipt, addDebit, balanceFor, totalIn, currencies, refresh, hydrated }}
     >
       {children}
     </LedgerContext.Provider>

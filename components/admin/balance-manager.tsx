@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { ArrowDownLeft, ArrowUpRight, Trash2, Wallet, Plus, Loader2 } from "lucide-react"
+import { ArrowDownLeft, ArrowUpRight, Trash2, Wallet, Plus, Loader2, Pencil, Undo2 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,6 +15,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { useLedger, type LedgerDirection, type LedgerEntry, type LedgerStatus } from "@/lib/ledger-store"
@@ -22,8 +30,11 @@ import {
   getLedgerForUserAdmin,
   addLedgerEntryForUserAdmin,
   removeLedgerEntryForUserAdmin,
+  updateLedgerEntryForUserAdmin,
+  reverseLedgerEntryForUserAdmin,
 } from "@/app/actions/ledger"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
+import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
 import { USERS, getUserById } from "@/lib/users"
 import { getActiveUserId } from "@/lib/user-scope"
 import { useActivityLog } from "@/components/activity-tracker"
@@ -54,6 +65,23 @@ export function BalanceManager() {
   const logActivity = useActivityLog()
 
   const [targetUserId, setTargetUserId] = useState(USERS[0]?.id ?? "u1")
+  // The full set of accounts the admin can manage: static registry users plus
+  // active dynamic (admin-created) users, fetched once on mount.
+  const [clients, setClients] = useState<SelectableClient[]>(
+    USERS.map((u) => ({ id: u.id, fullName: u.fullName, company: u.company, email: u.email, kind: "static" as const })),
+  )
+
+  useEffect(() => {
+    let active = true
+    listSelectableClients(ADMIN_PASSCODE)
+      .then((list) => {
+        if (active && list.length) setClients(list)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
   const [direction, setDirection] = useState<LedgerDirection>("credit")
   const [amount, setAmount] = useState("")
   const [currency, setCurrency] = useState("EUR")
@@ -70,7 +98,16 @@ export function BalanceManager() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
-  const targetUser = getUserById(targetUserId)
+  // Edit-an-existing-entry dialog state.
+  const [editEntry, setEditEntry] = useState<LedgerEntry | null>(null)
+  const [editAmount, setEditAmount] = useState("")
+  const [editStatus, setEditStatus] = useState<LedgerStatus>("completed")
+  const [editCounterparty, setEditCounterparty] = useState("")
+  const [editComment, setEditComment] = useState("")
+  const [editBusy, setEditBusy] = useState(false)
+  const [reversingId, setReversingId] = useState<string | null>(null)
+
+  const targetUser = clients.find((c) => c.id === targetUserId) ?? getUserById(targetUserId)
   const isIncoming = direction === "credit"
 
   // Load the selected client's ledger from the server whenever the target
@@ -206,6 +243,77 @@ export function BalanceManager() {
     })
   }
 
+  const openEdit = (e: LedgerEntry) => {
+    setEditEntry(e)
+    setEditAmount(String(e.amount))
+    setEditStatus(e.status)
+    setEditCounterparty(e.counterparty ?? "")
+    setEditComment(e.comment ?? "")
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editEntry) return
+    const numeric = Number(editAmount)
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      toast.error("Enter a valid amount greater than zero.")
+      return
+    }
+    setEditBusy(true)
+    const res = await updateLedgerEntryForUserAdmin(ADMIN_PASSCODE, targetUserId, {
+      ...editEntry,
+      amount: numeric,
+      status: editStatus,
+      counterparty: editCounterparty.trim(),
+      comment: editComment.trim() || undefined,
+    })
+    setEditBusy(false)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    setEntries(res.entries)
+    refreshLiveIfSelf()
+    toast.success("Transaction updated", {
+      description: `${editEntry.id} was updated on ${targetUser.fullName}'s ledger.`,
+    })
+    logActivity({
+      action: `Administrator edited ledger entry ${editEntry.id} for ${targetUser.fullName}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator edited transaction ${editEntry.id} on the account of ${targetUser.fullName} (${targetUser.company}). New amount: ${fmt(numeric, editEntry.currency)}. Status: ${editStatus}.`,
+        referenceId: editEntry.id,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        status: editStatus,
+      },
+    })
+    setEditEntry(null)
+  }
+
+  const handleReverse = async (entryId: string) => {
+    setReversingId(entryId)
+    const res = await reverseLedgerEntryForUserAdmin(ADMIN_PASSCODE, targetUserId, entryId)
+    setReversingId(null)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    setEntries(res.entries)
+    refreshLiveIfSelf()
+    toast.success("Transaction reversed", {
+      description: `A reversing entry for ${entryId} was posted to ${targetUser.fullName}'s ledger.`,
+    })
+    logActivity({
+      action: `Administrator reversed ledger entry ${entryId} for ${targetUser.fullName}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator reversed transaction ${entryId} on the account of ${targetUser.fullName} (${targetUser.company}). A mirror entry was posted to net the balance.`,
+        referenceId: entryId,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        decision: "Reversed",
+      },
+    })
+  }
+
   return (
     <Card className="bg-card border-border">
       <CardHeader>
@@ -231,7 +339,7 @@ export function BalanceManager() {
               <SelectValue placeholder="Select a client" />
             </SelectTrigger>
             <SelectContent>
-              {USERS.map((u) => (
+              {clients.map((u) => (
                 <SelectItem key={u.id} value={u.id}>
                   {u.fullName} — {u.company} ({u.email})
                 </SelectItem>
@@ -448,7 +556,7 @@ export function BalanceManager() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
                     <span
                       className={cn(
                         "whitespace-nowrap text-sm font-semibold",
@@ -458,6 +566,29 @@ export function BalanceManager() {
                       {e.direction === "credit" ? "+" : "−"}
                       {fmt(e.amount, e.currency)}
                     </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                      onClick={() => openEdit(e)}
+                      aria-label={`Edit transaction ${e.id}`}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-amber-500"
+                      onClick={() => handleReverse(e.id)}
+                      disabled={reversingId === e.id}
+                      aria-label={`Reverse transaction ${e.id}`}
+                    >
+                      {reversingId === e.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Undo2 className="h-4 w-4" />
+                      )}
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -474,6 +605,72 @@ export function BalanceManager() {
           )}
         </div>
       </CardContent>
+
+      {/* Edit existing transaction dialog */}
+      <Dialog open={!!editEntry} onOpenChange={(open) => !open && setEditEntry(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit transaction</DialogTitle>
+            <DialogDescription>
+              {editEntry ? `${editEntry.id} · ${targetUser.fullName}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="edit-amount">Amount ({editEntry?.currency})</Label>
+                <Input
+                  id="edit-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={editAmount}
+                  onChange={(ev) => setEditAmount(ev.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={editStatus} onValueChange={(v) => setEditStatus(v as LedgerStatus)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="completed">Completed</SelectItem>
+                    <SelectItem value="hold">On Hold</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-counterparty">Counterparty</Label>
+              <Input
+                id="edit-counterparty"
+                value={editCounterparty}
+                onChange={(ev) => setEditCounterparty(ev.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-comment">Description</Label>
+              <Textarea
+                id="edit-comment"
+                rows={2}
+                value={editComment}
+                onChange={(ev) => setEditComment(ev.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditEntry(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveEdit} disabled={editBusy}>
+              {editBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   )
 }

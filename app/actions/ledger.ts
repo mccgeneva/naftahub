@@ -202,3 +202,102 @@ export async function removeLedgerEntryForUserAdmin(
     return { ok: false, error: "The entry could not be removed. Please try again." }
   }
 }
+
+/**
+ * Admin: edit an existing ledger entry in place (amount, status, dates,
+ * counterparty, etc.). Reuses the upsert so any subset of fields can be
+ * corrected — e.g. releasing a hold by switching status to "completed".
+ */
+export async function updateLedgerEntryForUserAdmin(
+  passcode: string,
+  userId: string,
+  entry: LedgerEntry,
+): Promise<AdminLedgerResult> {
+  let admin: UserProfile
+  try {
+    admin = await requireAdmin(passcode)
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+
+  const amount = Number(entry.amount)
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, error: "Enter a valid amount." }
+  }
+
+  try {
+    await upsertEntry(userId, { ...entry, amount })
+    const target = getUserById(userId)
+    await logActivity({
+      action: `Administrator edited ledger entry ${entry.id} for ${target.fullName}`,
+      category: "Administration",
+      user: `${admin.fullName} (${admin.company})`,
+      details: {
+        referenceId: entry.id,
+        targetAccount: `${target.fullName} — ${target.email}`,
+        direction: entry.direction,
+        amount: `${entry.currency} ${amount.toLocaleString("en-US")}`,
+        status: entry.status,
+        counterparty: entry.counterparty || "(none)",
+      },
+    })
+    return { ok: true, entries: await readLedger(userId) }
+  } catch (err) {
+    console.log("[v0] updateLedgerEntryForUserAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The entry could not be updated. Please try again." }
+  }
+}
+
+/**
+ * Admin: reverse an existing ledger entry by posting a mirror entry in the
+ * opposite direction. The original is preserved for the audit trail; the
+ * reversal nets the balance back to where it was.
+ */
+export async function reverseLedgerEntryForUserAdmin(
+  passcode: string,
+  userId: string,
+  entryId: string,
+): Promise<AdminLedgerResult> {
+  let admin: UserProfile
+  try {
+    admin = await requireAdmin(passcode)
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+
+  try {
+    const ledger = await readLedger(userId)
+    const original = ledger.find((e) => e.id === entryId)
+    if (!original) return { ok: false, error: "Original entry not found." }
+
+    const reversal: LedgerEntry = {
+      ...original,
+      id: `REV-${original.id}`,
+      direction: original.direction === "credit" ? "debit" : "credit",
+      status: "completed",
+      date: new Date().toISOString(),
+      reference: `Reversal of ${original.id}`,
+      comment: `Reversal of transaction ${original.id}${original.comment ? ` — ${original.comment}` : ""}`,
+      category: "Reversal",
+    }
+    await upsertEntry(userId, reversal)
+
+    const target = getUserById(userId)
+    await logActivity({
+      action: `Administrator reversed ledger entry ${original.id} for ${target.fullName}`,
+      category: "Administration",
+      user: `${admin.fullName} (${admin.company})`,
+      details: {
+        referenceId: reversal.id,
+        targetAccount: `${target.fullName} — ${target.email}`,
+        reversedEntry: original.id,
+        direction: reversal.direction,
+        amount: `${original.currency} ${Number(original.amount).toLocaleString("en-US")}`,
+      },
+    })
+    return { ok: true, entries: await readLedger(userId) }
+  } catch (err) {
+    console.log("[v0] reverseLedgerEntryForUserAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The entry could not be reversed. Please try again." }
+  }
+}

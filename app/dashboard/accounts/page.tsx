@@ -68,7 +68,41 @@ import { Textarea } from "@/components/ui/textarea"
 // Realistic multi-bank account database with AAA-rated banks worldwide.
 // Balances here are baseline defaults; the live balance for the master account
 // is overlaid from the ledger store inside the component.
-const baseBankAccounts = [
+type BankAccount = {
+  id: string
+  bankName: string
+  bankLogo: string
+  country: string
+  countryCode: string
+  rating: string
+  accountName: string
+  accountNumber: string
+  iban: string
+  swift: string
+  currency: string
+  balance: number
+  availableBalance: number
+  reservedBalance: number
+  accountType: string
+  status: string
+  openDate: string
+  lastActivity: string
+  dailyLimit: number
+  monthlyVolume: number
+  relationship: string
+  contactPerson: string
+  contactEmail: string
+  branchAddress: string
+  beneficiaryAddress: string
+  // Optional, region-specific coordinates shown when present.
+  sortCode?: string
+  routingNumber?: string
+  bsb?: string
+  branchCode?: string
+  escrowDetails?: string
+}
+
+const baseBankAccounts: BankAccount[] = [
   {
     id: "ACC-001",
     bankName: "Banking Circle - German Branch",
