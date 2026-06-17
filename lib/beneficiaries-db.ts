@@ -108,7 +108,22 @@ export async function upsertBeneficiary(
   return toStored(rows[0])
 }
 
-/** Replace the entire beneficiary set for a user (used by client mirror sync). */
+/**
+ * Reconcile the client's beneficiary set with the server (used by the client
+ * mirror sync).
+ *
+ * IMPORTANT: compliance is administrator-owned. The client app's local copy
+ * always reports `status: "pending"`, `kycVerified: false` and no AML date, so a
+ * naive replace would clobber an admin's approval every time the client synced —
+ * reverting KYC back to "Pending". To prevent that, this performs a MERGE:
+ *
+ *   - For a beneficiary that already exists on the server, we keep the server's
+ *     `status` and the server's compliance subfields (`kycVerified`,
+ *     `amlScreeningDate`, `riskLevel`), while accepting the client's edits to
+ *     every other field (name, bank details, notes, favorite, etc.).
+ *   - Brand-new beneficiaries (not yet on the server) are inserted as sent.
+ *   - Beneficiaries the client removed (absent from `items`) are deleted.
+ */
 export async function replaceBeneficiariesForUser(
   userId: string,
   items: { id: string; data: Record<string, unknown>; status: string }[],
@@ -117,14 +132,53 @@ export async function replaceBeneficiariesForUser(
   const client = await pool.connect()
   try {
     await client.query("BEGIN")
-    await client.query(`DELETE FROM client_beneficiaries WHERE user_id = $1`, [userId])
+
+    // Snapshot what the server currently holds so we can protect admin-owned
+    // compliance fields and detect removals.
+    const { rows: existingRows } = await client.query(
+      `SELECT id, data, status FROM client_beneficiaries WHERE user_id = $1`,
+      [userId],
+    )
+    const existing = new Map<string, { data: Record<string, unknown>; status: string }>(
+      existingRows.map((r) => [r.id as string, { data: r.data as Record<string, unknown>, status: r.status as string }]),
+    )
+
+    const incomingIds = new Set(items.map((i) => i.id))
+
+    // Delete beneficiaries the client removed.
+    for (const id of existing.keys()) {
+      if (!incomingIds.has(id)) {
+        await client.query(`DELETE FROM client_beneficiaries WHERE id = $1 AND user_id = $2`, [id, userId])
+      }
+    }
+
+    // Upsert the rest, preserving server-side compliance for known rows.
     for (const item of items) {
+      const prior = existing.get(item.id)
+      let data = item.data
+      let status = item.status
+      if (prior) {
+        // Keep administrator-controlled fields from the server copy.
+        status = prior.status
+        data = {
+          ...item.data,
+          status: prior.status,
+          kycVerified: prior.data.kycVerified ?? false,
+          amlScreeningDate: prior.data.amlScreeningDate ?? (item.data.amlScreeningDate as unknown),
+          riskLevel: prior.data.riskLevel ?? item.data.riskLevel ?? "low",
+        }
+      }
       await client.query(
-        `INSERT INTO client_beneficiaries (id, user_id, data, status)
-         VALUES ($1, $2, $3::jsonb, $4)`,
-        [item.id, userId, JSON.stringify(item.data), item.status],
+        `INSERT INTO client_beneficiaries (id, user_id, data, status, updated_at)
+         VALUES ($1, $2, $3::jsonb, $4, now())
+         ON CONFLICT (id) DO UPDATE
+           SET data = EXCLUDED.data,
+               status = EXCLUDED.status,
+               updated_at = now()`,
+        [item.id, userId, JSON.stringify(data), status],
       )
     }
+
     await client.query("COMMIT")
   } catch (err) {
     await client.query("ROLLBACK")
