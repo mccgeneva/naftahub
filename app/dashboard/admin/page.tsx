@@ -893,20 +893,44 @@ export default function AdminPage() {
         description: `${unverified.length} document(s) remain unverified. You can still authorize, but review them first.`,
       })
     }
-    const approved = approveDeal(deal.id)
+    // Credit the deal proceeds into the master ledger so balances and the
+    // Transactions section reflect the executed commodity trade. Mirrors the
+    // DOF / DTC / monetization settlement pattern.
+    let settledEntryId: string | undefined
+    if (deal.approxValue > 0) {
+      const swiftRef =
+        deal.mt103Ref || deal.mt202Ref || deal.mt799Ref || deal.uetr
+      const credited = addReceipt({
+        id: deal.id,
+        amount: deal.approxValue,
+        currency: deal.currency,
+        status: "completed",
+        date: new Date().toISOString(),
+        counterparty: deal.buyerName || deal.sellerName || "Commodity counterparty",
+        bank: deal.receivingBank
+          ? `${deal.receivingBank}${deal.receivingBankBic ? ` (${deal.receivingBankBic})` : ""}`
+          : deal.sendingBank || undefined,
+        reference: swiftRef,
+        category: "Commodity Settlement",
+        comment: `Proceeds from authorized commodity deal ${deal.id} "${deal.title}" (${deal.category}${deal.commodity ? `, ${deal.commodity}` : ""}${deal.quantity ? ` ${deal.quantity}` : ""}). Buyer ${deal.buyerName}, Seller ${deal.sellerName}. Routed ${deal.sendingBankBic || deal.sendingBank || "—"} → ${deal.receivingBankBic || deal.receivingBank || "—"}. UETR ${deal.uetr}.`,
+      })
+      settledEntryId = credited.id
+    }
+    const approved = approveDeal(deal.id, undefined, settledEntryId)
     if (!approved) return
     toast.success("Deal authorized for execution", {
-      description: `${deal.id} "${deal.title}" moved to the Execution stage.`,
+      description: `${deal.id} "${deal.title}" moved to the Execution stage${settledEntryId ? ` and ${formatCurrency(deal.approxValue, deal.currency)} credited to the master account.` : "."}`,
     })
     logActivity({
       action: `Administrator authorized commodity deal ${deal.id} (${formatCurrency(deal.approxValue, deal.currency)})`,
       category: "Administration",
       details: {
-        summary: `Administrator authorized commodity deal ${deal.id} "${deal.title}" (${deal.category}, ${deal.commodity || "—"} ${deal.quantity ? `${deal.quantity}` : ""}) valued ~${formatCurrency(deal.approxValue, deal.currency)}. Buyer ${deal.buyerName}, Seller ${deal.sellerName}. Advanced to Execution. UETR ${deal.uetr}.`,
+        summary: `Administrator authorized commodity deal ${deal.id} "${deal.title}" (${deal.category}, ${deal.commodity || "—"} ${deal.quantity ? `${deal.quantity}` : ""}) valued ~${formatCurrency(deal.approxValue, deal.currency)}. Buyer ${deal.buyerName}, Seller ${deal.sellerName}. Advanced to Execution.${settledEntryId ? ` ${formatCurrency(deal.approxValue, deal.currency)} credited to the master account (ref ${settledEntryId}).` : ""} UETR ${deal.uetr}.`,
         referenceId: deal.id,
         uetr: deal.uetr,
         category: deal.category,
         value: formatCurrency(deal.approxValue, deal.currency),
+        settledEntryId,
         decision: "Approved",
       },
     })
