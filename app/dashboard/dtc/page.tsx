@@ -46,6 +46,8 @@ import {
   type DTCSettlementBasis,
 } from "@/lib/dtc-requests-store"
 import { SwiftGpiTracker } from "@/components/swift-gpi-tracker"
+import { VerifiedBankField } from "@/components/verified-bank-field"
+import { validateBic } from "@/lib/iban-swift"
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "AED", "SGD"]
 const SECURITY_TYPES = ["Bond", "Equity", "MTN", "Treasury Note", "Corporate Note", "Fund Unit"]
@@ -196,6 +198,13 @@ export default function SecuritiesSettlementPage() {
   const quantityNumber = Number.parseFloat(form.quantity.replace(/,/g, ""))
   const cashNumber = Number.parseFloat(form.cashAmount.replace(/,/g, ""))
 
+  // BIC fields are optional here, but if supplied they must be a valid ISO 9362 code.
+  const agentBicCheck = validateBic(form.agentBankBic)
+  const counterpartyBicCheck = validateBic(form.counterpartyBic)
+  const agentBicInvalid = form.agentBankBic.trim().length > 0 && !agentBicCheck.valid
+  const counterpartyBicInvalid =
+    form.counterpartyBic.trim().length > 0 && !counterpartyBicCheck.valid
+
   const canSubmit =
     form.securityName.trim().length > 0 &&
     form.isin.trim().length > 0 &&
@@ -203,10 +212,18 @@ export default function SecuritiesSettlementPage() {
     quantityNumber > 0 &&
     form.counterpartyName.trim().length > 0 &&
     form.participantNumber.trim().length > 0 &&
+    !agentBicInvalid &&
+    !counterpartyBicInvalid &&
     (!isDVP || (Number.isFinite(cashNumber) && cashNumber > 0))
 
   const handleSubmit = () => {
     if (!canSubmit) {
+      if (agentBicInvalid || counterpartyBicInvalid) {
+        toast.error("Invalid SWIFT/BIC", {
+          description: `${(agentBicInvalid ? agentBicCheck.error : counterpartyBicCheck.error) || "Check the SWIFT/BIC code"}.`,
+        })
+        return
+      }
       toast.error("Missing required details", {
         description: isDVP
           ? "Provide the security (name, ISIN, quantity), the cash amount, your participant number, and the counterparty."
@@ -583,15 +600,15 @@ export default function SecuritiesSettlementPage() {
                   placeholder="e.g. Citibank N.A. (custody)"
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="agentBankBic">Agent BIC / SWIFT</Label>
-                <Input
-                  id="agentBankBic"
-                  value={form.agentBankBic}
-                  onChange={(e) => set("agentBankBic", e.target.value)}
-                  placeholder="e.g. CITIUS33"
-                />
-              </div>
+              <VerifiedBankField
+                id="agentBankBic"
+                label="Agent BIC / SWIFT"
+                kind="bic"
+                maxLength={11}
+                placeholder="e.g. CITIUS33"
+                value={form.agentBankBic}
+                onChange={(v) => set("agentBankBic", v)}
+              />
               <div className="space-y-2">
                 <Label htmlFor="counterpartyName">Counterparty *</Label>
                 <Input
@@ -612,15 +629,15 @@ export default function SecuritiesSettlementPage() {
                   placeholder={isDTC ? "Counterparty DTC #" : "Counterparty Euroclear acct"}
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="counterpartyBic">Counterparty BIC</Label>
-                <Input
-                  id="counterpartyBic"
-                  value={form.counterpartyBic}
-                  onChange={(e) => set("counterpartyBic", e.target.value)}
-                  placeholder="e.g. MGTCBEBE"
-                />
-              </div>
+              <VerifiedBankField
+                id="counterpartyBic"
+                label="Counterparty BIC"
+                kind="bic"
+                maxLength={11}
+                placeholder="e.g. MGTCBEBE"
+                value={form.counterpartyBic}
+                onChange={(v) => set("counterpartyBic", v)}
+              />
             </CardContent>
           </Card>
 
