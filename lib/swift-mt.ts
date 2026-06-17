@@ -3,12 +3,19 @@
 // ---------------------------------------------------------------------------
 //
 // This module parses raw SWIFT FIN (MT) messages into structured objects and
-// can generate well-formed MT103 / MT202 text for outbound transfers. It is
-// intentionally free of "use server" and of any I/O so the logic stays pure
-// and testable. The server / UI layers consume the typed output.
+// can generate well-formed MT text for outbound messages. It is intentionally
+// free of "use server" and of any I/O so the logic stays pure and testable.
+// The server / UI layers consume the typed output.
 //
 // Supported inbound parsing: MT103, MT202, MT202 COV, MT760, MT799 (and a
 // generic fallback for any other MT type, exposing parsed blocks + fields).
+//
+// Supported generation (all round-trip through `parseSwiftMessage`):
+//   - Payments:        MT101, MT103, MT202, MT202 COV
+//   - Free-format:     MT199 / MT299 / MT799 / MT999
+//   - Guarantees:      MT760 (issuance), MT767 / MT768 / MT769 (amendment family)
+//   - Documentary LC:  MT700 / 707 / 710 / 720 / 730 / 740 / 742 / 747 / 750 / 752 / 754 / 756
+//   - Securities:      MT540 / 541 / 542 / 543 / 544 / 545 / 546 / 547 (ISO 15022, Euroclear/DTC)
 //
 // MT760 (Guarantee / Standby Letter of Credit) and MT799 (free-format) are the
 // instrument-messaging types used by the bank-instrument monetization desk for
@@ -479,6 +486,14 @@ export function parseSwiftMessage(raw: string): ParsedSwiftMessage {
   result.senderReference = findField(fields, "20")?.value.trim()
   result.relatedReference = findField(fields, "21")?.value.trim()
 
+  // ISO 15022 securities messages (MT54x) carry the sender's reference in
+  // :20C::SEME//<ref> rather than a plain :20:. Surface it as senderReference.
+  if (!result.senderReference) {
+    const f20c = findField(fields, "20C")?.value.trim()
+    const seme = f20c?.match(/:SEME\/\/(\S+)/)?.[1]
+    if (seme) result.senderReference = seme
+  }
+
   // Amount fields — :32A: (date+ccy+amount) preferred, else :32B:.
   const f32a = findField(fields, "32A")
   if (f32a) {
@@ -909,3 +924,385 @@ export function generateMt799(input: GenerateMt799Input): { raw: string; uetr: s
   const block4 = `{4:\n${lines.join("\n")}\n-}`
   return { raw: `${block1}${block2}${block3}${block4}`, uetr }
 }
+
+// ---------------------------------------------------------------------------
+// Generation — shared helpers for the extended catalogue
+// ---------------------------------------------------------------------------
+
+/** Assemble the standard FIN envelope (blocks 1-4) around a list of block-4 fields. */
+function assembleFin(args: {
+  mt: string
+  senderBic: string
+  receiverBic: string
+  fields: string[]
+  uetr?: string
+  includeGpi?: boolean
+}): { raw: string; uetr: string } {
+  const uetr = args.uetr ?? generateUetr()
+  const block1 = `{1:F01${padBic(args.senderBic)}0000000000}`
+  const block2 = `{2:I${args.mt}${padBic(args.receiverBic)}N}`
+  const block3 = args.includeGpi !== false ? `{3:{121:${uetr}}}` : ""
+  const block4 = `{4:\n${args.fields.join("\n")}\n-}`
+  return { raw: `${block1}${block2}${block3}${block4}`, uetr }
+}
+
+/** Wrap a multi-line narrative into SWIFT-safe lines (for :79: / :77x: / :4xA:). */
+function wrapNarrative(text: string, width = 50): string {
+  return text
+    .split("\n")
+    .flatMap((line) => line.match(new RegExp(`.{1,${width}}`, "g")) ?? [""])
+    .join("\n")
+}
+
+// ---------------------------------------------------------------------------
+// Generation — MT101 (Request for Transfer)
+// ---------------------------------------------------------------------------
+
+export interface GenerateMt101Input {
+  senderBic: string
+  receiverBic: string
+  /** :20: Sender's reference (max 16 chars). */
+  senderReference: string
+  /** :28D: Message index/total, e.g. "1/1". */
+  messageIndex?: string
+  /** Requested execution date (ISO yyyy-mm-dd) → :30:. */
+  executionDate: string
+  currency: string
+  amount: number
+  /** :50a: Ordering customer / instructing party. */
+  ordering?: { account?: string; bic?: string; nameAndAddress?: string[] }
+  /** :59a: Beneficiary. */
+  beneficiary?: { account?: string; bic?: string; nameAndAddress?: string[] }
+  /** :70: Remittance information. */
+  remittanceInfo?: string
+  /** :71A: charges — OUR / BEN / SHA. */
+  chargesDetail?: "OUR" | "BEN" | "SHA"
+  uetr?: string
+  includeGpi?: boolean
+}
+
+/** Generate a well-formed MT101 (Request for Transfer). Round-trips as "MT101". */
+export function generateMt101(input: GenerateMt101Input): { raw: string; uetr: string } {
+  const lines: string[] = []
+  lines.push(`:20:${input.senderReference.slice(0, 16)}`)
+  lines.push(`:28D:${input.messageIndex ?? "1/1"}`)
+  if (input.ordering) lines.push(`:50${input.ordering.bic ? "A" : "K"}:${formatParty(input.ordering)}`)
+  lines.push(`:30:${toSwiftDate(input.executionDate)}`)
+  lines.push(`:21:${input.senderReference.slice(0, 16)}`)
+  lines.push(`:32B:${input.currency}${formatSwiftAmount(input.amount)}`)
+  if (input.beneficiary) lines.push(`:59${input.beneficiary.bic ? "A" : ""}:${formatParty(input.beneficiary)}`)
+  if (input.remittanceInfo) lines.push(`:70:${input.remittanceInfo}`)
+  lines.push(`:71A:${input.chargesDetail ?? "SHA"}`)
+  return assembleFin({
+    mt: "101",
+    senderBic: input.senderBic,
+    receiverBic: input.receiverBic,
+    fields: lines,
+    uetr: input.uetr,
+    includeGpi: input.includeGpi,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Generation — MT202 COV (Cover Payment)
+// ---------------------------------------------------------------------------
+
+export interface GenerateMt202CovInput {
+  senderBic: string
+  receiverBic: string
+  /** :20: Transaction reference. */
+  senderReference: string
+  /** :21: Related reference (links to the underlying MT103). */
+  relatedReference: string
+  valueDate: string
+  currency: string
+  amount: number
+  /** Sequence A — ordering / beneficiary institutions. */
+  orderingInstitution?: { account?: string; bic?: string; nameAndAddress?: string[] }
+  beneficiaryInstitution?: { account?: string; bic?: string; nameAndAddress?: string[] }
+  /** Sequence B — underlying customer credit transfer parties. */
+  orderingCustomer?: { account?: string; bic?: string; nameAndAddress?: string[] }
+  beneficiaryCustomer?: { account?: string; bic?: string; nameAndAddress?: string[] }
+  remittanceInfo?: string
+  uetr?: string
+  includeGpi?: boolean
+}
+
+/** Generate a well-formed MT202 COV (cover payment). Round-trips as "MT202COV". */
+export function generateMt202Cov(input: GenerateMt202CovInput): { raw: string; uetr: string } {
+  const lines: string[] = []
+  // Sequence A — general financial institution transfer.
+  lines.push(`:20:${input.senderReference.slice(0, 16)}`)
+  lines.push(`:21:${input.relatedReference.slice(0, 16)}`)
+  lines.push(`:32A:${toSwiftDate(input.valueDate)}${input.currency}${formatSwiftAmount(input.amount)}`)
+  if (input.orderingInstitution) lines.push(`:52A:${formatParty(input.orderingInstitution)}`)
+  if (input.beneficiaryInstitution) lines.push(`:58A:${formatParty(input.beneficiaryInstitution)}`)
+  // Sequence B — underlying customer credit transfer details.
+  if (input.orderingCustomer)
+    lines.push(`:50${input.orderingCustomer.bic ? "A" : "K"}:${formatParty(input.orderingCustomer)}`)
+  if (input.beneficiaryCustomer)
+    lines.push(`:59${input.beneficiaryCustomer.bic ? "A" : ""}:${formatParty(input.beneficiaryCustomer)}`)
+  if (input.remittanceInfo) lines.push(`:70:${input.remittanceInfo}`)
+  return assembleFin({
+    mt: "202",
+    senderBic: input.senderBic,
+    receiverBic: input.receiverBic,
+    fields: lines,
+    uetr: input.uetr,
+    includeGpi: input.includeGpi,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Generation — free-format authenticated messages (MT199 / MT299 / MT999)
+// ---------------------------------------------------------------------------
+
+export interface GenerateFreeFormatInput {
+  /** "199" | "299" | "999" — category-1/2/n free-format. */
+  mt: "199" | "299" | "999" | string
+  senderBic: string
+  receiverBic: string
+  senderReference: string
+  relatedReference?: string
+  /** :79: free-format narrative. */
+  narrative: string
+  uetr?: string
+  includeGpi?: boolean
+}
+
+/** Generate an authenticated free-format message (MT199/MT299/MT999). */
+export function generateFreeFormatMessage(input: GenerateFreeFormatInput): { raw: string; uetr: string } {
+  const lines: string[] = []
+  lines.push(`:20:${input.senderReference.slice(0, 16)}`)
+  if (input.relatedReference) lines.push(`:21:${input.relatedReference.slice(0, 16)}`)
+  lines.push(`:79:${wrapNarrative(input.narrative)}`)
+  return assembleFin({
+    mt: String(input.mt),
+    senderBic: input.senderBic,
+    receiverBic: input.receiverBic,
+    fields: lines,
+    uetr: input.uetr,
+    includeGpi: input.includeGpi,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Generation — documentary credit family
+// (MT700/707/710/720/730/740/742/747/750/752/754/756)
+// ---------------------------------------------------------------------------
+
+export interface GenerateDocumentaryCreditInput {
+  /** Bare MT number e.g. "700", "707", "710", "720". */
+  mt: string
+  senderBic: string
+  receiverBic: string
+  /** :20: Documentary credit number / sender's reference. */
+  senderReference: string
+  /** :21: Related reference (amendments, advices). */
+  relatedReference?: string
+  /** :31C: Date of issue (ISO yyyy-mm-dd). */
+  issueDate?: string
+  /** :31D: Date of expiry (ISO yyyy-mm-dd). */
+  expiryDate?: string
+  /** :31D: Place of expiry, e.g. "GENEVA". */
+  expiryPlace?: string
+  /** :40A: Form of documentary credit, e.g. "IRREVOCABLE". */
+  formOfCredit?: string
+  currency?: string
+  amount?: number
+  /** :50: Applicant. */
+  applicant?: { account?: string; bic?: string; nameAndAddress?: string[] }
+  /** :59: Beneficiary. */
+  beneficiary?: { account?: string; bic?: string; nameAndAddress?: string[] }
+  /** :45A: Description of goods / services. */
+  goodsDescription?: string
+  /** :46A: Documents required. */
+  documentsRequired?: string
+  /** :47A: Additional conditions. */
+  additionalConditions?: string
+  /** :71D: charges narrative. */
+  charges?: string
+  /** :79: free narrative (used by acknowledgements / advices like MT730 / MT750). */
+  narrative?: string
+  uetr?: string
+  includeGpi?: boolean
+}
+
+/**
+ * Generate a documentary-credit-family message. Field usage adapts to the
+ * provided inputs, so the same builder serves issuance (MT700), amendment
+ * (MT707), advices (MT710 / MT730 / MT750), transfer (MT720), reimbursement
+ * (MT740 / MT742 / MT747) and settlement advices (MT752 / MT754 / MT756).
+ */
+export function generateDocumentaryCredit(input: GenerateDocumentaryCreditInput): {
+  raw: string
+  uetr: string
+} {
+  const lines: string[] = []
+  lines.push(`:20:${input.senderReference.slice(0, 16)}`)
+  if (input.relatedReference) lines.push(`:21:${input.relatedReference.slice(0, 16)}`)
+  if (input.formOfCredit) lines.push(`:40A:${input.formOfCredit}`)
+  if (input.issueDate) lines.push(`:31C:${toSwiftDate(input.issueDate)}`)
+  if (input.expiryDate || input.expiryPlace)
+    lines.push(`:31D:${input.expiryDate ? toSwiftDate(input.expiryDate) : ""}${input.expiryPlace ?? ""}`)
+  if (input.applicant) lines.push(`:50:${formatParty(input.applicant)}`)
+  if (input.beneficiary) lines.push(`:59:${formatParty(input.beneficiary)}`)
+  if (input.amount !== undefined)
+    lines.push(`:32B:${input.currency ?? "USD"}${formatSwiftAmount(input.amount)}`)
+  if (input.goodsDescription) lines.push(`:45A:${wrapNarrative(input.goodsDescription, 65)}`)
+  if (input.documentsRequired) lines.push(`:46A:${wrapNarrative(input.documentsRequired, 65)}`)
+  if (input.additionalConditions) lines.push(`:47A:${wrapNarrative(input.additionalConditions, 65)}`)
+  if (input.charges) lines.push(`:71D:${wrapNarrative(input.charges, 65)}`)
+  if (input.narrative) lines.push(`:79:${wrapNarrative(input.narrative)}`)
+  return assembleFin({
+    mt: input.mt,
+    senderBic: input.senderBic,
+    receiverBic: input.receiverBic,
+    fields: lines,
+    uetr: input.uetr,
+    includeGpi: input.includeGpi,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Generation — guarantee amendment family (MT767 / MT768 / MT769)
+// ---------------------------------------------------------------------------
+
+export interface GenerateGuaranteeAmendmentInput {
+  /** "767" amendment, "768" acknowledgement, "769" reduction/release. */
+  mt: "767" | "768" | "769" | string
+  senderBic: string
+  receiverBic: string
+  /** :20: New reference for this message. */
+  senderReference: string
+  /** :21: Reference of the original guarantee/SBLC (the MT760 :20:). */
+  relatedReference: string
+  /** :22A: Purpose of the message, e.g. "ISSU" / "ICCO". */
+  purpose?: string
+  /** :30: Date of amendment / acknowledgement (ISO yyyy-mm-dd). */
+  date?: string
+  /** :32B: Increase/decrease or released amount. */
+  currency?: string
+  amount?: number
+  /** :77U: narrative of amendment terms or acknowledgement text. */
+  narrative?: string
+  uetr?: string
+  includeGpi?: boolean
+}
+
+/** Generate an MT767/MT768/MT769 guarantee amendment-family message. */
+export function generateGuaranteeAmendment(input: GenerateGuaranteeAmendmentInput): {
+  raw: string
+  uetr: string
+} {
+  const lines: string[] = []
+  lines.push(`:20:${input.senderReference.slice(0, 16)}`)
+  lines.push(`:21:${input.relatedReference.slice(0, 16)}`)
+  if (input.purpose) lines.push(`:22A:${input.purpose}`)
+  if (input.date) lines.push(`:30:${toSwiftDate(input.date)}`)
+  if (input.amount !== undefined)
+    lines.push(`:32B:${input.currency ?? "USD"}${formatSwiftAmount(input.amount)}`)
+  if (input.narrative) lines.push(`:77U:${wrapNarrative(input.narrative, 65)}`)
+  return assembleFin({
+    mt: String(input.mt),
+    senderBic: input.senderBic,
+    receiverBic: input.receiverBic,
+    fields: lines,
+    uetr: input.uetr,
+    includeGpi: input.includeGpi,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Generation — securities settlement (MT540/541/542/543 + confirmations 544-547)
+// ---------------------------------------------------------------------------
+
+export interface GenerateSecuritiesSettlementInput {
+  /** "540" RF, "541" RVP, "542" DF, "543" DVP, "544"-"547" confirmations. */
+  mt: "540" | "541" | "542" | "543" | "544" | "545" | "546" | "547" | string
+  senderBic: string
+  receiverBic: string
+  /** :20C::SEME// Sender's message reference. */
+  senderReference: string
+  /** :23G: Function of the message — "NEWM" (new) or "CANC" (cancel). */
+  func?: "NEWM" | "CANC" | string
+  /** Trade date (ISO yyyy-mm-dd) → :98A::TRAD//. */
+  tradeDate?: string
+  /** Settlement date (ISO yyyy-mm-dd) → :98A::SETT//. */
+  settlementDate?: string
+  /** ISIN of the financial instrument → :35B:ISIN. */
+  isin?: string
+  /** Free description of the security. */
+  securityDescription?: string
+  /** Quantity of securities (FAMT/UNIT) → :36B::SETT//UNIT/. */
+  quantity?: number
+  /** Settlement amount (DVP/RVP) → :19A::SETT//. */
+  currency?: string
+  settlementAmount?: number
+  /** Delivering / receiving agent (CSD participant) BIC → :95P::DEAG//:REAG//. */
+  agentBic?: string
+  /** Safekeeping / securities account → :97A::SAFE//. */
+  safekeepingAccount?: string
+  uetr?: string
+  includeGpi?: boolean
+}
+
+/**
+ * Generate an ISO 15022 securities settlement message (MT54x). Uses the
+ * qualifier-based field structure (:16R:/:16S: blocks, :20C:, :23G:, :98A:,
+ * :35B:, :36B:, :19A:, :95P:, :97A:) so it round-trips through the parser and
+ * is suitable for Euroclear / DTC / ICSD instructions.
+ */
+export function generateSecuritiesSettlement(input: GenerateSecuritiesSettlementInput): {
+  raw: string
+  uetr: string
+} {
+  const isDelivery = input.mt === "542" || input.mt === "543" || input.mt === "546" || input.mt === "547"
+  const isAgainstPayment =
+    input.mt === "541" || input.mt === "543" || input.mt === "545" || input.mt === "547"
+  const lines: string[] = []
+  // General information sequence.
+  lines.push(":16R:GENL")
+  lines.push(`:20C::SEME//${input.senderReference.slice(0, 16)}`)
+  lines.push(`:23G:${input.func ?? "NEWM"}`)
+  lines.push(":16S:GENL")
+  // Trade details sequence.
+  lines.push(":16R:TRADDET")
+  if (input.tradeDate) lines.push(`:98A::TRAD//${toSwiftDate8(input.tradeDate)}`)
+  if (input.settlementDate) lines.push(`:98A::SETT//${toSwiftDate8(input.settlementDate)}`)
+  if (input.isin)
+    lines.push(
+      `:35B:ISIN ${input.isin}${input.securityDescription ? `\n${wrapNarrative(input.securityDescription, 35)}` : ""}`,
+    )
+  else if (input.securityDescription) lines.push(`:35B:${wrapNarrative(input.securityDescription, 35)}`)
+  lines.push(":16S:TRADDET")
+  // Financial instrument / account sequence.
+  lines.push(":16R:FIAC")
+  if (input.quantity !== undefined) lines.push(`:36B::SETT//UNIT/${formatSwiftAmount(input.quantity)}`)
+  if (input.safekeepingAccount) lines.push(`:97A::SAFE//${input.safekeepingAccount}`)
+  lines.push(":16S:FIAC")
+  // Settlement details sequence.
+  lines.push(":16R:SETDET")
+  lines.push(`:22F::SETR//TRAD`)
+  if (input.agentBic)
+    lines.push(`:95P::${isDelivery ? "REAG" : "DEAG"}//${padBic(input.agentBic).slice(0, 11)}`)
+  if (isAgainstPayment && input.settlementAmount !== undefined)
+    lines.push(`:19A::SETT//${input.currency ?? "USD"}${formatSwiftAmount(input.settlementAmount)}`)
+  lines.push(":16S:SETDET")
+  return assembleFin({
+    mt: String(input.mt),
+    senderBic: input.senderBic,
+    receiverBic: input.receiverBic,
+    fields: lines,
+    uetr: input.uetr,
+    includeGpi: input.includeGpi,
+  })
+}
+
+/** Format an ISO yyyy-mm-dd date to the 8-digit YYYYMMDD used by :98A: in MT5xx. */
+function toSwiftDate8(iso: string): string {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return ""
+  return `${m[1]}${m[2]}${m[3]}`
+}
+
