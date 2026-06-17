@@ -85,6 +85,7 @@ import { AdminReconciliationSection } from "@/components/dashboard/admin-reconci
 import { TreasuryManager } from "@/components/admin/treasury-manager"
 import { UserManager } from "@/components/admin/user-manager"
 import { BeneficiaryManager } from "@/components/admin/beneficiary-manager"
+import { adminListPendingKyc } from "@/app/actions/beneficiaries"
 import { BalanceManager } from "@/components/admin/balance-manager"
 import { toast } from "sonner"
 
@@ -208,6 +209,27 @@ export default function AdminPage() {
       // ignore
     }
   }, [])
+
+  // Count of beneficiaries awaiting a KYC decision (across every client). The
+  // BeneficiaryManager owns the full review UI; here we only need the count so
+  // KYC can appear in the Pending Decisions command center. Refetched whenever
+  // the panel unlocks so the figure is current.
+  const [pendingKycCount, setPendingKycCount] = useState(0)
+  useEffect(() => {
+    if (!unlocked) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await adminListPendingKyc(ADMIN_PASSCODE)
+        if (!cancelled && res.ok) setPendingKycCount(res.beneficiaries.length)
+      } catch {
+        // Non-fatal: the KYC tile just shows 0 if the count can't be loaded.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [unlocked])
 
   const handleUnlock = () => {
     if (passcode.trim() === ADMIN_PASSCODE) {
@@ -1384,6 +1406,7 @@ export default function AdminPage() {
   // admin can see and jump to anything outstanding from one place at the top.
   // ---------------------------------------------------------------------------
   const pendingCategories = [
+    { id: "section-kyc", label: "KYC Verification", count: pendingKycCount, icon: ShieldCheck },
     { id: "section-payments", label: "Outgoing Payments", count: pending.length, icon: ArrowUpRight },
     { id: "section-instruments", label: "Bank Instruments", count: pendingInstruments.length, icon: FileText },
     { id: "section-ppp", label: "Yield / PPP", count: pendingPPP.length, icon: TrendingUp },
@@ -3509,7 +3532,9 @@ export default function AdminPage() {
       <BalanceManager />
 
       {/* Beneficiary management: add, edit, remove, approve on behalf of clients */}
-      <BeneficiaryManager />
+      <div id="section-kyc" className="rounded-lg transition-shadow">
+        <BeneficiaryManager />
+      </div>
 
       {/* Payment Gateway administration */}
       <AdminGatewaySection />

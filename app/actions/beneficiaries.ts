@@ -2,6 +2,7 @@
 
 import {
   listBeneficiariesForUser,
+  listPendingKycBeneficiaries,
   upsertBeneficiary,
   replaceBeneficiariesForUser,
   setBeneficiaryStatus,
@@ -86,6 +87,21 @@ export async function adminListBeneficiaries(passcode: string, userId: string): 
   try {
     requireAdmin(passcode)
     const rows = await listBeneficiariesForUser(userId)
+    return { ok: true, beneficiaries: rows }
+  } catch (err) {
+    return { ok: false, error: friendlyError(err) }
+  }
+}
+
+/**
+ * List every beneficiary still awaiting a KYC decision, across all clients.
+ * Powers the KYC tile in the admin Pending Decisions command center. Returns an
+ * empty list (not an error) when the DB is unavailable so the panel still loads.
+ */
+export async function adminListPendingKyc(passcode: string): Promise<BeneficiaryListResult> {
+  try {
+    requireAdmin(passcode)
+    const rows = await listPendingKycBeneficiaries()
     return { ok: true, beneficiaries: rows }
   } catch (err) {
     return { ok: false, error: friendlyError(err) }

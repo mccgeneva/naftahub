@@ -69,6 +69,24 @@ export async function listBeneficiariesForUser(userId: string): Promise<StoredBe
   return rows.map(toStored)
 }
 
+/**
+ * List every beneficiary still awaiting a KYC decision, across all clients.
+ * A beneficiary is "pending KYC" when its status is "pending" OR its stored
+ * data has not been marked kycVerified. Used by the administrator panel's
+ * Pending Decisions command center so KYC reviews surface alongside the other
+ * approval queues.
+ */
+export async function listPendingKycBeneficiaries(): Promise<StoredBeneficiary[]> {
+  await ensureTable()
+  const { rows } = await pool.query(
+    `SELECT * FROM client_beneficiaries
+       WHERE status = 'pending'
+          OR COALESCE((data->>'kycVerified')::boolean, false) = false
+     ORDER BY created_at ASC`,
+  )
+  return rows.map(toStored)
+}
+
 /** Insert or update a single beneficiary for a user. */
 export async function upsertBeneficiary(
   userId: string,
