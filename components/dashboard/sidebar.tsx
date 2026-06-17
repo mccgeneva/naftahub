@@ -78,6 +78,7 @@ const navGroups: NavGroup[] = [
       { title: "Euroclear Settlement", href: "/dashboard/euroclear", icon: Landmark, badge: "ICSD" },
       { title: "Commodity Trading", href: "/dashboard/commodity", icon: Ship, badge: "POP/POF" },
       { title: "Leverage & Risk", href: "/dashboard/leverage", icon: Gauge, badge: "1:30" },
+      { title: "Treasury Services", href: "/dashboard/treasury", icon: ShieldCheck, badge: "Deposit" },
       { title: "Yield / PPP", href: "/dashboard/ppp", icon: TrendingUp },
       { title: "Fiduciary & Assets", href: "/dashboard/fiduciary", icon: Landmark },
     ],
