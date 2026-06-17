@@ -295,6 +295,47 @@ export function findUserByEmail(email: string): UserProfile | undefined {
   return USERS.find((u) => u.email.toLowerCase() === normalized)
 }
 
+// ---------------------------------------------------------------------------
+// Internal transfer directory.
+//
+// A minimal, secrets-free view of every account that can send/receive internal
+// P2P transfers. Used by the Internal Transfers module to resolve a recipient
+// from their registered email address. Never exposes passwords or session
+// tokens.
+// ---------------------------------------------------------------------------
+export interface TransferDirectoryEntry {
+  id: string
+  email: string
+  /** Best human-readable label for the account. */
+  displayName: string
+  company: string
+  initials: string
+}
+
+function toDirectoryEntry(u: UserProfile): TransferDirectoryEntry {
+  return {
+    id: u.id,
+    email: u.email,
+    displayName: u.fullName || u.shortName || u.company,
+    company: u.company,
+    initials: u.initials,
+  }
+}
+
+/** Every account in the platform directory (secrets-free). */
+export function getTransferDirectory(): TransferDirectoryEntry[] {
+  return USERS.map(toDirectoryEntry)
+}
+
+/**
+ * Resolve a transfer recipient by their registered email. Returns undefined if
+ * no account matches. The lookup is case-insensitive.
+ */
+export function findTransferRecipientByEmail(email: string): TransferDirectoryEntry | undefined {
+  const user = findUserByEmail(email)
+  return user ? toDirectoryEntry(user) : undefined
+}
+
 export function getUserById(id: string | undefined | null): UserProfile {
   return USERS.find((u) => u.id === id) ?? USER_IPOSTRAD
 }

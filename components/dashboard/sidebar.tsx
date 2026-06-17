@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import {
   LayoutDashboard,
   ArrowLeftRight,
+  Send,
   CreditCard,
   FileText,
   TrendingUp,
@@ -56,6 +57,7 @@ const navGroups: NavGroup[] = [
     items: [
       { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
       { title: "Payments & Payees", href: "/dashboard/payments", icon: ArrowLeftRight },
+      { title: "Internal Transfers", href: "/dashboard/transfers", icon: Send, badge: "P2P" },
       { title: "Beneficiaries", href: "/dashboard/beneficiaries", icon: Users },
       { title: "Transactions", href: "/dashboard/transactions", icon: CreditCard },
       { title: "Live FX Rates", href: "/dashboard/exchange", icon: DollarSign },
@@ -73,8 +75,10 @@ const navGroups: NavGroup[] = [
       { title: "Bank Instruments", href: "/dashboard/instruments", icon: FileText, badge: "New" },
       { title: "Institutional Desk", href: "/dashboard/institutional", icon: Banknote, badge: "DOF" },
       { title: "Securities Settlement", href: "/dashboard/dtc", icon: Layers, badge: "DTC" },
+      { title: "Euroclear Settlement", href: "/dashboard/euroclear", icon: Landmark, badge: "ICSD" },
       { title: "Commodity Trading", href: "/dashboard/commodity", icon: Ship, badge: "POP/POF" },
       { title: "Leverage & Risk", href: "/dashboard/leverage", icon: Gauge, badge: "1:30" },
+      { title: "Treasury Services", href: "/dashboard/treasury", icon: ShieldCheck, badge: "Deposit" },
       { title: "Yield / PPP", href: "/dashboard/ppp", icon: TrendingUp },
       { title: "Fiduciary & Assets", href: "/dashboard/fiduciary", icon: Landmark },
     ],

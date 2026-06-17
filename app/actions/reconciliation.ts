@@ -15,6 +15,7 @@ import {
   type ReconciliationCandidate,
   type ReconciliationStatus,
 } from "@/lib/reconciliation"
+import { parseSwiftMessage, toReconciliationInput } from "@/lib/swift-mt"
 
 // ---------------------------------------------------------------------------
 // Auth helpers (mirror app/actions/gateway.ts)
@@ -266,72 +267,154 @@ export async function submitIncomingPaymentAdmin(
       senderBic: input.senderBic?.trim().toUpperCase() || undefined,
       valueDate: input.valueDate || new Date().toISOString(),
     }
-
-    const accounts = await readActiveAccounts()
-    const match: MatchResult = matchPayment(payment, accounts)
-
-    const now = new Date().toISOString()
-    const record: ReconciliationRecord = {
-      id: payment.id,
-      payment,
-      status: match.classification,
-      candidates: match.candidates,
-      summary: match.summary,
-      createdAt: now,
-      updatedAt: now,
-    }
-
-    if (match.classification === "reconciled" && match.confident) {
-      const account = accounts.find(
-        (a) => a.userId === match.confident!.userId && a.id === match.confident!.requestId,
-      )
-      if (account) {
-        const ledgerEntryId = await creditMatchedAccount(account, payment)
-        record.matchedUserId = account.userId
-        record.matchedRequestId = account.id
-        record.matchedAccountHolder = account.accountHolder
-        record.ledgerEntryId = ledgerEntryId
-
-        const target = getUserById(account.userId)
-        await logActivity({
-          action: `Reconciliation engine auto-credited ${payment.currency} ${amount.toLocaleString("en-US")} to ${target.fullName}'s Master Account`,
-          category: "Administration",
-          user: `${admin.fullName} (${admin.company})`,
-          details: {
-            summary: `Incoming payment ${payment.id} from ${payment.payer} (reference ${payment.reference}) was matched with full confidence to gateway account ${account.id} and auto-credited to ${target.fullName}'s Master Account under ledger reference ${ledgerEntryId}.`,
-            referenceId: payment.id,
-            targetAccount: `${target.fullName} — ${target.email}`,
-            amount: `${payment.currency} ${amount.toLocaleString("en-US")}`,
-            remittanceReference: payment.reference,
-            ledgerReference: ledgerEntryId,
-            decision: "Auto-reconciled",
-          },
-        })
-      } else {
-        // Should not happen, but never lose a payment — park for review.
-        record.status = "needs_review"
-        record.summary = "Matched account could not be loaded for crediting. Parked for manual review."
-      }
-    } else {
-      await logActivity({
-        action: `Reconciliation engine flagged incoming payment ${payment.id} (${match.classification === "unmatched" ? "no match" : "needs review"})`,
-        category: "Administration",
-        user: `${admin.fullName} (${admin.company})`,
-        details: {
-          summary: `Incoming payment ${payment.id} from ${payment.payer} (reference ${payment.reference}, ${payment.currency} ${amount.toLocaleString("en-US")}) could not be auto-credited (${match.classification}). ${match.summary}`,
-          referenceId: payment.id,
-          amount: `${payment.currency} ${amount.toLocaleString("en-US")}`,
-          remittanceReference: payment.reference,
-          decision: match.classification === "unmatched" ? "Unmatched" : "Needs review",
-        },
-      })
-    }
-
-    await writeRecord(record)
-    return { ok: true, records: await readAllRecords(), lastId: record.id }
+    return await matchRecordAndCredit(admin, payment)
   } catch (err) {
     console.log("[v0] submitIncomingPaymentAdmin failed:", (err as Error).message)
     return { ok: false, error: "The payment could not be processed. Please try again." }
+  }
+}
+
+/**
+ * Shared core: match a payment against active gateway accounts, persist the
+ * record, auto-credit a confident match, and write the audit trail. Used by
+ * both manual entry and SWIFT-message ingestion.
+ */
+async function matchRecordAndCredit(
+  admin: UserProfile,
+  payment: IncomingPayment,
+): Promise<ReconciliationResult> {
+  const amount = payment.amount
+  const accounts = await readActiveAccounts()
+  const match: MatchResult = matchPayment(payment, accounts)
+
+  const now = new Date().toISOString()
+  const record: ReconciliationRecord = {
+    id: payment.id,
+    payment,
+    status: match.classification,
+    candidates: match.candidates,
+    summary: match.summary,
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  const channel = payment.swiftType ? `${payment.swiftType} message` : "incoming payment"
+
+  if (match.classification === "reconciled" && match.confident) {
+    const account = accounts.find(
+      (a) => a.userId === match.confident!.userId && a.id === match.confident!.requestId,
+    )
+    if (account) {
+      const ledgerEntryId = await creditMatchedAccount(account, payment)
+      record.matchedUserId = account.userId
+      record.matchedRequestId = account.id
+      record.matchedAccountHolder = account.accountHolder
+      record.ledgerEntryId = ledgerEntryId
+
+      const target = getUserById(account.userId)
+      await logActivity({
+        action: `Reconciliation engine auto-credited ${payment.currency} ${amount.toLocaleString("en-US")} to ${target.fullName}'s Master Account`,
+        category: "Administration",
+        user: `${admin.fullName} (${admin.company})`,
+        details: {
+          summary: `Inbound ${channel} ${payment.id} from ${payment.payer} (reference ${payment.reference}${payment.uetr ? `, UETR ${payment.uetr}` : ""}) was matched with full confidence to gateway account ${account.id} and auto-credited to ${target.fullName}'s Master Account under ledger reference ${ledgerEntryId}.`,
+          referenceId: payment.id,
+          targetAccount: `${target.fullName} — ${target.email}`,
+          amount: `${payment.currency} ${amount.toLocaleString("en-US")}`,
+          remittanceReference: payment.reference,
+          ledgerReference: ledgerEntryId,
+          ...(payment.uetr ? { uetr: payment.uetr } : {}),
+          ...(payment.swiftType ? { swiftMessageType: payment.swiftType } : {}),
+          decision: "Auto-reconciled",
+        },
+      })
+    } else {
+      // Should not happen, but never lose a payment — park for review.
+      record.status = "needs_review"
+      record.summary = "Matched account could not be loaded for crediting. Parked for manual review."
+    }
+  } else {
+    await logActivity({
+      action: `Reconciliation engine flagged inbound ${channel} ${payment.id} (${match.classification === "unmatched" ? "no match" : "needs review"})`,
+      category: "Administration",
+      user: `${admin.fullName} (${admin.company})`,
+      details: {
+        summary: `Inbound ${channel} ${payment.id} from ${payment.payer} (reference ${payment.reference}, ${payment.currency} ${amount.toLocaleString("en-US")}) could not be auto-credited (${match.classification}). ${match.summary}`,
+        referenceId: payment.id,
+        amount: `${payment.currency} ${amount.toLocaleString("en-US")}`,
+        remittanceReference: payment.reference,
+        ...(payment.uetr ? { uetr: payment.uetr } : {}),
+        ...(payment.swiftType ? { swiftMessageType: payment.swiftType } : {}),
+        decision: match.classification === "unmatched" ? "Unmatched" : "Needs review",
+      },
+    })
+  }
+
+  await writeRecord(record)
+  return { ok: true, records: await readAllRecords(), lastId: record.id }
+}
+
+/**
+ * Admin: ingest a raw SWIFT MT message (MT103 / MT202 / MT202 COV). The message
+ * is parsed and validated, then the extracted payment is run through the same
+ * reconciliation engine as manual entry. The raw FIN text and parsed metadata
+ * (type, UETR) are retained on the record for audit and the inspector view.
+ */
+export async function submitSwiftMessageAdmin(
+  passcode: string,
+  rawMessage: string,
+): Promise<ReconciliationResult & { parseErrors?: string[] }> {
+  let admin: UserProfile
+  try {
+    admin = await requireAdmin(passcode)
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+
+  if (!rawMessage?.trim()) return { ok: false, error: "Paste a SWIFT MT message to ingest." }
+
+  const parsed = parseSwiftMessage(rawMessage)
+  if (!parsed.valid) {
+    return {
+      ok: false,
+      error: `The SWIFT message failed validation: ${parsed.errors[0] ?? "unknown error"}`,
+      parseErrors: parsed.errors,
+    }
+  }
+  if (parsed.type === "MT799") {
+    return {
+      ok: false,
+      error: "MT799 is a free-format message and carries no settlement amount to reconcile. Use the SWIFT inspector to review it.",
+    }
+  }
+
+  const extract = toReconciliationInput(parsed)
+  if (extract.amount === undefined || extract.amount <= 0) {
+    return { ok: false, error: "The SWIFT message does not contain a valid settlement amount (:32A:)." }
+  }
+  if (!extract.currency) return { ok: false, error: "The SWIFT message does not contain a settlement currency." }
+  if (!extract.reference.trim()) {
+    return { ok: false, error: "The SWIFT message does not contain a remittance reference to match on (:70:/:21:/:20:)." }
+  }
+
+  try {
+    const payment: IncomingPayment = {
+      id: genId(),
+      amount: extract.amount,
+      currency: extract.currency.toUpperCase(),
+      payer: extract.payer,
+      reference: extract.reference.trim(),
+      senderIban: extract.senderIban,
+      senderBic: extract.senderBic?.toUpperCase(),
+      valueDate: extract.valueDate || new Date().toISOString(),
+      uetr: extract.uetr,
+      swiftType: parsed.type,
+      swiftRaw: rawMessage.trim(),
+    }
+    return await matchRecordAndCredit(admin, payment)
+  } catch (err) {
+    console.log("[v0] submitSwiftMessageAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The SWIFT message could not be processed. Please try again." }
   }
 }
 

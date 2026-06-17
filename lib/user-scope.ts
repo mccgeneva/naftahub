@@ -31,10 +31,20 @@ export function getActiveUserId(): string {
 }
 
 /**
+ * Namespaces a base storage key for a specific user id. The primary user keeps
+ * the original key; other users get an id-suffixed key so their data is
+ * isolated. This is the building block used by both the active-user helper and
+ * by cross-user features (e.g. internal P2P transfers that must write into
+ * another account's namespace).
+ */
+export function scopedKeyForUser(baseKey: string, userId: string): string {
+  return userId === PRIMARY_USER_ID ? baseKey : `${baseKey}::${userId}`
+}
+
+/**
  * Namespaces a base storage key for the active user. The primary user keeps the
  * original key; other users get an id-suffixed key so their data is isolated.
  */
 export function scopedKey(baseKey: string): string {
-  const id = getActiveUserId()
-  return id === PRIMARY_USER_ID ? baseKey : `${baseKey}::${id}`
+  return scopedKeyForUser(baseKey, getActiveUserId())
 }

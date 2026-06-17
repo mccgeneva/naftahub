@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 import {
   Scale,
   Check,
@@ -11,6 +12,7 @@ import {
   ArrowRight,
   Banknote,
   Loader2,
+  Network,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -235,15 +237,25 @@ export function AdminReconciliationSection() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-lg font-semibold">
-          <Scale className="h-5 w-5 text-primary" />
-          Payment Reconciliation
-        </CardTitle>
-        <p className="text-sm text-muted-foreground text-pretty">
-          Key in inbound payments to automatically match them against active gateway accounts by
-          remittance reference. Confident matches are credited to the client&apos;s Master Account
-          immediately; anything ambiguous is held here for manual review.
-        </p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex flex-col gap-2">
+            <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+              <Scale className="h-5 w-5 text-primary" />
+              Payment Reconciliation
+            </CardTitle>
+            <p className="text-sm text-muted-foreground text-pretty">
+              Key in inbound payments to automatically match them against active gateway accounts by
+              remittance reference. Confident matches are credited to the client&apos;s Master Account
+              immediately; anything ambiguous is held here for manual review.
+            </p>
+          </div>
+          <Button asChild variant="outline" size="sm" className="shrink-0 gap-2">
+            <Link href="/dashboard/admin/swift">
+              <Network className="h-4 w-4" />
+              SWIFT Inspector
+            </Link>
+          </Button>
+        </div>
       </CardHeader>
 
       <CardContent className="flex flex-col gap-8">

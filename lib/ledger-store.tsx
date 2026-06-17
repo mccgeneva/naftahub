@@ -1,7 +1,7 @@
 "use client"
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
-import { scopedKey } from "@/lib/user-scope"
+import { scopedKey, scopedKeyForUser } from "@/lib/user-scope"
 
 export type LedgerDirection = "credit" | "debit"
 export type LedgerStatus = "completed" | "hold"
@@ -23,6 +23,33 @@ export interface LedgerEntry {
 
 const KEY_BASE = "mcc.ledger.v1"
 const storageKey = () => scopedKey(KEY_BASE)
+
+/**
+ * Append a credit entry directly into another user's persisted ledger.
+ *
+ * Used by internal P2P transfers: the recipient is a different tenant whose
+ * ledger lives under their own namespaced localStorage key. We read that key,
+ * prepend the new credit, and write it back. The recipient picks the credit up
+ * the next time their LedgerProvider hydrates (login / reload), exactly like an
+ * externally received payment. Returns true on success.
+ *
+ * Note: this only runs in the browser (localStorage). The active sender's own
+ * balance must be updated through the live `addDebit` from `useLedger()` so the
+ * UI reflects it immediately.
+ */
+export function creditUserLedger(userId: string, entry: Omit<LedgerEntry, "direction">): boolean {
+  if (typeof window === "undefined") return false
+  try {
+    const key = scopedKeyForUser(KEY_BASE, userId)
+    const stored = window.localStorage.getItem(key)
+    const existing = stored ? (JSON.parse(stored) as LedgerEntry[]) : []
+    const full: LedgerEntry = { ...entry, direction: "credit" }
+    window.localStorage.setItem(key, JSON.stringify([full, ...existing]))
+    return true
+  } catch {
+    return false
+  }
+}
 
 // USD value of 1 unit of each currency, used to convert balances between
 // currencies so the dashboard can show a single aggregated total.

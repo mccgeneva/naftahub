@@ -26,6 +26,7 @@ import {
   Banknote,
   Percent,
   Globe,
+  Radio,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -67,6 +68,7 @@ import {
   type MonetizationStructure,
 } from "@/lib/monetization-requests-store"
 import { generateInstrumentCertificate } from "@/lib/certificate-pdf"
+import { generateMt760, generateMt799 } from "@/lib/swift-mt"
 
 const MONETIZATION_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "AED", "SGD"]
 
@@ -367,6 +369,7 @@ export default function InstrumentsPage() {
         bclReference: "",
         notes: "",
       })
+      setGeneratedSwift(null)
       setMonetizeTarget(instrument)
       return
     }
@@ -378,6 +381,74 @@ export default function InstrumentsPage() {
     key: K,
     value: (typeof monetizeForm)[K],
   ) => setMonetizeForm((prev) => ({ ...prev, [key]: value }))
+
+  // Real SWIFT FIN generated from the instrument + monetization details.
+  const [generatedSwift, setGeneratedSwift] = useState<{
+    mt760: string
+    mt799: string
+  } | null>(null)
+
+  // Build well-formed MT760 (collateral transfer / SBLC) + MT799 (RWA pre-advice)
+  // messages from the live monetization inputs and auto-fill their references.
+  const handleGenerateSwift = () => {
+    if (!monetizeTarget) return
+    const instrument = monetizeTarget
+    const platformBic = "BARCGB22" // dedicated bank-instrument account (Barclays)
+    const counterpartyBic =
+      monetizeForm.receivingBankBic.trim().toUpperCase() || "DEUTDEFF"
+    const mt760Reference = `MT760-${instrument.id}`.slice(0, 16)
+    const mt799Reference = `MT799-${instrument.id}`.slice(0, 16)
+    const today = new Date().toISOString().slice(0, 10)
+    const structureLabel =
+      MONETIZATION_STRUCTURES.find((s) => s.value === monetizeForm.structure)?.label ??
+      monetizeForm.structure
+
+    const mt760 = generateMt760({
+      senderBic: platformBic,
+      receiverBic: counterpartyBic,
+      senderReference: mt760Reference,
+      relatedReference: instrument.id.slice(0, 16),
+      purpose: monetizeForm.structure === "CollateralTransfer" ? "ICCO" : "ISSU",
+      form: instrument.type === "SBLC" ? "STBY" : "DGAR",
+      applicableRules: instrument.type === "SBLC" ? "ISPR" : "URDG",
+      issueDate: today,
+      expiryDate: instrument.expiryDate,
+      currency: instrument.currency,
+      amount: instrument.faceValue,
+      applicant: { nameAndAddress: ["MCC CAPITAL LTD", "LONDON, UNITED KINGDOM"] },
+      beneficiary: {
+        bic: counterpartyBic,
+        nameAndAddress: [monetizeForm.monetizationPlatform.trim() || "MONETIZATION COUNTERPARTY"],
+      },
+      terms: `COLLATERAL TRANSFER OF ${instrument.type} ${instrument.id} FOR ${structureLabel.toUpperCase()} AT ${monetizeAdvanceRate}PCT LTV. PROCEEDS ${monetizeForm.proceedsCurrency} ${monetizeProceeds.toLocaleString("en-US")} TO ${monetizeForm.receivingBank.toUpperCase()}.`,
+    }).raw
+
+    const mt799 = generateMt799({
+      senderBic: platformBic,
+      receiverBic: counterpartyBic,
+      senderReference: mt799Reference,
+      relatedReference: mt760Reference,
+      narrative: `WE HEREBY CONFIRM ON BEHALF OF MCC CAPITAL THAT WE ARE READY, WILLING AND ABLE TO PROCEED WITH THE MONETIZATION OF ${instrument.typeFull.toUpperCase()} (${instrument.type}) REF ${instrument.id}, FACE VALUE ${instrument.currency} ${instrument.faceValue.toLocaleString("en-US")}, ISSUED BY ${instrument.issuer.toUpperCase()}. STRUCTURE: ${structureLabel.toUpperCase()} AT ${monetizeAdvanceRate}PCT LTV. THIS MESSAGE IS A PRE-ADVICE AND DOES NOT CONSTITUTE A FINANCIAL OBLIGATION.`,
+    }).raw
+
+    setGeneratedSwift({ mt760, mt799 })
+    setMon("mt760Ref", mt760Reference)
+    setMon("mt799Ref", mt799Reference)
+    toast.success("SWIFT messages generated", {
+      description: `MT760 (${mt760Reference}) and MT799 (${mt799Reference}) drafted and referenced.`,
+    })
+    logActivity({
+      action: `Generated MT760 + MT799 for monetization of ${instrument.type} ${instrument.id}`,
+      category: "Bank Instruments",
+      details: {
+        summary: `Client generated well-formed SWIFT MT760 (collateral transfer) and MT799 (RWA pre-advice) messages for the monetization of ${instrument.typeFull} (${instrument.type}) ${instrument.id}, face value ${formatCurrency(instrument.faceValue, instrument.currency)}. References ${mt760Reference} / ${mt799Reference}.`,
+        referenceId: instrument.id,
+        mt760: mt760Reference,
+        mt799: mt799Reference,
+        receivingBankBic: counterpartyBic,
+      },
+    })
+  }
 
   const monetizeAdvanceRate = Number.parseFloat(monetizeForm.advanceRate)
   const monetizeProceeds =
@@ -419,6 +490,8 @@ export default function InstrumentsPage() {
       receivingBankBic: monetizeForm.receivingBankBic.trim().toUpperCase(),
       mt760Ref: monetizeForm.mt760Ref.trim(),
       mt799Ref: monetizeForm.mt799Ref.trim(),
+      mt760Raw: generatedSwift?.mt760,
+      mt799Raw: generatedSwift?.mt799,
       pofReference: monetizeForm.pofReference.trim(),
       bclReference: monetizeForm.bclReference.trim(),
       notes: monetizeForm.notes.trim(),
@@ -1322,7 +1395,15 @@ export default function InstrumentsPage() {
       </Dialog>
 
       {/* Bank Instrument Monetization dialog */}
-      <Dialog open={!!monetizeTarget} onOpenChange={(open) => !open && setMonetizeTarget(null)}>
+      <Dialog
+        open={!!monetizeTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setMonetizeTarget(null)
+            setGeneratedSwift(null)
+          }
+        }}
+      >
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           {monetizeTarget && (
             <>
@@ -1459,6 +1540,54 @@ export default function InstrumentsPage() {
               </div>
 
               {/* SWIFT messaging & documentation */}
+              <div className="rounded-lg border border-border bg-muted/30 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <p className="text-sm font-medium">SWIFT messaging</p>
+                    <p className="text-xs text-muted-foreground">
+                      Auto-build well-formed MT760 (collateral transfer) and MT799 (RWA pre-advice) FIN
+                      from this instrument and fill the references below.
+                    </p>
+                  </div>
+                  <Button type="button" variant="secondary" size="sm" onClick={handleGenerateSwift}>
+                    <Radio className="mr-2 h-4 w-4" />
+                    Generate SWIFT messages
+                  </Button>
+                </div>
+                {generatedSwift && (
+                  <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                    {(
+                      [
+                        { label: "MT760 — Guarantee / collateral transfer", raw: generatedSwift.mt760 },
+                        { label: "MT799 — RWA pre-advice", raw: generatedSwift.mt799 },
+                      ] as const
+                    ).map((m) => (
+                      <div key={m.label} className="space-y-2 rounded-md border border-border bg-background p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-muted-foreground">{m.label}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2"
+                            onClick={() => {
+                              void navigator.clipboard.writeText(m.raw)
+                              toast.success("Copied SWIFT message to clipboard")
+                            }}
+                          >
+                            <Copy className="mr-1.5 h-3.5 w-3.5" />
+                            Copy
+                          </Button>
+                        </div>
+                        <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2 font-mono text-[11px] leading-relaxed text-foreground">
+                          {m.raw}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="mon-mt760">MT760 Reference</Label>

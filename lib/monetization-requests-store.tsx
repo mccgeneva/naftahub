@@ -38,6 +38,8 @@ export interface MonetizationRequest {
   // SWIFT messaging + supporting documentation references
   mt760Ref: string // MT760 (guarantee / SBLC issuance or collateral transfer)
   mt799Ref: string // MT799 (free-format pre-advice / RWA assurance)
+  mt760Raw?: string // generated MT760 FIN message (full SWIFT block structure)
+  mt799Raw?: string // generated MT799 FIN message (full SWIFT block structure)
   pofReference: string // Proof of Funds reference
   bclReference: string // Bank Comfort Letter reference
 
