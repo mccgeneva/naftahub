@@ -394,8 +394,10 @@ export default function LandingPage() {
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </Link>
                 </Button>
-                <Button size="lg" variant="outline">
-                  Schedule Consultation
+                <Button size="lg" variant="outline" asChild>
+                  <a href="mailto:admin@mccgva.ch?subject=Consultation%20Request%20%E2%80%94%20MCC%20Platform">
+                    Schedule Consultation
+                  </a>
                 </Button>
               </div>
             </CardContent>

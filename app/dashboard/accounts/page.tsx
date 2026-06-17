@@ -91,8 +91,8 @@ const baseBankAccounts = [
     dailyLimit: 0,
     monthlyVolume: 0,
     relationship: "Business Banking",
-    contactPerson: "Banking Circle Support",
-    contactEmail: "support@bankingcircle.com",
+    contactPerson: "MCC Client Services",
+    contactEmail: "admin@mccgva.ch",
     branchAddress: "80333 München, Germany",
     beneficiaryAddress: "Rue du Rhone 14, 1204 Geneva, Switzerland",
   },
@@ -287,8 +287,8 @@ export default function BankAccountsPage() {
         dailyLimit: 0,
         monthlyVolume: 0,
         relationship: "Business Banking",
-        contactPerson: "Banking Circle Support",
-        contactEmail: "support@bankingcircle.com",
+        contactPerson: "MCC Client Services",
+        contactEmail: "admin@mccgva.ch",
         branchAddress: meta.country,
         beneficiaryAddress: "Rue du Rhone 14, 1204 Geneva, Switzerland",
       }
@@ -573,15 +573,13 @@ export default function BankAccountsPage() {
                 <Label className="text-zinc-300">Branch Address</Label>
                 <Textarea placeholder="Full branch address" className="bg-zinc-800 border-zinc-700" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label className="text-zinc-300">Contact Person</Label>
-                  <Input placeholder="Relationship manager name" className="bg-zinc-800 border-zinc-700" />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-zinc-300">Contact Email</Label>
-                  <Input type="email" placeholder="contact@bank.com" className="bg-zinc-800 border-zinc-700" />
-                </div>
+              <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                <Shield className="h-4 w-4 mt-0.5 shrink-0 text-amber-400" />
+                <p className="text-xs text-amber-300/90 leading-relaxed">
+                  Clients do not contact partner banks directly. All communication for this
+                  account is handled by MCC Client Services and routed through{" "}
+                  <span className="font-medium">admin@mccgva.ch</span>.
+                </p>
               </div>
             </div>
             {addError && (

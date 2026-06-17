@@ -46,13 +46,19 @@ export function PortfolioOverview() {
   // Total balance aggregates every currency the client holds, converted to EUR,
   // so balances from currency exchanges (USD, GBP, etc.) are included too.
   const totalBalance = totalIn("EUR")
-  const heldCurrencies = currencies.length
 
-  // One balance line per currency the client holds. EUR is always shown first,
-  // followed by any other currency (e.g. proceeds from a currency exchange).
-  const orderedCurrencies = ["EUR", ...currencies.filter((c) => c !== "EUR")].filter(
-    (c, i, arr) => arr.indexOf(c) === i,
-  )
+  // Core multi-currency settlement accounts that make up the master account.
+  // These are always displayed so the client sees the complete picture of every
+  // currency balance the platform tracks, even those still at 0.00.
+  const CORE_CURRENCIES = ["EUR", "USD", "GBP", "CHF"]
+
+  // One balance line per currency: the core set first, then any other currency
+  // the client holds (e.g. proceeds from a less common currency exchange).
+  const orderedCurrencies = [
+    ...CORE_CURRENCIES,
+    ...currencies.filter((c) => !CORE_CURRENCIES.includes(c)),
+  ].filter((c, i, arr) => arr.indexOf(c) === i)
+  const heldCurrencies = orderedCurrencies.length
   const currencyBalances = orderedCurrencies.map((cur) => ({
     currency: cur,
     name: currencyNames[cur] || cur,
@@ -110,9 +116,14 @@ export function PortfolioOverview() {
       {/* Per-currency balances */}
       <Card className="bg-card border-border">
         <CardHeader className="flex flex-row items-center justify-between pb-3">
-          <CardTitle className="text-sm font-medium text-muted-foreground">
-            Account Balances
-          </CardTitle>
+          <div>
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Account Balances
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Master multi-currency account
+            </p>
+          </div>
           <div className="rounded-lg bg-secondary p-2">
             <Wallet className="h-4 w-4 text-primary" />
           </div>
@@ -136,14 +147,12 @@ export function PortfolioOverview() {
               </div>
             ))}
           </div>
-          {heldCurrencies > 1 && (
-            <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
-              <span className="text-xs text-muted-foreground">
-                Total ({heldCurrencies} currencies, EUR equivalent)
-              </span>
-              <span className="text-sm font-bold text-foreground">{formatEur(totalBalance)}</span>
-            </div>
-          )}
+          <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
+            <span className="text-xs text-muted-foreground">
+              Total across {heldCurrencies} currencies (EUR equivalent)
+            </span>
+            <span className="text-sm font-bold text-foreground">{formatEur(totalBalance)}</span>
+          </div>
         </CardContent>
       </Card>
 

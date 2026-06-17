@@ -95,12 +95,22 @@ const currencyAccounts: Record<
   },
 }
 
+// Core multi-currency settlement accounts that make up the master account.
+// These are always shown so the client immediately sees the full picture of
+// every bank account on the platform — EUR plus the USD/GBP/CHF sub-accounts
+// that funds can be converted into — even before any balance lands in them.
+const CORE_CURRENCIES = ["EUR", "USD", "GBP", "CHF"]
+
 export function BankAccounts() {
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const { balanceFor, currencies } = useLedger()
 
-  // Always show EUR (the master account), then any other currency held.
-  const displayCurrencies = ["EUR", ...currencies.filter((c) => c !== "EUR" && currencyAccounts[c])]
+  // Always show the core multi-currency accounts, then any other currency the
+  // client holds (e.g. proceeds from a less common currency exchange).
+  const displayCurrencies = [
+    ...CORE_CURRENCIES,
+    ...currencies.filter((c) => !CORE_CURRENCIES.includes(c) && currencyAccounts[c]),
+  ]
 
   // One account card per currency, each reflecting its live ledger balance.
   const accounts = displayCurrencies
@@ -134,7 +144,7 @@ export function BankAccounts() {
         <div>
           <CardTitle className="text-lg font-semibold">Bank Accounts</CardTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Connected partner banks
+            Master multi-currency account · {accounts.length} currencies
           </p>
         </div>
         <Button asChild variant="outline" size="sm" className="text-xs">
@@ -162,6 +172,9 @@ export function BankAccounts() {
                       </p>
                       <Badge variant="outline" className="text-[10px]">
                         {account.country}
+                      </Badge>
+                      <Badge className="bg-primary/15 text-primary border-primary/20 text-[10px]">
+                        {account.currency}
                       </Badge>
                     </div>
                     <p className="text-xs text-muted-foreground">{account.type}</p>

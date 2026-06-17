@@ -20,7 +20,7 @@ import { MobileSidebar } from "./mobile-sidebar"
 import { logout } from "@/app/actions/auth"
 import { useCurrentUser } from "@/lib/use-current-user"
 
-const notifications: {
+const initialNotifications: {
   id: number
   title: string
   description: string
@@ -56,6 +56,7 @@ function TerminalClock() {
 
 export function DashboardHeader() {
   const user = useCurrentUser()
+  const [notifications, setNotifications] = useState(initialNotifications)
   return (
     <header className="sticky top-0 z-50 flex h-16 items-center justify-between border-b border-border bg-card px-4 md:px-6">
       {/* Mobile Menu */}
@@ -99,7 +100,13 @@ export function DashboardHeader() {
           <DropdownMenuContent align="end" className="w-80">
             <DropdownMenuLabel className="flex items-center justify-between">
               <span>Notifications</span>
-              <Button variant="ghost" size="sm" className="h-auto p-0 text-xs text-primary">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-auto p-0 text-xs text-primary disabled:opacity-50"
+                disabled={notifications.length === 0}
+                onClick={() => setNotifications([])}
+              >
                 Mark all read
               </Button>
             </DropdownMenuLabel>
@@ -139,8 +146,8 @@ export function DashboardHeader() {
               ))
             )}
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="justify-center text-primary cursor-pointer">
-              View all notifications
+            <DropdownMenuItem asChild className="justify-center text-primary cursor-pointer">
+              <Link href="/dashboard/transactions">View all activity</Link>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
