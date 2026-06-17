@@ -315,6 +315,7 @@ export function BalanceManager() {
   }
 
   return (
+    <Card className="bg-card border-border">
       <CardHeader>
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
@@ -555,7 +556,7 @@ export function BalanceManager() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
                     <span
                       className={cn(
                         "whitespace-nowrap text-sm font-semibold",
@@ -565,6 +566,29 @@ export function BalanceManager() {
                       {e.direction === "credit" ? "+" : "−"}
                       {fmt(e.amount, e.currency)}
                     </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                      onClick={() => openEdit(e)}
+                      aria-label={`Edit transaction ${e.id}`}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-amber-500"
+                      onClick={() => handleReverse(e.id)}
+                      disabled={reversingId === e.id}
+                      aria-label={`Reverse transaction ${e.id}`}
+                    >
+                      {reversingId === e.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Undo2 className="h-4 w-4" />
+                      )}
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -581,6 +605,72 @@ export function BalanceManager() {
           )}
         </div>
       </CardContent>
+
+      {/* Edit existing transaction dialog */}
+      <Dialog open={!!editEntry} onOpenChange={(open) => !open && setEditEntry(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit transaction</DialogTitle>
+            <DialogDescription>
+              {editEntry ? `${editEntry.id} · ${targetUser.fullName}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="edit-amount">Amount ({editEntry?.currency})</Label>
+                <Input
+                  id="edit-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={editAmount}
+                  onChange={(ev) => setEditAmount(ev.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={editStatus} onValueChange={(v) => setEditStatus(v as LedgerStatus)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="completed">Completed</SelectItem>
+                    <SelectItem value="hold">On Hold</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-counterparty">Counterparty</Label>
+              <Input
+                id="edit-counterparty"
+                value={editCounterparty}
+                onChange={(ev) => setEditCounterparty(ev.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-comment">Description</Label>
+              <Textarea
+                id="edit-comment"
+                rows={2}
+                value={editComment}
+                onChange={(ev) => setEditComment(ev.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditEntry(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveEdit} disabled={editBusy}>
+              {editBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   )
 }
