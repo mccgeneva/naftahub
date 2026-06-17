@@ -158,6 +158,11 @@ export function BeneficiaryManager() {
     const id = form.id || `ben_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     // Merge onto any existing record so we never drop the rich KYC/AML fields.
     const existing = (records.find((r) => r.id === id)?.data as unknown as Beneficiary) ?? {}
+    // The status the administrator picks IS the KYC decision: choosing "active"
+    // verifies the beneficiary (and stamps today's AML screening date); any
+    // other status leaves it unverified. This keeps the edit dialog consistent
+    // with the row "Approve" button so KYC never stays stuck on "Pending".
+    const isVerified = form.status === "active"
     const data: Beneficiary = {
       ...(existing as Beneficiary),
       id,
@@ -179,7 +184,10 @@ export function BeneficiaryManager() {
       totalTransactions: existing.totalTransactions ?? 0,
       totalVolume: existing.totalVolume ?? 0,
       notes: form.notes.trim() || undefined,
-      kycVerified: existing.kycVerified ?? false,
+      kycVerified: isVerified,
+      amlScreeningDate: isVerified
+        ? new Date().toISOString().slice(0, 10)
+        : existing.amlScreeningDate,
       riskLevel: existing.riskLevel ?? "low",
     }
 
