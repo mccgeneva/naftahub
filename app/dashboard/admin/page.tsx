@@ -58,6 +58,7 @@ import { useLeverageRequests, accruedInterest, type LeverageRequest } from "@/li
 import { ADMIN_PASSCODE, ADMIN_SESSION_KEY } from "@/lib/admin-config"
 import { resetAccountData } from "@/lib/reset-account"
 import { AdminGatewaySection } from "@/components/dashboard/admin-gateway-section"
+import { AdminReconciliationSection } from "@/components/dashboard/admin-reconciliation-section"
 import { TreasuryManager } from "@/components/admin/treasury-manager"
 import { toast } from "sonner"
 
@@ -2719,6 +2720,9 @@ export default function AdminPage() {
 
       {/* Payment Gateway administration */}
       <AdminGatewaySection />
+
+      {/* Automated payment reconciliation engine */}
+      <AdminReconciliationSection />
 
       {/* Treasury Services: security deposits & approved 1:10 leverage */}
       <TreasuryManager />
