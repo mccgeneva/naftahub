@@ -16,6 +16,10 @@ import {
   Lock,
   ArrowRight,
   Gauge,
+  FileText,
+  Download,
+  AlertTriangle,
+  FileCheck2,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -50,6 +54,13 @@ import {
   annualCostOfCapital,
   type AesEquityComponent,
 } from "@/lib/aes"
+import {
+  REQUIRED_FUNDING_DOCUMENTS,
+  SUPPORTING_DOCUMENTS,
+  COMPLIANCE_NOTICES,
+  BANK_STATEMENT_WAIVER_FEE,
+  BANK_STATEMENT_WAIVER_CURRENCY,
+} from "@/lib/funding-documents"
 
 const SUPPORTED_CURRENCIES = ["USD", "EUR", "GBP", "CHF"] as const
 
@@ -118,6 +129,10 @@ export default function ProjectFundingPage() {
   const [currency, setCurrency] = useState<string>("USD")
   const [components, setComponents] = useState<AesEquityComponent[]>(["cash"])
   const [description, setDescription] = useState("")
+  // Documentation gate: clients must confirm the required package and indicate
+  // whether a qualifying bank statement will be supplied (drives the waiver fee).
+  const [docsAcknowledged, setDocsAcknowledged] = useState(false)
+  const [bankStatement, setBankStatement] = useState<"yes" | "no" | "">("")
   const [formError, setFormError] = useState<string | null>(null)
 
   const log = useActivityLog()
@@ -169,6 +184,8 @@ export default function ProjectFundingPage() {
     setCurrency("USD")
     setComponents(["cash"])
     setDescription("")
+    setDocsAcknowledged(false)
+    setBankStatement("")
     setFormError(null)
   }
 
@@ -195,6 +212,21 @@ export default function ProjectFundingPage() {
       setFormError("Select at least one equity component (assets, instruments, and/or cash).")
       return
     }
+    if (bankStatement === "") {
+      setFormError(
+        "Please indicate whether you will provide a qualifying bank statement (Documentation step).",
+      )
+      return
+    }
+    if (!docsAcknowledged) {
+      setFormError(
+        "Please confirm you will submit the complete required documentation package before applying.",
+      )
+      return
+    }
+
+    const bankStatementProvided = bankStatement === "yes"
+    const waiverFeeApplies = !bankStatementProvided
 
     const request = addRequest({
       id: `PF-REQ-${new Date().getTime().toString().slice(-8)}`,
@@ -209,6 +241,9 @@ export default function ProjectFundingPage() {
       equityComponents: components,
       cashCommitmentMin: cashCommitment.min,
       cashCommitmentMax: cashCommitment.max,
+      documentsAcknowledged: true,
+      bankStatementProvided,
+      waiverFeeApplies,
     })
 
     log({
@@ -228,6 +263,11 @@ export default function ProjectFundingPage() {
           .join(", "),
         upfrontCashCommitment: `${formatMoney(cashCommitment.min, currency)} – ${formatMoney(cashCommitment.max, currency)}`,
         annualCostOfCapital: `${formatMoney(annualCost, currency)} (1.8%)`,
+        documentationAcknowledged: "Yes — full required package",
+        bankStatementProvided: bankStatementProvided ? "Yes" : "No",
+        bankStatementWaiverFee: waiverFeeApplies
+          ? `${BANK_STATEMENT_WAIVER_CURRENCY} ${BANK_STATEMENT_WAIVER_FEE.toLocaleString()} may apply (no bank statement)`
+          : "Not applicable",
         status: "Pending Administrator Approval",
         submittedAt: new Date().toLocaleString("en-GB"),
       },
@@ -328,6 +368,7 @@ export default function ProjectFundingPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList>
           <TabsTrigger value="framework">AES Framework</TabsTrigger>
+          <TabsTrigger value="documentation">Documentation</TabsTrigger>
           <TabsTrigger value="apply">Apply for Funding</TabsTrigger>
           <TabsTrigger value="applications">
             My Applications
@@ -476,8 +517,165 @@ export default function ProjectFundingPage() {
           </Card>
 
           <div className="flex justify-end">
+            <Button onClick={() => setActiveTab("documentation")}>
+              View Required Documentation
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </Button>
+          </div>
+        </TabsContent>
+
+        {/* ---------------- Documentation ---------------- */}
+        <TabsContent value="documentation" className="mt-6 space-y-6">
+          <Card className="border-primary/20 bg-gradient-to-r from-primary/10 to-primary/5">
+            <CardContent className="p-4">
+              <div className="flex items-start gap-3">
+                <FileText className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+                <div>
+                  <h3 className="font-semibold text-foreground">
+                    Required Documentation for Application
+                  </h3>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                    The following package must be submitted in full before MCC Capital begins its
+                    review. The LOI and CIS must follow the MCC templates provided below.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Required documents */}
+          <Card className="border-border bg-card">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg font-semibold">Required Documents</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Six mandatory items. Download the MCC templates where indicated.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {REQUIRED_FUNDING_DOCUMENTS.map((doc, idx) => (
+                <div
+                  key={doc.id}
+                  className="flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                      {idx + 1}
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-medium text-foreground">{doc.title}</p>
+                        {doc.templated && (
+                          <Badge
+                            variant="outline"
+                            className="border-primary/20 bg-primary/10 text-[10px] text-primary"
+                          >
+                            MCC template
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                        {doc.description}
+                      </p>
+                    </div>
+                  </div>
+                  {doc.template && (
+                    <Button
+                      asChild
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0 self-start sm:self-center"
+                    >
+                      <a href={doc.template} download>
+                        <Download className="mr-1.5 h-4 w-4" />
+                        Template
+                      </a>
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Supporting templates */}
+          <Card className="border-border bg-card">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg font-semibold">Supporting Templates</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Additional forms MCC may require during onboarding.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {SUPPORTING_DOCUMENTS.map((doc) => (
+                <div
+                  key={doc.id}
+                  className="flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="flex items-start gap-3">
+                    <FileCheck2 className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{doc.title}</p>
+                      <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                        {doc.description}
+                      </p>
+                    </div>
+                  </div>
+                  {doc.template && (
+                    <Button
+                      asChild
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0 self-start sm:self-center"
+                    >
+                      <a href={doc.template} download>
+                        <Download className="mr-1.5 h-4 w-4" />
+                        Template
+                      </a>
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Compliance notices */}
+          <Card className="border-yellow-500/20 bg-yellow-500/5">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+                <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                Important Compliance Notice
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-start gap-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-3">
+                <DollarSign className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
+                <p className="text-sm leading-relaxed text-foreground">
+                  {COMPLIANCE_NOTICES.bankStatement}
+                </p>
+              </div>
+              <div className="flex items-start gap-2">
+                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  {COMPLIANCE_NOTICES.standing}
+                </p>
+              </div>
+              <div className="flex items-start gap-2">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  {COMPLIANCE_NOTICES.review}
+                </p>
+              </div>
+              <div className="flex items-start gap-2 rounded-lg border border-green-500/20 bg-green-500/10 p-3">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-500" />
+                <p className="text-sm font-medium leading-relaxed text-foreground">
+                  {COMPLIANCE_NOTICES.assurance}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="flex justify-end">
             <Button onClick={() => setActiveTab("apply")}>
-              Apply for Project Funding
+              Continue to Application
               <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </div>
