@@ -37,6 +37,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
+import { parseSwiftMessage } from "@/lib/swift-mt"
 import { useActivityLog } from "@/components/activity-tracker"
 import { useLedger } from "@/lib/ledger-store"
 import { usePaymentRequests, type PaymentRequest } from "@/lib/payment-requests-store"
@@ -138,6 +139,7 @@ export default function AdminPage() {
   const [rejectMonetizationTarget, setRejectMonetizationTarget] =
     useState<MonetizationRequest | null>(null)
   const [rejectMonetizationReason, setRejectMonetizationReason] = useState("")
+  const [swiftViewTarget, setSwiftViewTarget] = useState<MonetizationRequest | null>(null)
   const [rejectDTCTarget, setRejectDTCTarget] = useState<DTCRequest | null>(null)
   const [rejectDTCReason, setRejectDTCReason] = useState("")
   const [rejectDealTarget, setRejectDealTarget] = useState<CommodityDeal | null>(null)
@@ -2151,6 +2153,17 @@ export default function AdminPage() {
                         <span className="text-foreground">
                           {r.mt760Ref || "—"} / {r.mt799Ref || "—"}
                         </span>
+                        {(r.mt760Raw || r.mt799Raw) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => setSwiftViewTarget(r)}
+                          >
+                            Inspect FIN
+                          </Button>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <ShieldCheck className="h-4 w-4 text-muted-foreground" />
@@ -3115,6 +3128,62 @@ export default function AdminPage() {
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* SWIFT FIN inspector dialog (read-only verification of generated MT760/MT799) */}
+      <Dialog open={!!swiftViewTarget} onOpenChange={(open) => !open && setSwiftViewTarget(null)}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>SWIFT messages</DialogTitle>
+            <DialogDescription>
+              {swiftViewTarget
+                ? `Generated FIN for the monetization of ${swiftViewTarget.instrumentType} ${swiftViewTarget.instrumentId}. Verify before authorizing.`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] space-y-4 overflow-auto">
+            {(
+              [
+                { label: "MT760 — Guarantee / collateral transfer", raw: swiftViewTarget?.mt760Raw },
+                { label: "MT799 — RWA pre-advice", raw: swiftViewTarget?.mt799Raw },
+              ] as const
+            )
+              .filter((m) => !!m.raw)
+              .map((m) => {
+                const parsed = parseSwiftMessage(m.raw as string)
+                return (
+                  <div key={m.label} className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-foreground">{m.label}</span>
+                      <Badge variant={parsed.valid ? "default" : "destructive"}>
+                        {parsed.valid ? "Valid" : "Invalid"}
+                      </Badge>
+                      {parsed.uetr && (
+                        <Badge variant="outline" className="font-mono text-[10px]">
+                          UETR {parsed.uetr.slice(0, 8)}…
+                        </Badge>
+                      )}
+                    </div>
+                    {parsed.errors.length > 0 && (
+                      <ul className="list-inside list-disc text-xs text-destructive">
+                        {parsed.errors.map((e, i) => (
+                          <li key={i}>{e}</li>
+                        ))}
+                      </ul>
+                    )}
+                    <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-all rounded bg-background p-2 font-mono text-[11px] leading-relaxed text-foreground">
+                      {m.raw}
+                    </pre>
+                  </div>
+                )
+              })}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSwiftViewTarget(null)}>
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

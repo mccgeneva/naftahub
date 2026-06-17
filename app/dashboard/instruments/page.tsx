@@ -26,6 +26,7 @@ import {
   Banknote,
   Percent,
   Globe,
+  Radio,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -368,6 +369,7 @@ export default function InstrumentsPage() {
         bclReference: "",
         notes: "",
       })
+      setGeneratedSwift(null)
       setMonetizeTarget(instrument)
       return
     }
@@ -488,6 +490,8 @@ export default function InstrumentsPage() {
       receivingBankBic: monetizeForm.receivingBankBic.trim().toUpperCase(),
       mt760Ref: monetizeForm.mt760Ref.trim(),
       mt799Ref: monetizeForm.mt799Ref.trim(),
+      mt760Raw: generatedSwift?.mt760,
+      mt799Raw: generatedSwift?.mt799,
       pofReference: monetizeForm.pofReference.trim(),
       bclReference: monetizeForm.bclReference.trim(),
       notes: monetizeForm.notes.trim(),
@@ -1391,7 +1395,15 @@ export default function InstrumentsPage() {
       </Dialog>
 
       {/* Bank Instrument Monetization dialog */}
-      <Dialog open={!!monetizeTarget} onOpenChange={(open) => !open && setMonetizeTarget(null)}>
+      <Dialog
+        open={!!monetizeTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setMonetizeTarget(null)
+            setGeneratedSwift(null)
+          }
+        }}
+      >
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           {monetizeTarget && (
             <>
@@ -1528,6 +1540,54 @@ export default function InstrumentsPage() {
               </div>
 
               {/* SWIFT messaging & documentation */}
+              <div className="rounded-lg border border-border bg-muted/30 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <p className="text-sm font-medium">SWIFT messaging</p>
+                    <p className="text-xs text-muted-foreground">
+                      Auto-build well-formed MT760 (collateral transfer) and MT799 (RWA pre-advice) FIN
+                      from this instrument and fill the references below.
+                    </p>
+                  </div>
+                  <Button type="button" variant="secondary" size="sm" onClick={handleGenerateSwift}>
+                    <Radio className="mr-2 h-4 w-4" />
+                    Generate SWIFT messages
+                  </Button>
+                </div>
+                {generatedSwift && (
+                  <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                    {(
+                      [
+                        { label: "MT760 — Guarantee / collateral transfer", raw: generatedSwift.mt760 },
+                        { label: "MT799 — RWA pre-advice", raw: generatedSwift.mt799 },
+                      ] as const
+                    ).map((m) => (
+                      <div key={m.label} className="space-y-2 rounded-md border border-border bg-background p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-muted-foreground">{m.label}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2"
+                            onClick={() => {
+                              void navigator.clipboard.writeText(m.raw)
+                              toast.success("Copied SWIFT message to clipboard")
+                            }}
+                          >
+                            <Copy className="mr-1.5 h-3.5 w-3.5" />
+                            Copy
+                          </Button>
+                        </div>
+                        <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2 font-mono text-[11px] leading-relaxed text-foreground">
+                          {m.raw}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="mon-mt760">MT760 Reference</Label>
