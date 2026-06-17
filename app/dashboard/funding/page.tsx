@@ -799,6 +799,73 @@ export default function ProjectFundingPage() {
                   />
                 </div>
 
+                <Separator />
+
+                {/* Documentation gate */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm font-medium">Required Documentation</Label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-auto p-0 text-xs text-primary hover:bg-transparent hover:underline"
+                      onClick={() => setActiveTab("documentation")}
+                    >
+                      View list &amp; templates
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">
+                      Will you provide a qualifying bank statement (not older than 1 month, showing
+                      3 months of transactions and current balance)?
+                    </Label>
+                    <Select
+                      value={bankStatement}
+                      onValueChange={(v) => setBankStatement(v as "yes" | "no")}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select an option" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="yes">Yes — bank statement will be provided</SelectItem>
+                        <SelectItem value="no">No — bank statement will not be provided</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {bankStatement === "no" && (
+                    <div className="flex items-start gap-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-3">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
+                      <p className="text-xs leading-relaxed text-foreground">
+                        Without a bank statement, an upfront fee of {BANK_STATEMENT_WAIVER_CURRENCY}{" "}
+                        {BANK_STATEMENT_WAIVER_FEE.toLocaleString()} may be required prior to any
+                        evaluation. Applicants unable to provide either will not be considered, and
+                        all submitted documents will be permanently deleted for compliance.
+                      </p>
+                    </div>
+                  )}
+
+                  <label
+                    htmlFor="pf-docs-ack"
+                    className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 transition-colors hover:bg-muted/40"
+                  >
+                    <Checkbox
+                      id="pf-docs-ack"
+                      checked={docsAcknowledged}
+                      onCheckedChange={(checked) => setDocsAcknowledged(checked === true)}
+                      className="mt-0.5"
+                    />
+                    <span className="text-xs leading-relaxed text-muted-foreground">
+                      I confirm I will submit the complete required documentation package (LOI, CIS,
+                      registry certificate &amp; articles, colour passport copy, business plan, and
+                      bank statement) and acknowledge that customers not in good economic standing
+                      are automatically rejected by compliance.
+                    </span>
+                  </label>
+                </div>
+
                 {formError && (
                   <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400">
                     <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
