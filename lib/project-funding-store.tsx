@@ -6,6 +6,16 @@ import type { AesEquityComponent } from "@/lib/aes"
 
 export type ProjectFundingStatus = "pending" | "approved" | "rejected"
 
+/** A single uploaded document in the required documentation package. Only
+ *  metadata is persisted (file name + timestamp), consistent with the rest of
+ *  the platform's document handling. */
+export interface UploadedFundingDoc {
+  docId: string
+  title: string
+  fileName: string
+  uploadedAt: string
+}
+
 export interface ProjectFundingRequest {
   id: string
   projectName: string
@@ -30,6 +40,13 @@ export interface ProjectFundingRequest {
   bankStatementProvided: boolean
   /** True when the bank-statement waiver fee applies (no statement provided). */
   waiverFeeApplies: boolean
+  /** Client accepted the upfront waiver fee in lieu of a bank statement. */
+  waiverFeeAccepted: boolean
+  /** Waiver fee amount + currency snapshot (when applicable). */
+  waiverFeeAmount?: number
+  waiverFeeCurrency?: string
+  /** Documents uploaded with the application (metadata only). */
+  uploadedDocuments: UploadedFundingDoc[]
   status: ProjectFundingStatus
   submittedAt: string
   decidedAt?: string

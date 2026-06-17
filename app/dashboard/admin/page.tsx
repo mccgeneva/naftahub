@@ -2269,6 +2269,33 @@ export default function AdminPage() {
                     {r.description && (
                       <p className="text-xs text-muted-foreground text-pretty">{r.description}</p>
                     )}
+                    {r.uploadedDocuments && r.uploadedDocuments.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs text-muted-foreground">
+                          Docs ({r.uploadedDocuments.length}):
+                        </span>
+                        {r.uploadedDocuments.map((d) => (
+                          <Badge
+                            key={d.docId}
+                            variant="outline"
+                            className="gap-1 border-border bg-secondary/40 text-[10px] font-normal text-foreground"
+                          >
+                            <FileText className="h-3 w-3" />
+                            {d.title}
+                          </Badge>
+                        ))}
+                        {r.waiverFeeApplies && (
+                          <Badge
+                            variant="outline"
+                            className="border-yellow-500/20 bg-yellow-500/10 text-[10px] text-yellow-500"
+                          >
+                            No bank statement · {r.waiverFeeCurrency}{" "}
+                            {(r.waiverFeeAmount ?? 0).toLocaleString()} fee{" "}
+                            {r.waiverFeeAccepted ? "accepted" : "pending"}
+                          </Badge>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex flex-col items-stretch gap-3 lg:w-56 lg:shrink-0">
