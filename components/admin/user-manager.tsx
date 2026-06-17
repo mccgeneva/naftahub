@@ -484,6 +484,7 @@ export function UserManager() {
                   <SelectContent>
                     <SelectItem value="Client Account">Client Account</SelectItem>
                     <SelectItem value="PRO Account">PRO Account</SelectItem>
+                    <SelectItem value="Avant-garde Account">Avant-garde Account</SelectItem>
                     <SelectItem value="Institutional">Institutional</SelectItem>
                     <SelectItem value="Private Client">Private Client</SelectItem>
                   </SelectContent>
