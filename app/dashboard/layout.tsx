@@ -1,6 +1,7 @@
 import { DashboardSidebar } from "@/components/dashboard/sidebar"
 import { DashboardHeader } from "@/components/dashboard/header"
 import { MarketTicker } from "@/components/dashboard/market-ticker"
+import { BackToTop } from "@/components/dashboard/back-to-top"
 import { ActivityTracker } from "@/components/activity-tracker"
 import { SessionGuard } from "@/components/session-guard"
 import { DemoSeedGate } from "@/components/demo-seed-gate"
@@ -50,6 +51,7 @@ export default function DashboardLayout({
           <MarketTicker />
           <main className="flex-1 overflow-y-auto p-4 md:p-6">{children}</main>
         </div>
+        <BackToTop />
       </div>
       </GatewayProvider>
       </TreasuryProvider>
