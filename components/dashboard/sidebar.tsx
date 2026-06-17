@@ -80,6 +80,7 @@ const navGroups: NavGroup[] = [
       { title: "Leverage & Risk", href: "/dashboard/leverage", icon: Gauge, badge: "1:30" },
       { title: "Treasury Services", href: "/dashboard/treasury", icon: ShieldCheck, badge: "Deposit" },
       { title: "Yield / PPP", href: "/dashboard/ppp", icon: TrendingUp },
+      { title: "Project Funding", href: "/dashboard/funding", icon: Building2, badge: "AES" },
       { title: "Fiduciary & Assets", href: "/dashboard/fiduciary", icon: Landmark },
     ],
   },
