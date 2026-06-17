@@ -29,6 +29,14 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { Progress } from "@/components/ui/progress"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Dialog,
   DialogContent,
@@ -57,7 +65,14 @@ import {
   type CommodityDeal,
   type DealDocument,
 } from "@/lib/commodity-deals-store"
-import { useLeverageRequests, accruedInterest, type LeverageRequest } from "@/lib/leverage-requests-store"
+import {
+  useLeverageRequests,
+  accruedInterest,
+  maxLeverageFor,
+  leverageRatiosFor,
+  LEVERAGE_ACCOUNTS,
+  type LeverageRequest,
+} from "@/lib/leverage-requests-store"
 import { ADMIN_PASSCODE, ADMIN_SESSION_KEY } from "@/lib/admin-config"
 import { resetAccountData } from "@/lib/reset-account"
 import { AdminGatewaySection } from "@/components/dashboard/admin-gateway-section"
@@ -129,6 +144,7 @@ export default function AdminPage() {
     requests: leverageRequests,
     approveRequest: approveLeverage,
     rejectRequest: rejectLeverage,
+    modifyRatio: modifyLeverageRatio,
     approveSwitchOff: approveLeverageSwitchOff,
     rejectSwitchOff: rejectLeverageSwitchOff,
   } = useLeverageRequests()
@@ -161,6 +177,11 @@ export default function AdminPage() {
   const [rejectLeverageReason, setRejectLeverageReason] = useState("")
   const [rejectSwitchOffTarget, setRejectSwitchOffTarget] = useState<LeverageRequest | null>(null)
   const [rejectSwitchOffReason, setRejectSwitchOffReason] = useState("")
+  // Modify-ratio dialog: the active line being adjusted, the chosen new ratio
+  // and an optional note for the audit trail.
+  const [modifyRatioTarget, setModifyRatioTarget] = useState<LeverageRequest | null>(null)
+  const [modifyRatioValue, setModifyRatioValue] = useState("")
+  const [modifyRatioNote, setModifyRatioNote] = useState("")
   const [resetDialogOpen, setResetDialogOpen] = useState(false)
   const [resetConfirm, setResetConfirm] = useState("")
   const [resetting, setResetting] = useState(false)
@@ -387,6 +408,34 @@ export default function AdminPage() {
     [leverageRequests],
   )
 
+  // Currently live lines (active, or active with a switch-off queued). These are
+  // the lines an Administrator can re-rate via the modify-ratio control, and the
+  // basis for the firm's leverage exposure monitor.
+  const activeLeverage = useMemo(
+    () =>
+      leverageRequests
+        .filter((r) => r.status === "approved" || r.status === "switchoff_pending")
+        .sort((a, b) => new Date(b.activatedAt || b.submittedAt).getTime() - new Date(a.activatedAt || a.submittedAt).getTime()),
+    [leverageRequests],
+  )
+
+  // Firm-wide exposure broken down by funding category, so the Administrator can
+  // monitor how borrowed capital and buying power are concentrated across
+  // Treasury, Master Banking, Bank Instruments and NAFTAhub and how close each
+  // category sits to its leverage ceiling.
+  const leverageExposure = useMemo(() => {
+    return LEVERAGE_ACCOUNTS.map((opt) => {
+      const lines = activeLeverage.filter((r) => r.account === opt.key)
+      const borrowed = lines.reduce((s, r) => s + r.borrowedAmount, 0)
+      const buyingPower = lines.reduce((s, r) => s + r.buyingPower, 0)
+      const equityBase = lines.reduce((s, r) => s + r.equity, 0)
+      const blendedRatio = equityBase > 0 ? buyingPower / equityBase : 0
+      const utilisation = Math.min(100, (blendedRatio / opt.maxLeverage) * 100)
+      const currency = lines[0]?.currency ?? "EUR"
+      return { ...opt, count: lines.length, borrowed, buyingPower, equityBase, blendedRatio, utilisation, currency }
+    })
+  }, [activeLeverage])
+
   const formatLeverageMoney = (r: LeverageRequest, value: number) =>
     `${r.currency} ${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`
   const formatLeverageMoney2 = (r: LeverageRequest, value: number) =>
@@ -486,6 +535,118 @@ export default function AdminPage() {
         decision: "Switched Off",
       },
     })
+  }
+
+  // Administrator re-rates an active leverage line within its category ceiling.
+  // The borrowed principal is re-settled on the ledger: a credit tops up the
+  // client's balance when the ratio increases, a debit claws back the surplus
+  // when it decreases. Interest accrued under the prior ratio is captured so
+  // future accrual continues cleanly on the new principal.
+  const confirmModifyRatio = () => {
+    const request = modifyRatioTarget
+    if (!request) return
+    const cap = maxLeverageFor(request.account)
+    const toRatio = Number(modifyRatioValue)
+    if (!toRatio || toRatio < 1) {
+      toast.error("Enter a valid leverage ratio.")
+      return
+    }
+    if (toRatio > cap) {
+      toast.error(`${request.accountLabel} is limited to a maximum leverage of 1:${cap}.`)
+      return
+    }
+    if (toRatio === request.leverageRatio) {
+      toast.error("The new ratio matches the current ratio.")
+      return
+    }
+
+    const newBorrowed = request.equity * (toRatio - 1)
+    const delta = newBorrowed - request.borrowedAmount // >0 credit, <0 repay
+    const interestToDate = accruedInterest(request, Date.now())
+    const now = new Date().toISOString()
+
+    let adjustmentRef: string | undefined
+    if (delta > 0) {
+      adjustmentRef = `LEV-MC-${Date.now().toString().slice(-8)}`
+      addReceipt({
+        id: adjustmentRef,
+        amount: delta,
+        currency: request.currency,
+        status: "completed",
+        date: now,
+        counterparty: "MCC Leverage Desk",
+        reference: request.id,
+        category: "Leverage Ratio Adjustment",
+        comment: `Additional borrowed funds credited on increase of leverage line ${request.id} (${request.accountLabel}) from 1:${request.leverageRatio} to 1:${toRatio}.`,
+      })
+    } else if (delta < 0) {
+      adjustmentRef = `LEV-MD-${Date.now().toString().slice(-8)}`
+      addDebit({
+        id: adjustmentRef,
+        amount: Math.abs(delta),
+        currency: request.currency,
+        status: "completed",
+        date: now,
+        counterparty: "MCC Leverage Desk",
+        reference: request.id,
+        category: "Leverage Ratio Adjustment",
+        comment: `Borrowed funds repaid on reduction of leverage line ${request.id} (${request.accountLabel}) from 1:${request.leverageRatio} to 1:${toRatio}.`,
+      })
+    }
+
+    const updated = modifyLeverageRatio(request.id, {
+      toRatio,
+      interestToDate,
+      adjustmentEntryId: adjustmentRef,
+      note: modifyRatioNote,
+    })
+    if (!updated) {
+      toast.error("Unable to modify this leverage line.")
+      return
+    }
+
+    toast.success("Leverage ratio updated", {
+      description: `${request.id} re-rated from 1:${request.leverageRatio} to 1:${toRatio}. ${
+        delta > 0
+          ? `${formatLeverageMoney(request, delta)} credited`
+          : delta < 0
+            ? `${formatLeverageMoney(request, Math.abs(delta))} repaid`
+            : "No ledger change"
+      }.`,
+    })
+    logActivity({
+      action: `Administrator modified leverage line ${request.id} (${request.accountLabel}) from 1:${request.leverageRatio} to 1:${toRatio}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator re-rated active leverage line ${request.id} on the ${request.accountLabel} from 1:${request.leverageRatio} to 1:${toRatio} (within the category ceiling of 1:${cap}). Borrowed principal moved from ${formatLeverageMoney(request, request.borrowedAmount)} to ${formatLeverageMoney(updated, updated.borrowedAmount)} and buying power to ${formatLeverageMoney(updated, updated.buyingPower)}. ${
+          delta > 0
+            ? `${formatLeverageMoney(request, delta)} of additional borrowed funds was credited to the client's balance.`
+            : delta < 0
+              ? `${formatLeverageMoney(request, Math.abs(delta))} of borrowed funds was repaid from the client's balance.`
+              : "No ledger movement was required."
+        } Interest of ${formatLeverageMoney2(request, interestToDate)} accrued under the prior ratio; future debit interest now accrues on the new principal.${modifyRatioNote.trim() ? ` Note: ${modifyRatioNote.trim()}` : ""}`,
+        referenceId: request.id,
+        fundingAccount: request.accountLabel,
+        previousLeverage: `1:${request.leverageRatio}`,
+        newLeverage: `1:${toRatio}`,
+        categoryCeiling: `1:${cap}`,
+        previousBorrowed: formatLeverageMoney(request, request.borrowedAmount),
+        newBorrowed: formatLeverageMoney(updated, updated.borrowedAmount),
+        newBuyingPower: formatLeverageMoney(updated, updated.buyingPower),
+        ledgerAdjustment:
+          delta > 0
+            ? `+${formatLeverageMoney(request, delta)} credited`
+            : delta < 0
+              ? `-${formatLeverageMoney(request, Math.abs(delta))} debited`
+              : "None",
+        ledgerReference: adjustmentRef || "(none)",
+        interestAccruedToDate: formatLeverageMoney2(request, interestToDate),
+        decision: "Ratio Modified",
+      },
+    })
+    setModifyRatioTarget(null)
+    setModifyRatioValue("")
+    setModifyRatioNote("")
   }
 
   const confirmRejectSwitchOff = () => {
@@ -1983,6 +2144,137 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      {/* Leverage exposure monitor */}
+      <Card className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">Leverage Exposure by Category</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Firm-wide borrowed capital and buying power across funding categories, each measured
+            against its leverage ceiling.
+          </p>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2">
+          {leverageExposure.map((c) => (
+            <div key={c.key} className="rounded-lg border border-border bg-secondary/30 p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium text-foreground">{c.label}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {c.count} active line{c.count === 1 ? "" : "s"} · blended 1:{c.blendedRatio.toFixed(1)} of
+                    max 1:{c.maxLeverage}
+                  </p>
+                </div>
+                <Badge variant="outline" className="border-primary/30 text-primary">
+                  {c.utilisation.toFixed(0)}%
+                </Badge>
+              </div>
+              <Progress value={c.utilisation} className="mt-3 h-1.5" />
+              <div className="mt-3 flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Borrowed exposure</span>
+                <span className="font-medium text-foreground">
+                  {c.currency} {c.borrowed.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                </span>
+              </div>
+              <div className="mt-1 flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Buying power</span>
+                <span className="font-medium text-foreground">
+                  {c.currency} {c.buyingPower.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                </span>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* Active leverage lines with ratio modification */}
+      <Card className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">Active Leverage Lines</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Re-rate a live line within its category ceiling. Increasing the ratio credits additional
+            borrowed funds; decreasing it repays the surplus from the client&apos;s balance.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {activeLeverage.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
+              <Gauge className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                No active leverage lines. Approved trading lines will appear here.
+              </p>
+            </div>
+          ) : (
+            activeLeverage.map((r) => {
+              const cap = maxLeverageFor(r.account)
+              return (
+                <div key={r.id} className="rounded-lg border border-border bg-secondary/30 p-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge
+                          variant="outline"
+                          className="border-green-500/20 bg-green-500/10 text-green-500 text-[10px]"
+                        >
+                          <Check className="mr-1 h-3 w-3" />
+                          Active
+                        </Badge>
+                        <span className="font-medium text-foreground">
+                          {r.accountLabel} · 1:{r.leverageRatio}
+                        </span>
+                        <span className="text-xs text-muted-foreground">{r.id}</span>
+                        <span className="text-xs text-muted-foreground">max 1:{cap}</span>
+                        {r.modifications && r.modifications.length > 0 ? (
+                          <Badge variant="outline" className="border-primary/30 text-primary text-[10px]">
+                            {r.modifications.length} adjustment{r.modifications.length === 1 ? "" : "s"}
+                          </Badge>
+                        ) : null}
+                      </div>
+                      <div className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                        <div className="flex items-center gap-2">
+                          <Banknote className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Equity:</span>
+                          <span className="font-medium text-foreground">{formatLeverageMoney(r, r.equity)}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Buying Power:</span>
+                          <span className="text-foreground">{formatLeverageMoney(r, r.buyingPower)}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Gauge className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Borrowed:</span>
+                          <span className="text-foreground">{formatLeverageMoney(r, r.borrowedAmount)}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Instrument:</span>
+                          <span className="text-foreground">{r.instrumentType}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col items-stretch gap-3 lg:w-64 lg:shrink-0">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setModifyRatioValue(String(r.leverageRatio))
+                          setModifyRatioNote("")
+                          setModifyRatioTarget(r)
+                        }}
+                      >
+                        <Gauge className="mr-1 h-4 w-4" />
+                        Modify Ratio
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </CardContent>
+      </Card>
+
       {/* Leverage decision history */}
       <Card className="bg-card border-border">
         <CardHeader>
@@ -3322,6 +3614,111 @@ export default function AdminPage() {
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Modify leverage ratio dialog */}
+      <Dialog
+        open={!!modifyRatioTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setModifyRatioTarget(null)
+            setModifyRatioValue("")
+            setModifyRatioNote("")
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          {modifyRatioTarget &&
+            (() => {
+              const r = modifyRatioTarget
+              const cap = maxLeverageFor(r.account)
+              const options = leverageRatiosFor(r.account)
+              const toRatio = Number(modifyRatioValue) || r.leverageRatio
+              const newBorrowed = r.equity * (toRatio - 1)
+              const newBuyingPower = r.equity * toRatio
+              const delta = newBorrowed - r.borrowedAmount
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle>Modify Leverage Ratio</DialogTitle>
+                    <DialogDescription>
+                      Re-rate line {r.id} on the {r.accountLabel}. This category permits a maximum of 1:
+                      {cap}.
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  <div className="space-y-4 py-1">
+                    <div className="space-y-2">
+                      <Label>New Leverage Ratio</Label>
+                      <Select value={String(toRatio)} onValueChange={setModifyRatioValue}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {options.map((opt) => (
+                            <SelectItem key={opt} value={String(opt)}>
+                              1:{opt}
+                              {opt === r.leverageRatio ? " (current)" : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1.5 rounded-lg border border-border bg-secondary/30 p-3 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Borrowed</span>
+                        <span className="text-foreground">
+                          {formatLeverageMoney(r, r.borrowedAmount)} → {formatLeverageMoney(r, newBorrowed)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Buying Power</span>
+                        <span className="text-foreground">
+                          {formatLeverageMoney(r, r.buyingPower)} → {formatLeverageMoney(r, newBuyingPower)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between border-t border-border pt-1.5">
+                        <span className="font-medium text-foreground">Ledger settlement</span>
+                        <span
+                          className={cn(
+                            "font-semibold",
+                            delta > 0 ? "text-green-500" : delta < 0 ? "text-orange-400" : "text-muted-foreground",
+                          )}
+                        >
+                          {delta > 0
+                            ? `+${formatLeverageMoney(r, delta)} credit`
+                            : delta < 0
+                              ? `−${formatLeverageMoney(r, Math.abs(delta))} debit`
+                              : "No change"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="modify-ratio-note">Note (optional)</Label>
+                      <Textarea
+                        id="modify-ratio-note"
+                        value={modifyRatioNote}
+                        onChange={(e) => setModifyRatioNote(e.target.value)}
+                        placeholder="e.g. Increased buying power at the client's request following added collateral."
+                        rows={3}
+                      />
+                    </div>
+                  </div>
+
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setModifyRatioTarget(null)}>
+                      Cancel
+                    </Button>
+                    <Button onClick={confirmModifyRatio} disabled={toRatio === r.leverageRatio}>
+                      Apply 1:{toRatio}
+                    </Button>
+                  </DialogFooter>
+                </>
+              )
+            })()}
         </DialogContent>
       </Dialog>
 
