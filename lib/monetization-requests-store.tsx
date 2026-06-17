@@ -1,0 +1,202 @@
+"use client"
+
+import { createContext, useContext, useEffect, useState } from "react"
+import { generateUetr } from "@/lib/swift-gpi"
+import { scopedKey } from "@/lib/user-scope"
+
+export type MonetizationStatus = "pending" | "approved" | "rejected"
+
+// How the monetization is structured against the underlying bank instrument.
+export type MonetizationStructure =
+  | "CreditLine" // non-recourse credit line / loan secured by the instrument
+  | "Discounting" // outright discounting / purchase of the instrument
+  | "CollateralTransfer" // collateral transfer (SWIFT MT760) for credit enhancement
+
+export interface MonetizationRequest {
+  id: string // platform reference, e.g. "MON-1A2B3C4D"
+  uetr: string // SWIFT gpi Unique End-to-End Transaction Reference (UUID v4)
+
+  // Underlying bank instrument being monetized
+  instrumentId: string // reference of the instrument in the holder's portfolio
+  instrumentType: string // short code, e.g. "SBLC", "BG", "MTN"
+  instrumentTypeFull: string // full name, e.g. "Standby Letter of Credit"
+  issuer: string // issuing bank of the instrument
+  faceValue: number // face / nominal value of the instrument
+  currency: string
+
+  // Monetization economics
+  structure: MonetizationStructure
+  advanceRatePercent: number // loan-to-value / advance rate (% of face value)
+  grossProceeds: number // computed: faceValue * advanceRate
+  proceedsCurrency: string
+
+  // Coordination / counterparties
+  monetizationPlatform: string // monetizer / program name
+  receivingBank: string // bank receiving the proceeds (usually MCC master)
+  receivingBankBic: string
+
+  // SWIFT messaging + supporting documentation references
+  mt760Ref: string // MT760 (guarantee / SBLC issuance or collateral transfer)
+  mt799Ref: string // MT799 (free-format pre-advice / RWA assurance)
+  pofReference: string // Proof of Funds reference
+  bclReference: string // Bank Comfort Letter reference
+
+  notes: string
+
+  status: MonetizationStatus
+  submittedAt: string // ISO timestamp
+  decidedAt?: string // ISO timestamp of approval/rejection
+  decisionNote?: string // administrator note (e.g. rejection reason)
+  creditedEntryId?: string // ledger entry id created on approval
+}
+
+const KEY_BASE = "mcc.monetization-requests.v1"
+const storageKey = () => scopedKey(KEY_BASE)
+
+interface MonetizationRequestsContextValue {
+  requests: MonetizationRequest[]
+  /** Create a new pending request (no funds move yet). Returns the stored record. */
+  addRequest: (
+    request: Omit<
+      MonetizationRequest,
+      "id" | "uetr" | "status" | "submittedAt" | "decidedAt" | "decisionNote" | "creditedEntryId"
+    >,
+  ) => MonetizationRequest
+  /** Mark a pending request approved. Proceeds are credited by the caller (ledger). */
+  approveRequest: (id: string, creditedEntryId?: string) => MonetizationRequest | null
+  /** Mark a pending request rejected with an optional reason. No funds move. */
+  rejectRequest: (id: string, reason?: string) => MonetizationRequest | null
+  hydrated: boolean
+}
+
+const MonetizationRequestsContext = createContext<MonetizationRequestsContextValue | null>(null)
+
+// Short, human-readable reference for the monetization request.
+function generateMonetizationId(): string {
+  return `MON-${Math.random().toString(16).slice(2, 10).toUpperCase()}`
+}
+
+export function MonetizationRequestsProvider({ children }: { children: React.ReactNode }) {
+  const [requests, setRequests] = useState<MonetizationRequest[]>([])
+  const [hydrated, setHydrated] = useState(false)
+
+  // Load persisted requests once on mount so submissions survive navigation,
+  // reloads, and logout/login.
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(storageKey())
+      setRequests(stored ? (JSON.parse(stored) as MonetizationRequest[]) : [])
+    } catch {
+      setRequests([])
+    }
+    setHydrated(true)
+  }, [])
+
+  // Persist on change, but only after hydration to avoid clobbering stored data.
+  useEffect(() => {
+    if (!hydrated) return
+    try {
+      window.localStorage.setItem(storageKey(), JSON.stringify(requests))
+    } catch {
+      // ignore quota/availability errors
+    }
+  }, [requests, hydrated])
+
+  // Keep state in sync when the data changes in another tab/window (e.g. the
+  // Administrator approves in one place while the client views in another) or
+  // when the user returns to a tab that was open in the background.
+  useEffect(() => {
+    if (!hydrated) return
+    const resync = () => {
+      try {
+        const stored = window.localStorage.getItem(storageKey())
+        setRequests(stored ? (JSON.parse(stored) as MonetizationRequest[]) : [])
+      } catch {
+        // ignore parse/availability errors
+      }
+    }
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === storageKey()) resync()
+    }
+    const onVisible = () => {
+      if (document.visibilityState === "visible") resync()
+    }
+    window.addEventListener("storage", onStorage)
+    window.addEventListener("focus", resync)
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      window.removeEventListener("storage", onStorage)
+      window.removeEventListener("focus", resync)
+      document.removeEventListener("visibilitychange", onVisible)
+    }
+  }, [hydrated])
+
+  const addRequest: MonetizationRequestsContextValue["addRequest"] = (request) => {
+    const full: MonetizationRequest = {
+      ...request,
+      id: generateMonetizationId(),
+      uetr: generateUetr(),
+      status: "pending",
+      submittedAt: new Date().toISOString(),
+    }
+    setRequests((prev) => [full, ...prev])
+    return full
+  }
+
+  const approveRequest: MonetizationRequestsContextValue["approveRequest"] = (
+    id,
+    creditedEntryId,
+  ) => {
+    let updated: MonetizationRequest | null = null
+    setRequests((prev) =>
+      prev.map((r) => {
+        if (r.id === id && r.status === "pending") {
+          updated = {
+            ...r,
+            status: "approved",
+            decidedAt: new Date().toISOString(),
+            creditedEntryId,
+          }
+          return updated
+        }
+        return r
+      }),
+    )
+    return updated
+  }
+
+  const rejectRequest: MonetizationRequestsContextValue["rejectRequest"] = (id, reason) => {
+    let updated: MonetizationRequest | null = null
+    setRequests((prev) =>
+      prev.map((r) => {
+        if (r.id === id && r.status === "pending") {
+          updated = {
+            ...r,
+            status: "rejected",
+            decidedAt: new Date().toISOString(),
+            decisionNote: reason?.trim() || undefined,
+          }
+          return updated
+        }
+        return r
+      }),
+    )
+    return updated
+  }
+
+  return (
+    <MonetizationRequestsContext.Provider
+      value={{ requests, addRequest, approveRequest, rejectRequest, hydrated }}
+    >
+      {children}
+    </MonetizationRequestsContext.Provider>
+  )
+}
+
+export function useMonetizationRequests() {
+  const ctx = useContext(MonetizationRequestsContext)
+  if (!ctx) {
+    throw new Error("useMonetizationRequests must be used within a MonetizationRequestsProvider")
+  }
+  return ctx
+}

@@ -8,6 +8,7 @@ import { BeneficiariesProvider } from "@/lib/beneficiaries-store"
 import { LedgerProvider } from "@/lib/ledger-store"
 import { PaymentRequestsProvider } from "@/lib/payment-requests-store"
 import { InstrumentRequestsProvider } from "@/lib/instrument-requests-store"
+import { MonetizationRequestsProvider } from "@/lib/monetization-requests-store"
 import { PPPRequestsProvider } from "@/lib/ppp-requests-store"
 import { DOFRequestsProvider } from "@/lib/dof-requests-store"
 import { DTCRequestsProvider } from "@/lib/dtc-requests-store"
@@ -28,6 +29,7 @@ export default function DashboardLayout({
       <LedgerProvider>
       <PaymentRequestsProvider>
       <InstrumentRequestsProvider>
+      <MonetizationRequestsProvider>
       <PPPRequestsProvider>
       <DOFRequestsProvider>
       <DTCRequestsProvider>
@@ -56,6 +58,7 @@ export default function DashboardLayout({
       </DTCRequestsProvider>
       </DOFRequestsProvider>
       </PPPRequestsProvider>
+      </MonetizationRequestsProvider>
       </InstrumentRequestsProvider>
       </PaymentRequestsProvider>
       </LedgerProvider>
