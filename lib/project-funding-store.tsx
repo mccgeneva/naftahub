@@ -24,6 +24,12 @@ export interface ProjectFundingRequest {
   /** Cash commitment band (snapshot at submission). */
   cashCommitmentMin: number
   cashCommitmentMax: number
+  /** Client confirmed they will submit the full required documentation package. */
+  documentsAcknowledged: boolean
+  /** Whether the client will provide a qualifying bank statement. */
+  bankStatementProvided: boolean
+  /** True when the bank-statement waiver fee applies (no statement provided). */
+  waiverFeeApplies: boolean
   status: ProjectFundingStatus
   submittedAt: string
   decidedAt?: string
