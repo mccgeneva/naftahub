@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
 import { scopedKey, scopedKeyForUser } from "@/lib/user-scope"
+import { getMyLedger } from "@/app/actions/ledger"
 
 export type LedgerDirection = "credit" | "debit"
 export type LedgerStatus = "completed" | "hold"
@@ -23,6 +24,23 @@ export interface LedgerEntry {
 
 const KEY_BASE = "mcc.ledger.v1"
 const storageKey = () => scopedKey(KEY_BASE)
+
+/**
+ * Merge server-persisted entries (written by the administrator panel into the
+ * Postgres ledger) with the locally stored ones. Server entries are
+ * authoritative: when the same entry id exists in both, the server version
+ * wins. Anything that only exists locally (e.g. transfers recorded in this
+ * browser before they were synced) is preserved. The result is sorted by date
+ * descending so the newest activity appears first.
+ */
+function mergeLedgers(local: LedgerEntry[], server: LedgerEntry[]): LedgerEntry[] {
+  const byId = new Map<string, LedgerEntry>()
+  for (const e of local) byId.set(e.id, e)
+  for (const e of server) byId.set(e.id, e) // server overrides local on id clash
+  return Array.from(byId.values()).sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+  )
+}
 
 /**
  * Append a credit entry directly into another user's persisted ledger.
@@ -97,16 +115,44 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   const [hydrated, setHydrated] = useState(false)
 
   // Load persisted ledger once on mount so balances survive logout/login &
-  // reloads. A fresh account (no stored data) starts completely empty, so all
-  // balances read 0.00 and there is no transaction history.
+  // reloads. We start from the locally stored entries (instant, offline-safe),
+  // then pull the server-side ledger — which is where administrator-posted
+  // credits/debits live — and merge it in so admin activity reflects on the
+  // client's dashboard. A fresh account with no data anywhere reads 0.00.
   useEffect(() => {
+    let cancelled = false
+
+    let localEntries: LedgerEntry[] = []
     try {
       const stored = window.localStorage.getItem(storageKey())
-      setEntries(stored ? (JSON.parse(stored) as LedgerEntry[]) : [])
+      localEntries = stored ? (JSON.parse(stored) as LedgerEntry[]) : []
     } catch {
-      setEntries([])
+      localEntries = []
     }
+    setEntries(localEntries)
     setHydrated(true)
+
+    // Pull the authoritative server ledger and merge admin-posted entries in.
+    getMyLedger()
+      .then((serverEntries) => {
+        if (cancelled || !serverEntries || serverEntries.length === 0) return
+        setEntries((prev) => {
+          const merged = mergeLedgers(prev, serverEntries)
+          try {
+            window.localStorage.setItem(storageKey(), JSON.stringify(merged))
+          } catch {
+            // ignore quota/availability errors
+          }
+          return merged
+        })
+      })
+      .catch(() => {
+        // Server unreachable (e.g. DB not configured) — keep local entries.
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   // Persist on change (only after hydration to avoid clobbering stored data).
@@ -145,16 +191,35 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   const totalIn = (currency: string) =>
     currencies.reduce((sum, cur) => sum + convertCurrency(balanceFor(cur), cur, currency), 0)
 
-  // Re-read persisted entries from storage. Used after an out-of-band write
-  // (e.g. an administrator editing the signed-in account's ledger) so the live
-  // view reflects the change without a full reload.
+  // Re-read persisted entries from storage and re-pull the server ledger. Used
+  // after an out-of-band write (e.g. an administrator editing the signed-in
+  // account's ledger) so the live view reflects the change without a reload.
   const refresh = () => {
+    let localEntries: LedgerEntry[] = []
     try {
       const stored = window.localStorage.getItem(storageKey())
-      setEntries(stored ? (JSON.parse(stored) as LedgerEntry[]) : [])
+      localEntries = stored ? (JSON.parse(stored) as LedgerEntry[]) : []
     } catch {
-      // ignore availability errors
+      localEntries = []
     }
+    setEntries(localEntries)
+
+    getMyLedger()
+      .then((serverEntries) => {
+        if (!serverEntries || serverEntries.length === 0) return
+        setEntries((prev) => {
+          const merged = mergeLedgers(prev, serverEntries)
+          try {
+            window.localStorage.setItem(storageKey(), JSON.stringify(merged))
+          } catch {
+            // ignore availability errors
+          }
+          return merged
+        })
+      })
+      .catch(() => {
+        // Server unreachable — keep local entries.
+      })
   }
 
   return (
