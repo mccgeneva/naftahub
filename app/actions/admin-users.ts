@@ -108,6 +108,19 @@ function generateTempPassword(): string {
   return `MCC-${block(4)}-${block(4)}`
 }
 
+/**
+ * Map any thrown error to an admin-facing message. Raw database/connection
+ * failures (e.g. ECONNREFUSED when DATABASE_URL isn't configured) are replaced
+ * with a clear, actionable message instead of a cryptic socket error.
+ */
+function friendlyError(err: unknown): string {
+  const msg = (err as Error)?.message ?? String(err)
+  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|database|connect|pool|password authentication/i.test(msg)) {
+    return "Could not reach the database. Please confirm the Neon database is connected (DATABASE_URL) and try again."
+  }
+  return msg
+}
+
 function newId(): string {
   // Dynamic ids are prefixed so they never collide with static ("u1"…) ids and
   // are obvious in storage namespaces.
@@ -202,7 +215,7 @@ export async function listUsers(passcode: string): Promise<AdminUsersResult> {
     const users = (await listDynamicUsers()).map(toView)
     return { ok: true, users }
   } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    return { ok: false, error: friendlyError(err) }
   }
 }
 
@@ -245,7 +258,7 @@ export async function createUser(input: CreateUserInput): Promise<AdminUserMutat
 
     return { ok: true, user: toView(rec), tempPassword }
   } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    return { ok: false, error: friendlyError(err) }
   }
 }
 
@@ -272,7 +285,7 @@ export async function resetUserPassword(
 
     return { ok: true, user: toView(rec), tempPassword }
   } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    return { ok: false, error: friendlyError(err) }
   }
 }
 
@@ -296,7 +309,7 @@ export async function updateUserStatus(
 
     return { ok: true, user: toView(rec) }
   } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    return { ok: false, error: friendlyError(err) }
   }
 }
 
@@ -356,7 +369,7 @@ export async function editUser(input: EditUserInput): Promise<AdminUserMutation>
 
     return { ok: true, user: toView(rec) }
   } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    return { ok: false, error: friendlyError(err) }
   }
 }
 
@@ -377,7 +390,7 @@ export async function removeUser(passcode: string, id: string, adminName?: strin
     const users = (await listDynamicUsers()).map(toView)
     return { ok: true, users }
   } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    return { ok: false, error: friendlyError(err) }
   }
 }
 

@@ -17,6 +17,15 @@ function requireAdmin(passcode: string): void {
   }
 }
 
+/** Replace raw DB/connection failures with a clear, actionable message. */
+function friendlyError(err: unknown): string {
+  const msg = (err as Error)?.message ?? String(err)
+  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|database|connect|pool|password authentication/i.test(msg)) {
+    return "Could not reach the database. Please confirm the Neon database is connected (DATABASE_URL) and try again."
+  }
+  return msg
+}
+
 export type BeneficiaryRecord = {
   id: string
   userId: string
@@ -49,7 +58,7 @@ export async function getMyBeneficiaries(): Promise<BeneficiaryListResult> {
     const rows = await listBeneficiariesForUser(session.id)
     return { ok: true, beneficiaries: rows }
   } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    return { ok: false, error: friendlyError(err) }
   }
 }
 
@@ -67,7 +76,7 @@ export async function syncMyBeneficiaries(
     await replaceBeneficiariesForUser(session.id, items)
     return { ok: true }
   } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    return { ok: false, error: friendlyError(err) }
   }
 }
 
@@ -79,7 +88,7 @@ export async function adminListBeneficiaries(passcode: string, userId: string): 
     const rows = await listBeneficiariesForUser(userId)
     return { ok: true, beneficiaries: rows }
   } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    return { ok: false, error: friendlyError(err) }
   }
 }
 
@@ -107,7 +116,7 @@ export async function adminUpsertBeneficiary(
     })
     return { ok: true, beneficiary: row }
   } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    return { ok: false, error: friendlyError(err) }
   }
 }
 
@@ -134,7 +143,7 @@ export async function adminSetBeneficiaryStatus(
     })
     return { ok: true, beneficiary: row }
   } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    return { ok: false, error: friendlyError(err) }
   }
 }
 
@@ -154,6 +163,6 @@ export async function adminDeleteBeneficiary(
     })
     return { ok: true }
   } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    return { ok: false, error: friendlyError(err) }
   }
 }
