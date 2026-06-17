@@ -11,18 +11,69 @@ import {
 } from "@/lib/auth"
 import { USER_COOKIE } from "@/lib/user-scope"
 import { findUserByEmail } from "@/lib/users"
+import { getDynamicUserByEmail } from "@/lib/admin-users-db"
 import { logActivity } from "@/app/actions/log-activity"
 
 export type LoginState = { error?: string }
+
+// A minimal, auth-only view of a credential match. Works for both the static
+// registry (lib/users.ts) and admin-created users persisted in Neon.
+interface AuthMatch {
+  id: string
+  password: string
+  sessionToken: string
+  fullName: string
+  company: string
+  /** Dynamic accounts can be suspended/inactive; static users are always active. */
+  active: boolean
+}
+
+/**
+ * Resolve a login email to a credential record. Static users win (fast, always
+ * available even without a DB). When no static user matches we fall back to the
+ * admin-created users stored in Postgres so that accounts created from the
+ * administrator panel can actually log in.
+ */
+async function findAuthMatchByEmail(email: string): Promise<AuthMatch | undefined> {
+  const staticUser = findUserByEmail(email)
+  if (staticUser) {
+    return {
+      id: staticUser.id,
+      password: staticUser.password,
+      sessionToken: staticUser.sessionToken,
+      fullName: staticUser.fullName,
+      company: staticUser.company,
+      active: true,
+    }
+  }
+
+  try {
+    const dyn = await getDynamicUserByEmail(email)
+    if (dyn) {
+      return {
+        id: dyn.id,
+        password: dyn.password,
+        sessionToken: dyn.sessionToken,
+        fullName: dyn.profile.fullName || dyn.profile.company || dyn.email,
+        company: dyn.profile.company || "",
+        active: dyn.status === "active",
+      }
+    }
+  } catch {
+    // DB unavailable — static users still work; dynamic ones can't resolve yet.
+  }
+  return undefined
+}
 
 export async function login(_prevState: LoginState, formData: FormData): Promise<LoginState> {
   const email = String(formData.get("email") || "").trim()
   const password = String(formData.get("password") || "")
 
-  const matchedUser = findUserByEmail(email)
+  const matchedUser = await findAuthMatchByEmail(email)
   const passwordMatches = !!matchedUser && password === matchedUser.password
+  const accountActive = !!matchedUser && matchedUser.active
 
-  if (matchedUser && passwordMatches) {
+  if (matchedUser && passwordMatches && accountActive) {
     const cookieStore = await cookies()
     // The session cookie carries this user's unique token (the security
     // boundary), and a separate readable cookie records which user it is so the
@@ -60,18 +111,28 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
   cookieStore.delete(FRESH_LOGIN_COOKIE)
 
   // Log failed attempt for security monitoring (never include the password).
+  const reason = !matchedUser
+    ? "unauthorized email"
+    : !passwordMatches
+      ? "incorrect password"
+      : "account not active"
   await logActivity({
     action: "Login failed",
     category: "Authentication / Security",
     user: email || "(no email)",
     details: {
       email: email || "(empty)",
-      reason: !matchedUser ? "unauthorized email" : "incorrect password",
+      reason,
       result: "denied",
     },
   })
 
-  return { error: "Invalid email or password. Access denied." }
+  return {
+    error:
+      matchedUser && passwordMatches && !accountActive
+        ? "This account is not active. Please contact your administrator."
+        : "Invalid email or password. Access denied.",
+  }
 }
 
 export async function logout() {
