@@ -20,12 +20,17 @@ export const SESSION_MAX_AGE = 60 * 60 * 8
 // even though it worked once published at the top level. `Secure` is valid here
 // because the preview and production are both HTTPS, and browsers treat
 // `http://localhost` as a secure context, so local development keeps working.
+//
+// SECURITY: we deliberately OMIT `maxAge`/`expires` so this is a *session
+// cookie*. The browser discards it when the window/browser is fully closed,
+// which forces a fresh login on the next visit instead of silently restoring
+// the previous user's session. The 8-hour absolute session lifetime is still
+// enforced client-side by the SessionGuard via its EXPIRY timestamp.
 export const sessionCookieOptions = {
   httpOnly: true,
   secure: true,
   sameSite: "none",
   path: "/",
-  maxAge: SESSION_MAX_AGE,
 } as const
 
 // Same cross-iframe-safe attributes for the short-lived, client-readable
@@ -42,10 +47,13 @@ export const freshLoginCookieOptions = {
 // (a) display the right identity and (b) namespace that user's data. It is NOT
 // a security boundary — access is gated by the httpOnly session token in the
 // proxy; this cookie only selects which tenant's identity/data to show.
+//
+// Also a session cookie (no `maxAge`) so it is cleared on browser close in lock
+// step with the session cookie above — it must never outlive the session and
+// point a fresh visitor at the previous user's identity/data.
 export const userCookieOptions = {
   httpOnly: false,
   secure: true,
   sameSite: "none",
   path: "/",
-  maxAge: SESSION_MAX_AGE,
 } as const
