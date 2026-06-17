@@ -76,8 +76,8 @@ const bankPartners = [
 const plans = [
   {
     name: "PRO",
-    price: "€500,000",
-    subtitle: "€500,000 trading deposit",
+    price: "€25,000",
+    subtitle: "€500,000 security deposit — or €50,000 with approved 1:10 leverage",
     description: "Full platform access for serious traders",
     features: [
       "Live rates dashboard & transaction execution",
@@ -98,8 +98,8 @@ const plans = [
   },
   {
     name: "Avant-Garde",
-    price: "€1,000,000",
-    subtitle: "€1,000,000 trading deposit",
+    price: "€120,000",
+    subtitle: "€1,000,000 security deposit — or €100,000 with approved 1:10 leverage",
     description: "Enterprise-grade platform for institutions",
     features: [
       "Everything in PRO, plus:",
@@ -322,7 +322,7 @@ export default function LandingPage() {
                     <span className="text-4xl font-bold text-foreground">
                       {plan.price}
                     </span>
-                    <span className="text-muted-foreground"> /onboarding</span>
+                    <span className="text-muted-foreground"> / year</span>
                   </div>
                   {plan.subtitle && (
                     <p className="text-sm text-primary mt-1">{plan.subtitle}</p>

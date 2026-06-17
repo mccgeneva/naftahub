@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Landmark, Plus, Trash2, Save, Building2, Loader2 } from "lucide-react"
+import { Landmark, Plus, Trash2, Save, Building2, Loader2, ShieldCheck, AlertTriangle } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -23,6 +23,8 @@ import {
   TREASURY_PROFILES,
   TREASURY_CURRENCY,
   DEBIT_CYCLE_FEE_RATE,
+  MAX_LEVERAGE_RATIO,
+  leverageMinContribution,
   getProfile,
   emptyTreasuryAccount,
   type TreasuryAccount,
@@ -115,6 +117,12 @@ export function TreasuryManager() {
   const shortfall = Math.max(0, numRequired - secured)
   const annualFee = leverageEnabled ? (financed + numExposure) * DEBIT_CYCLE_FEE_RATE : 0
 
+  // Approved leverage is capped at 1:10 — contribution must be ≥ 10% of the deposit.
+  const minContribution = leverageMinContribution(numRequired)
+  const leverageBreached = leverageEnabled && numContribution < minContribution
+
+  const applyMinLeverage = () => setContribution(String(minContribution))
+
   const onProfileChange = (key: TreasuryProfileKey) => {
     setProfile(key)
     setRequiredDeposit(String(getProfile(key).requiredDeposit))
@@ -123,6 +131,12 @@ export function TreasuryManager() {
   const handleSaveRecord = async () => {
     if (numRequired <= 0) {
       toast.error("Enter a valid required security deposit.")
+      return
+    }
+    if (leverageBreached) {
+      toast.error(
+        `Leverage is capped at 1:${MAX_LEVERAGE_RATIO}. Contribution must be at least ${fmt0(minContribution)} (10%).`,
+      )
       return
     }
     setSaving(true)
@@ -277,9 +291,10 @@ export function TreasuryManager() {
         <div className="rounded-lg border border-border bg-secondary/30 p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-foreground">Leverage facility</p>
+              <p className="text-sm font-medium text-foreground">Leverage facility — approved 1:{MAX_LEVERAGE_RATIO}</p>
               <p className="text-[11px] text-muted-foreground">
-                Finance the shortfall via MCC HOLDING SA and apply the 1.8% debit cycle fee.
+                Finance up to 90% of the deposit via MCC HOLDING SA at a 1:{MAX_LEVERAGE_RATIO} ratio, then apply the
+                1.8% debit cycle fee. The client must contribute at least 10% of the required deposit.
               </p>
             </div>
             <Switch checked={leverageEnabled} onCheckedChange={setLeverageEnabled} aria-label="Toggle leverage facility" />
@@ -287,6 +302,32 @@ export function TreasuryManager() {
 
           {leverageEnabled && (
             <div className="mt-4 space-y-4">
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3">
+                <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />
+                <p className="text-[11px] text-muted-foreground">
+                  Approved 1:{MAX_LEVERAGE_RATIO} structure — minimum client contribution{" "}
+                  <span className="font-semibold text-foreground">{fmt0(minContribution)}</span> covers the{" "}
+                  <span className="font-semibold text-foreground">{fmt0(numRequired)}</span> deposit.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="ml-auto h-7 text-[11px]"
+                  onClick={applyMinLeverage}
+                >
+                  Apply 1:{MAX_LEVERAGE_RATIO} (10%)
+                </Button>
+              </div>
+
+              {leverageBreached && (
+                <p className="flex items-start gap-1.5 text-[11px] text-orange-400">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  Contribution {fmt0(numContribution)} is below the {fmt0(minContribution)} minimum for a 1:
+                  {MAX_LEVERAGE_RATIO} facility. Increase the contribution or lower the required deposit.
+                </p>
+              )}
+
               <div className="space-y-2">
                 <Label htmlFor="tm-exposure">Transaction exposure (EUR)</Label>
                 <Input
@@ -304,7 +345,11 @@ export function TreasuryManager() {
               </div>
 
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <Derived label="Applied Leverage" value={`1:${ratio % 1 === 0 ? ratio : ratio.toFixed(1)}`} />
+                <Derived
+                  label="Applied Leverage"
+                  value={`1:${ratio % 1 === 0 ? ratio : ratio.toFixed(1)}`}
+                  tone={leverageBreached ? "negative" : "default"}
+                />
                 <Derived label="Financed (MCC HOLDING SA)" value={fmt0(financed)} tone="negative" />
                 <Derived label="Treasury Received" value={fmt0(secured)} tone="positive" />
                 <Derived label="Annual Cycle Fee" value={`${fmt0(annualFee)}/yr`} tone="negative" />
