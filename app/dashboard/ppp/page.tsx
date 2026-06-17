@@ -143,50 +143,12 @@ const programs = [
   },
 ]
 
-const activeInvestments = [
-  {
-    id: "INV-2024-001",
-    program: "Small Cap Program",
-    investedAmount: 100000000,
-    currency: "USD",
-    startDate: "2024-01-15",
-    endDate: "2024-11-15",
-    currentReturn: 12500000,
-    returnPercentage: 12.5,
-    status: "active",
-    weekNumber: 8,
-    totalWeeks: 40,
-    nextPayout: "2024-01-22",
-    nextPayoutAmount: 800000,
-  },
-]
-
-const payoutHistory = [
-  {
-    id: "PAY-001",
-    date: "2024-01-15",
-    amount: 850000,
-    currency: "USD",
-    program: "Small Cap",
-    week: 7,
-  },
-  {
-    id: "PAY-002",
-    date: "2024-01-08",
-    amount: 920000,
-    currency: "USD",
-    program: "Small Cap",
-    week: 6,
-  },
-  {
-    id: "PAY-003",
-    date: "2024-01-01",
-    amount: 780000,
-    currency: "USD",
-    program: "Small Cap",
-    week: 5,
-  },
-]
+const currencySymbols: Record<string, string> = {
+  USD: "$",
+  EUR: "€",
+  GBP: "£",
+  CHF: "CHF ",
+}
 
 const formatCurrency = (value: number) => {
   if (value >= 1000000000) {
@@ -196,6 +158,14 @@ const formatCurrency = (value: number) => {
     return `$${(value / 1000000).toFixed(0)}M`
   }
   return `$${value.toLocaleString()}`
+}
+
+// Currency-aware compact formatter for real (approved) investment figures.
+const formatMoney = (value: number, currency: string) => {
+  const symbol = currencySymbols[currency] ?? `${currency} `
+  if (value >= 1000000000) return `${symbol}${(value / 1000000000).toFixed(2)}B`
+  if (value >= 1000000) return `${symbol}${(value / 1000000).toFixed(1)}M`
+  return `${symbol}${value.toLocaleString()}`
 }
 
 const statusConfig = {
@@ -254,6 +224,20 @@ export default function PPPPage() {
     [requests],
   )
   const pendingCount = myApplications.filter((r) => r.status === "pending").length
+
+  // Approved applications are the client's real, executed investments. We derive
+  // the "My Investments" list and the summary stats directly from these so the
+  // numbers reflect genuine Administrator-approved activity — never fake demo
+  // figures. New investments have no payouts yet until the program runs.
+  const approvedInvestments = useMemo(
+    () => myApplications.filter((r) => r.status === "approved"),
+    [myApplications],
+  )
+  const totalInvested = useMemo(
+    () => approvedInvestments.reduce((sum, r) => sum + r.amount, 0),
+    [approvedInvestments],
+  )
+  const investmentCurrency = approvedInvestments[0]?.currency ?? "USD"
 
   // When the client already has applications, open the "My Applications" tab by
   // default so approved/rejected decisions are immediately visible on arrival.
@@ -379,8 +363,13 @@ export default function PPPPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-muted-foreground">Active Investment</p>
-                <p className="text-2xl font-bold text-foreground mt-1">$0.00</p>
-                <p className="text-xs text-muted-foreground mt-1">0 programs</p>
+                <p className="text-2xl font-bold text-foreground mt-1">
+                  {totalInvested > 0 ? formatMoney(totalInvested, investmentCurrency) : "$0.00"}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {approvedInvestments.length}{" "}
+                  {approvedInvestments.length === 1 ? "program" : "programs"}
+                </p>
               </div>
               <div className="rounded-lg bg-primary/10 p-3">
                 <DollarSign className="h-5 w-5 text-primary" />
@@ -421,8 +410,12 @@ export default function PPPPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-muted-foreground">Program Progress</p>
-                <p className="text-2xl font-bold text-foreground mt-1">—</p>
-                <p className="text-xs text-muted-foreground mt-1">No active program</p>
+                <p className="text-2xl font-bold text-foreground mt-1">
+                  {approvedInvestments.length > 0 ? "Week 1" : "—"}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {approvedInvestments.length > 0 ? "Awaiting first cycle" : "No active program"}
+                </p>
               </div>
               <div className="rounded-lg bg-orange-500/10 p-3">
                 <Clock className="h-5 w-5 text-orange-400" />
@@ -674,15 +667,15 @@ export default function PPPPage() {
         </TabsContent>
 
         <TabsContent value="active" className="mt-6">
-          {activeInvestments.length > 0 ? (
+          {approvedInvestments.length > 0 ? (
             <div className="space-y-6">
-              {activeInvestments.map((investment) => (
+              {approvedInvestments.map((investment) => (
                 <Card key={investment.id} className="bg-card border-border">
                   <CardHeader>
                     <div className="flex items-center justify-between">
                       <div>
                         <CardTitle className="text-lg font-semibold">
-                          {investment.program}
+                          {investment.programName}
                         </CardTitle>
                         <p className="text-xs text-muted-foreground">
                           {investment.id}
@@ -704,7 +697,7 @@ export default function PPPPage() {
                           Invested Amount
                         </p>
                         <p className="text-xl font-bold text-foreground mt-1">
-                          {formatCurrency(investment.investedAmount)}
+                          {formatMoney(investment.amount, investment.currency)}
                         </p>
                       </div>
                       <div className="rounded-lg bg-green-500/10 p-4">
@@ -712,64 +705,50 @@ export default function PPPPage() {
                           Current Return
                         </p>
                         <p className="text-xl font-bold text-green-500 mt-1">
-                          +{formatCurrency(investment.currentReturn)}
+                          {investment.currency} 0
                         </p>
-                        <p className="text-xs text-green-500">
-                          +{investment.returnPercentage}%
+                        <p className="text-xs text-muted-foreground">
+                          Awaiting first payout
                         </p>
                       </div>
                       <div className="rounded-lg bg-secondary/30 p-4">
                         <p className="text-xs text-muted-foreground">
-                          Next Payout
+                          Expected Return
                         </p>
                         <p className="text-xl font-bold text-foreground mt-1">
-                          {formatCurrency(investment.nextPayoutAmount)}
+                          {investment.expectedReturn}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {investment.nextPayout}
+                          {investment.returnFrequency}
                         </p>
                       </div>
                       <div className="rounded-lg bg-secondary/30 p-4">
-                        <p className="text-xs text-muted-foreground">Progress</p>
+                        <p className="text-xs text-muted-foreground">Duration</p>
                         <p className="text-xl font-bold text-foreground mt-1">
-                          Week {investment.weekNumber}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          of {investment.totalWeeks}
+                          {investment.duration}
                         </p>
                       </div>
                     </div>
 
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-muted-foreground">
-                          Program Progress
-                        </span>
-                        <span className="text-sm text-muted-foreground">
-                          {Math.round(
-                            (investment.weekNumber / investment.totalWeeks) * 100
-                          )}
-                          %
-                        </span>
-                      </div>
-                      <Progress
-                        value={
-                          (investment.weekNumber / investment.totalWeeks) * 100
-                        }
-                        className="h-2"
-                      />
-                    </div>
-
-                    <div className="flex items-center justify-between pt-4 border-t border-border">
+                    <div className="flex flex-col gap-3 pt-4 border-t border-border sm:flex-row sm:items-center sm:justify-between">
                       <div className="text-sm text-muted-foreground">
-                        <span>Start: {investment.startDate}</span>
+                        <span>Source: {investment.sourceOfFunds}</span>
                         <span className="mx-2">•</span>
-                        <span>End: {investment.endDate}</span>
+                        <span>Payout: {investment.payoutAccount}</span>
+                        {investment.decidedAt && (
+                          <>
+                            <span className="mx-2">•</span>
+                            <span>
+                              Approved:{" "}
+                              {new Date(investment.decidedAt).toLocaleDateString("en-GB")}
+                            </span>
+                          </>
+                        )}
                       </div>
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => viewInvestment(investment.id, investment.program)}
+                        onClick={() => viewInvestment(investment.id, investment.programName)}
                       >
                         <ExternalLink className="mr-2 h-4 w-4" />
                         View Details
@@ -805,30 +784,14 @@ export default function PPPPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-3">
-                {payoutHistory.map((payout) => (
-                  <div
-                    key={payout.id}
-                    className="flex items-center justify-between p-4 rounded-lg border border-border bg-secondary/30"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-500/10">
-                        <TrendingUp className="h-5 w-5 text-green-500" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-foreground">
-                          {payout.program} - Week {payout.week}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {payout.id} • {payout.date}
-                        </p>
-                      </div>
-                    </div>
-                    <p className="text-lg font-bold text-green-500">
-                      +${payout.amount.toLocaleString()}
-                    </p>
-                  </div>
-                ))}
+              <div className="p-8 text-center">
+                <TrendingUp className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <h3 className="text-lg font-semibold text-foreground">No Payouts Yet</h3>
+                <p className="text-sm text-muted-foreground mt-2">
+                  {approvedInvestments.length > 0
+                    ? "Your approved program has not generated any payouts yet. Distributions will appear here once the program cycle begins."
+                    : "Payouts from approved programs will appear here once your investments start generating returns."}
+                </p>
               </div>
             </CardContent>
           </Card>
