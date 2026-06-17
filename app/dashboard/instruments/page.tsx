@@ -67,6 +67,7 @@ import {
   type MonetizationStructure,
 } from "@/lib/monetization-requests-store"
 import { generateInstrumentCertificate } from "@/lib/certificate-pdf"
+import { generateMt760, generateMt799 } from "@/lib/swift-mt"
 
 const MONETIZATION_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "AED", "SGD"]
 
@@ -378,6 +379,74 @@ export default function InstrumentsPage() {
     key: K,
     value: (typeof monetizeForm)[K],
   ) => setMonetizeForm((prev) => ({ ...prev, [key]: value }))
+
+  // Real SWIFT FIN generated from the instrument + monetization details.
+  const [generatedSwift, setGeneratedSwift] = useState<{
+    mt760: string
+    mt799: string
+  } | null>(null)
+
+  // Build well-formed MT760 (collateral transfer / SBLC) + MT799 (RWA pre-advice)
+  // messages from the live monetization inputs and auto-fill their references.
+  const handleGenerateSwift = () => {
+    if (!monetizeTarget) return
+    const instrument = monetizeTarget
+    const platformBic = "BARCGB22" // dedicated bank-instrument account (Barclays)
+    const counterpartyBic =
+      monetizeForm.receivingBankBic.trim().toUpperCase() || "DEUTDEFF"
+    const mt760Reference = `MT760-${instrument.id}`.slice(0, 16)
+    const mt799Reference = `MT799-${instrument.id}`.slice(0, 16)
+    const today = new Date().toISOString().slice(0, 10)
+    const structureLabel =
+      MONETIZATION_STRUCTURES.find((s) => s.value === monetizeForm.structure)?.label ??
+      monetizeForm.structure
+
+    const mt760 = generateMt760({
+      senderBic: platformBic,
+      receiverBic: counterpartyBic,
+      senderReference: mt760Reference,
+      relatedReference: instrument.id.slice(0, 16),
+      purpose: monetizeForm.structure === "CollateralTransfer" ? "ICCO" : "ISSU",
+      form: instrument.type === "SBLC" ? "STBY" : "DGAR",
+      applicableRules: instrument.type === "SBLC" ? "ISPR" : "URDG",
+      issueDate: today,
+      expiryDate: instrument.expiryDate,
+      currency: instrument.currency,
+      amount: instrument.faceValue,
+      applicant: { nameAndAddress: ["MCC CAPITAL LTD", "LONDON, UNITED KINGDOM"] },
+      beneficiary: {
+        bic: counterpartyBic,
+        nameAndAddress: [monetizeForm.monetizationPlatform.trim() || "MONETIZATION COUNTERPARTY"],
+      },
+      terms: `COLLATERAL TRANSFER OF ${instrument.type} ${instrument.id} FOR ${structureLabel.toUpperCase()} AT ${monetizeAdvanceRate}PCT LTV. PROCEEDS ${monetizeForm.proceedsCurrency} ${monetizeProceeds.toLocaleString("en-US")} TO ${monetizeForm.receivingBank.toUpperCase()}.`,
+    }).raw
+
+    const mt799 = generateMt799({
+      senderBic: platformBic,
+      receiverBic: counterpartyBic,
+      senderReference: mt799Reference,
+      relatedReference: mt760Reference,
+      narrative: `WE HEREBY CONFIRM ON BEHALF OF MCC CAPITAL THAT WE ARE READY, WILLING AND ABLE TO PROCEED WITH THE MONETIZATION OF ${instrument.typeFull.toUpperCase()} (${instrument.type}) REF ${instrument.id}, FACE VALUE ${instrument.currency} ${instrument.faceValue.toLocaleString("en-US")}, ISSUED BY ${instrument.issuer.toUpperCase()}. STRUCTURE: ${structureLabel.toUpperCase()} AT ${monetizeAdvanceRate}PCT LTV. THIS MESSAGE IS A PRE-ADVICE AND DOES NOT CONSTITUTE A FINANCIAL OBLIGATION.`,
+    }).raw
+
+    setGeneratedSwift({ mt760, mt799 })
+    setMon("mt760Ref", mt760Reference)
+    setMon("mt799Ref", mt799Reference)
+    toast.success("SWIFT messages generated", {
+      description: `MT760 (${mt760Reference}) and MT799 (${mt799Reference}) drafted and referenced.`,
+    })
+    logActivity({
+      action: `Generated MT760 + MT799 for monetization of ${instrument.type} ${instrument.id}`,
+      category: "Bank Instruments",
+      details: {
+        summary: `Client generated well-formed SWIFT MT760 (collateral transfer) and MT799 (RWA pre-advice) messages for the monetization of ${instrument.typeFull} (${instrument.type}) ${instrument.id}, face value ${formatCurrency(instrument.faceValue, instrument.currency)}. References ${mt760Reference} / ${mt799Reference}.`,
+        referenceId: instrument.id,
+        mt760: mt760Reference,
+        mt799: mt799Reference,
+        receivingBankBic: counterpartyBic,
+      },
+    })
+  }
 
   const monetizeAdvanceRate = Number.parseFloat(monetizeForm.advanceRate)
   const monetizeProceeds =

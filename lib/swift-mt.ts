@@ -7,8 +7,12 @@
 // intentionally free of "use server" and of any I/O so the logic stays pure
 // and testable. The server / UI layers consume the typed output.
 //
-// Supported inbound parsing: MT103, MT202, MT202 COV, MT799 (and a generic
-// fallback for any other MT type, exposing parsed blocks + fields).
+// Supported inbound parsing: MT103, MT202, MT202 COV, MT760, MT799 (and a
+// generic fallback for any other MT type, exposing parsed blocks + fields).
+//
+// MT760 (Guarantee / Standby Letter of Credit) and MT799 (free-format) are the
+// instrument-messaging types used by the bank-instrument monetization desk for
+// SBLC/BG issuance, collateral transfer and ready-willing-able (RWA) advice.
 //
 // References: SWIFT FIN block structure (Block 1 Basic Header, Block 2
 // Application Header, Block 3 User Header incl. UETR field 121, Block 4
@@ -21,7 +25,7 @@ import { validateIban, validateBic } from "@/lib/iban-swift"
 // Types
 // ---------------------------------------------------------------------------
 
-export type SwiftMessageType = "MT103" | "MT202" | "MT202COV" | "MT799" | string
+export type SwiftMessageType = "MT103" | "MT202" | "MT202COV" | "MT760" | "MT799" | string
 
 /** A single tag/value pair from Block 4 (e.g. tag "32A", value "240617EUR1500,00"). */
 export interface SwiftField {
@@ -134,6 +138,30 @@ export interface ParsedSwiftMessage {
 
   /** For MT799 free-format text (:79:). */
   freeFormatText?: string
+
+  /** Guarantee / SBLC details for MT760 (collateral transfer & issuance). */
+  guarantee?: {
+    /** :22A: Purpose of the message (ISSU, ICCO, etc.). */
+    purpose?: string
+    /** :22D: Form of the undertaking (DGAR demand guarantee, STBY standby LC). */
+    form?: string
+    /** :40C: Applicable rules (URDG, ISPR, etc.). */
+    applicableRules?: string
+    /** :23B: / :30: issue or effective date when present (ISO yyyy-mm-dd). */
+    issueDate?: string
+    /** :31E: / :35G: expiry date (ISO yyyy-mm-dd). */
+    expiryDate?: string
+    /** :32B: undertaking amount currency. */
+    currency?: string
+    /** :32B: undertaking amount. */
+    amount?: number
+    /** :50: applicant (instructing party). */
+    applicant?: SwiftParty
+    /** :59: beneficiary of the undertaking. */
+    beneficiary?: SwiftParty
+    /** :77C: / :77U: terms and conditions narrative. */
+    terms?: string
+  }
 
   /** Underlying customer credit transfer fields for MT202 COV (sequence B). */
   coverPayment?: {
@@ -394,11 +422,16 @@ export function detectMessageType(blocks: SwiftBlocks): SwiftMessageType {
     return hasCoverSeq ? "MT202COV" : "MT202"
   }
   if (mt === "103") return "MT103"
+  if (mt === "760") return "MT760"
   if (mt === "799") return "MT799"
   if (mt) return `MT${mt}`
 
   // Fall back to field-signature heuristics when no app header was supplied.
   if (findField(blocks.text, "79")) return "MT799"
+  // MT760 carries undertaking-specific fields (form/purpose) and no :32A:.
+  if (findField(blocks.text, "22A") || findField(blocks.text, "22D") || findField(blocks.text, "40C")) {
+    return "MT760"
+  }
   if (findByPrefix(blocks.text, "59")) return "MT103"
   if (findByPrefix(blocks.text, "58")) return "MT202"
   return "UNKNOWN"
@@ -494,6 +527,44 @@ export function parseSwiftMessage(raw: string): ParsedSwiftMessage {
     }
   }
 
+  // MT760 guarantee / standby letter of credit (issuance & collateral transfer).
+  if (type === "MT760") {
+    const f32b = findField(fields, "32B")
+    let gAmount: number | undefined
+    let gCurrency: string | undefined
+    if (f32b) {
+      const parsed = parseAmountField(f32b.value, false)
+      gCurrency = parsed.currency
+      gAmount = parsed.amount
+    }
+    const applicantField = findByPrefix(fields, "50")
+    const beneficiaryField = findByPrefix(fields, "59")
+    const f30 = findField(fields, "30")?.value.trim()
+    const f31e = findField(fields, "31E")?.value.trim()
+    // :35G: expiry can be a date (YYMMDD) optionally followed by narrative.
+    const f35g = findField(fields, "35G")?.value.trim()
+    const f35gDate = f35g?.match(/\d{6}/)?.[0]
+    result.guarantee = {
+      purpose: findField(fields, "22A")?.value.trim(),
+      form: findField(fields, "22D")?.value.trim(),
+      applicableRules: findField(fields, "40C")?.value.trim(),
+      issueDate: f30 ? parseSwiftDate(f30) : undefined,
+      expiryDate: f31e ? parseSwiftDate(f31e) : f35gDate ? parseSwiftDate(f35gDate) : undefined,
+      currency: gCurrency,
+      amount: gAmount,
+      applicant: applicantField ? parseParty(applicantField.tag, applicantField.value) : undefined,
+      beneficiary: beneficiaryField ? parseParty(beneficiaryField.tag, beneficiaryField.value) : undefined,
+      terms:
+        findField(fields, "77C")?.value.trim() ??
+        findField(fields, "77U")?.value.trim(),
+    }
+    // Surface the undertaking amount at the top level for reconciliation/enrichment.
+    if (result.amount === undefined && gAmount !== undefined) {
+      result.amount = gAmount
+      result.currency = gCurrency
+    }
+  }
+
   validateBusinessRules(result)
   result.valid = result.errors.length === 0
   return result
@@ -544,6 +615,20 @@ function validateBusinessRules(msg: ParsedSwiftMessage): void {
 
   if (type === "MT799") {
     if (!msg.freeFormatText) errors.push("MT799 is missing the free-format narrative (:79:).")
+  }
+
+  if (type === "MT760") {
+    if (!msg.guarantee?.form && !msg.guarantee?.purpose) {
+      warnings.push("MT760 has no undertaking form (:22D:) or purpose (:22A:).")
+    }
+    if (msg.guarantee?.amount === undefined) {
+      warnings.push("MT760 has no undertaking amount (:32B:).")
+    } else if (msg.guarantee.amount <= 0) {
+      errors.push("MT760 undertaking amount must be greater than zero.")
+    }
+    if (!msg.guarantee?.beneficiary) {
+      warnings.push("MT760 has no beneficiary of the undertaking (:59:).")
+    }
   }
 
   // Validate any IBAN / BIC fields we extracted.
@@ -723,4 +808,104 @@ function padBic(bic: string): string {
   if (clean.length === 11) return clean + "X"
   if (clean.length === 8) return clean + "XXXX"
   return clean.padEnd(12, "X")
+}
+
+// ---------------------------------------------------------------------------
+// Generation (instrument messaging — MT760 guarantee / MT799 free format)
+// ---------------------------------------------------------------------------
+
+export interface GenerateMt760Input {
+  senderBic: string
+  receiverBic: string
+  /** :20: Transaction reference (max 16 chars). */
+  senderReference: string
+  /** :23: Related reference / further identification (optional). */
+  relatedReference?: string
+  /** :22A: Purpose — "ISSU" issuance, "ICCO" collateral, "ISCO" counter, etc. */
+  purpose?: string
+  /** :22D: Form of undertaking — "DGAR" demand guarantee, "STBY" standby LC. */
+  form?: "DGAR" | "STBY" | string
+  /** :40C: Applicable rules — "URDG", "ISPR", "NONE". */
+  applicableRules?: string
+  /** Issue date (ISO yyyy-mm-dd) → :30:. */
+  issueDate?: string
+  /** Expiry date (ISO yyyy-mm-dd) → :31E:. */
+  expiryDate?: string
+  currency: string
+  /** Undertaking amount → :32B:. */
+  amount: number
+  /** :50: Applicant / instructing party. */
+  applicant?: { account?: string; bic?: string; nameAndAddress?: string[] }
+  /** :59: Beneficiary of the undertaking. */
+  beneficiary?: { account?: string; bic?: string; nameAndAddress?: string[] }
+  /** :77C: Terms and conditions narrative. */
+  terms?: string
+  /** Embed a gpi UETR (Block 3 field 121); auto-generated unless includeGpi=false. */
+  uetr?: string
+  includeGpi?: boolean
+}
+
+/**
+ * Generate a well-formed SWIFT MT760 (Guarantee / Standby Letter of Credit).
+ * Used by the instrument desk to issue or collateral-transfer an SBLC/BG. The
+ * output round-trips through `parseSwiftMessage` as type "MT760".
+ */
+export function generateMt760(input: GenerateMt760Input): { raw: string; uetr: string } {
+  const uetr = input.uetr ?? generateUetr()
+  const block1 = `{1:F01${padBic(input.senderBic)}0000000000}`
+  const block2 = `{2:I760${padBic(input.receiverBic)}N}`
+  const block3 = input.includeGpi !== false ? `{3:{121:${uetr}}}` : ""
+
+  const lines: string[] = []
+  lines.push(`:20:${input.senderReference.slice(0, 16)}`)
+  if (input.relatedReference) lines.push(`:23:${input.relatedReference.slice(0, 16)}`)
+  if (input.purpose) lines.push(`:22A:${input.purpose}`)
+  if (input.form) lines.push(`:22D:${input.form}`)
+  if (input.applicableRules) lines.push(`:40C:${input.applicableRules}`)
+  if (input.issueDate) lines.push(`:30:${toSwiftDate(input.issueDate)}`)
+  if (input.applicant) lines.push(`:50:${formatParty(input.applicant)}`)
+  if (input.beneficiary) lines.push(`:59:${formatParty(input.beneficiary)}`)
+  lines.push(`:32B:${input.currency}${formatSwiftAmount(input.amount)}`)
+  if (input.expiryDate) lines.push(`:31E:${toSwiftDate(input.expiryDate)}`)
+  if (input.terms) lines.push(`:77C:${input.terms}`)
+
+  const block4 = `{4:\n${lines.join("\n")}\n-}`
+  return { raw: `${block1}${block2}${block3}${block4}`, uetr }
+}
+
+export interface GenerateMt799Input {
+  senderBic: string
+  receiverBic: string
+  /** :20: Transaction reference (max 16 chars). */
+  senderReference: string
+  /** :21: Related reference (optional). */
+  relatedReference?: string
+  /** :79: Free-format narrative (RWA / pre-advice / confirmation). */
+  narrative: string
+  uetr?: string
+  includeGpi?: boolean
+}
+
+/**
+ * Generate a well-formed SWIFT MT799 (free-format) message — used for
+ * ready-willing-able (RWA) advices and pre-advice confirmations on instrument
+ * transactions. Round-trips through `parseSwiftMessage` as type "MT799".
+ */
+export function generateMt799(input: GenerateMt799Input): { raw: string; uetr: string } {
+  const uetr = input.uetr ?? generateUetr()
+  const block1 = `{1:F01${padBic(input.senderBic)}0000000000}`
+  const block2 = `{2:I799${padBic(input.receiverBic)}N}`
+  const block3 = input.includeGpi !== false ? `{3:{121:${uetr}}}` : ""
+
+  const lines: string[] = []
+  lines.push(`:20:${input.senderReference.slice(0, 16)}`)
+  if (input.relatedReference) lines.push(`:21:${input.relatedReference.slice(0, 16)}`)
+  // :79: lines are limited to 50 chars each; wrap the narrative.
+  const narrativeLines = input.narrative
+    .split("\n")
+    .flatMap((line) => line.match(/.{1,50}/g) ?? [""])
+  lines.push(`:79:${narrativeLines.join("\n")}`)
+
+  const block4 = `{4:\n${lines.join("\n")}\n-}`
+  return { raw: `${block1}${block2}${block3}${block4}`, uetr }
 }

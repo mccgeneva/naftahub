@@ -30,6 +30,8 @@ import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import {
   parseSwiftMessage,
   generateSwiftMessage,
+  generateMt760,
+  generateMt799,
   toReconciliationInput,
   type ParsedSwiftMessage,
   type SwiftParty,
@@ -60,6 +62,7 @@ const TYPE_BADGE: Record<string, string> = {
   MT202: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
   MT202COV: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
   MT799: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  MT760: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
 }
 
 function partyToString(p?: SwiftParty): string {
@@ -118,7 +121,7 @@ export function AdminSwiftInspector() {
 
   // --- Generate tab ---
   const [gen, setGen] = useState({
-    type: "MT103" as "MT103" | "MT202",
+    type: "MT103" as "MT103" | "MT202" | "MT760" | "MT799",
     senderBic: "DEUTDEFF",
     receiverBic: "BNPAFRPP",
     senderReference: "OUT-103-001",
@@ -133,10 +136,77 @@ export function AdminSwiftInspector() {
     remittanceInfo: "MCC-RCN-7788",
     chargesDetail: "OUR" as "OUR" | "BEN" | "SHA",
     includeGpi: true,
+    // MT760 (guarantee / SBLC) specifics
+    purpose: "ISSU",
+    form: "STBY" as "STBY" | "DGAR",
+    applicableRules: "ISPR",
+    expiryDate: new Date(new Date().setFullYear(new Date().getFullYear() + 1))
+      .toISOString()
+      .slice(0, 10),
+    terms: "PAYABLE ON FIRST WRITTEN DEMAND",
+    // MT799 (free format / RWA) specifics
+    narrative:
+      "WE HEREBY CONFIRM THAT WE ARE READY, WILLING AND ABLE TO PROCEED WITH THE ABOVE-REFERENCED TRANSACTION.",
   })
   const [generated, setGenerated] = useState<{ raw: string; uetr: string } | null>(null)
 
   const handleGenerate = () => {
+    const sender = gen.senderBic.trim().toUpperCase()
+    const receiver = gen.receiverBic.trim().toUpperCase()
+    const reference = gen.senderReference.trim()
+
+    if (gen.type === "MT799") {
+      if (!gen.narrative.trim()) {
+        toast.error("Enter the free-format narrative for the MT799.")
+        return
+      }
+      const out = generateMt799({
+        senderBic: sender,
+        receiverBic: receiver,
+        senderReference: reference,
+        relatedReference: gen.relatedReference.trim() || undefined,
+        narrative: gen.narrative.trim(),
+        includeGpi: gen.includeGpi,
+      })
+      setGenerated(out)
+      toast.success(`MT799 generated with UETR ${out.uetr.slice(0, 8)}…`)
+      return
+    }
+
+    if (gen.type === "MT760") {
+      const amount = Number(gen.amount)
+      if (!Number.isFinite(amount) || amount <= 0) {
+        toast.error("Enter a valid undertaking amount greater than zero.")
+        return
+      }
+      const out = generateMt760({
+        senderBic: sender,
+        receiverBic: receiver,
+        senderReference: reference,
+        relatedReference: gen.relatedReference.trim() || undefined,
+        purpose: gen.purpose.trim() || undefined,
+        form: gen.form,
+        applicableRules: gen.applicableRules.trim() || undefined,
+        issueDate: gen.valueDate,
+        expiryDate: gen.expiryDate || undefined,
+        currency: gen.currency.trim().toUpperCase(),
+        amount,
+        applicant: {
+          account: gen.orderingAccount.trim() || undefined,
+          nameAndAddress: gen.orderingName.trim() ? [gen.orderingName.trim()] : undefined,
+        },
+        beneficiary: {
+          account: gen.beneficiaryAccount.trim() || undefined,
+          nameAndAddress: gen.beneficiaryName.trim() ? [gen.beneficiaryName.trim()] : undefined,
+        },
+        terms: gen.terms.trim() || undefined,
+        includeGpi: gen.includeGpi,
+      })
+      setGenerated(out)
+      toast.success(`MT760 generated with UETR ${out.uetr.slice(0, 8)}…`)
+      return
+    }
+
     const amount = Number(gen.amount)
     if (!Number.isFinite(amount) || amount <= 0) {
       toast.error("Enter a valid amount greater than zero.")
@@ -144,9 +214,9 @@ export function AdminSwiftInspector() {
     }
     const out = generateSwiftMessage({
       type: gen.type,
-      senderBic: gen.senderBic.trim().toUpperCase(),
-      receiverBic: gen.receiverBic.trim().toUpperCase(),
-      senderReference: gen.senderReference.trim(),
+      senderBic: sender,
+      receiverBic: receiver,
+      senderReference: reference,
       relatedReference: gen.relatedReference.trim() || undefined,
       valueDate: gen.valueDate,
       currency: gen.currency.trim().toUpperCase(),
@@ -189,7 +259,7 @@ export function AdminSwiftInspector() {
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <CardTitle className="text-base">Raw SWIFT message</CardTitle>
-                  <CardDescription>Paste an MT103, MT202, MT202 COV or MT799 message.</CardDescription>
+                  <CardDescription>Paste an MT103, MT202, MT202 COV, MT760 or MT799 message.</CardDescription>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => setRaw(SAMPLE_MT103)} className="bg-transparent">
                   Load sample
@@ -312,6 +382,26 @@ export function AdminSwiftInspector() {
                       <FieldRow label="Charges (:71A:)" value={parsed.chargesDetail} />
                       <FieldRow label="Sender→receiver (:72:)" value={parsed.senderToReceiverInfo} />
                       <FieldRow label="Free format (:79:)" value={parsed.freeFormatText} />
+                      {parsed.guarantee && (
+                        <>
+                          <FieldRow label="Undertaking form (:22D:)" value={parsed.guarantee.form} />
+                          <FieldRow label="Purpose (:22A:)" value={parsed.guarantee.purpose} />
+                          <FieldRow label="Applicable rules (:40C:)" value={parsed.guarantee.applicableRules} />
+                          <FieldRow label="Issue date (:30:)" value={parsed.guarantee.issueDate} />
+                          <FieldRow label="Expiry date (:31E:)" value={parsed.guarantee.expiryDate} />
+                          <FieldRow
+                            label="Undertaking amount (:32B:)"
+                            value={
+                              parsed.guarantee.amount !== undefined
+                                ? `${parsed.guarantee.currency ?? ""} ${parsed.guarantee.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}`
+                                : undefined
+                            }
+                          />
+                          <FieldRow label="Applicant (:50:)" value={partyToString(parsed.guarantee.applicant)} />
+                          <FieldRow label="Undertaking beneficiary (:59:)" value={partyToString(parsed.guarantee.beneficiary)} />
+                          <FieldRow label="Terms (:77C:)" value={parsed.guarantee.terms} />
+                        </>
+                      )}
                     </div>
                   </TabsContent>
 
@@ -405,7 +495,9 @@ export function AdminSwiftInspector() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Compose outbound message</CardTitle>
-              <CardDescription>Generate a well-formed MT103 or MT202 with a gpi UETR.</CardDescription>
+              <CardDescription>
+                Generate a well-formed payment (MT103/MT202) or instrument message (MT760/MT799) with a gpi UETR.
+              </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <div className="grid gap-4 sm:grid-cols-2">
@@ -413,7 +505,9 @@ export function AdminSwiftInspector() {
                   <Label>Message type</Label>
                   <Select
                     value={gen.type}
-                    onValueChange={(v) => setGen((g) => ({ ...g, type: v as "MT103" | "MT202" }))}
+                    onValueChange={(v) =>
+                      setGen((g) => ({ ...g, type: v as "MT103" | "MT202" | "MT760" | "MT799" }))
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -421,6 +515,8 @@ export function AdminSwiftInspector() {
                     <SelectContent>
                       <SelectItem value="MT103">MT103 — Customer transfer</SelectItem>
                       <SelectItem value="MT202">MT202 — Institution transfer</SelectItem>
+                      <SelectItem value="MT760">MT760 — Guarantee / SBLC</SelectItem>
+                      <SelectItem value="MT799">MT799 — Free format / RWA</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -449,9 +545,9 @@ export function AdminSwiftInspector() {
                     onChange={(e) => setGen((g) => ({ ...g, receiverBic: e.target.value }))}
                   />
                 </div>
-                {gen.type === "MT202" && (
+                {(gen.type === "MT202" || gen.type === "MT760" || gen.type === "MT799") && (
                   <div className="flex flex-col gap-1.5 sm:col-span-2">
-                    <Label htmlFor="g-rel">Related reference (:21:)</Label>
+                    <Label htmlFor="g-rel">Related reference ({gen.type === "MT760" ? ":23:" : ":21:"})</Label>
                     <Input
                       id="g-rel"
                       value={gen.relatedReference}
@@ -460,73 +556,179 @@ export function AdminSwiftInspector() {
                     />
                   </div>
                 )}
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="g-date">Value date</Label>
-                  <Input
-                    id="g-date"
-                    type="date"
-                    value={gen.valueDate}
-                    onChange={(e) => setGen((g) => ({ ...g, valueDate: e.target.value }))}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="g-ccy">Currency</Label>
-                    <Input
-                      id="g-ccy"
-                      value={gen.currency}
-                      onChange={(e) => setGen((g) => ({ ...g, currency: e.target.value }))}
-                      maxLength={3}
+
+                {/* MT799 — free-format narrative only */}
+                {gen.type === "MT799" && (
+                  <div className="flex flex-col gap-1.5 sm:col-span-2">
+                    <Label htmlFor="g-narr">Free-format narrative (:79:)</Label>
+                    <Textarea
+                      id="g-narr"
+                      rows={5}
+                      value={gen.narrative}
+                      onChange={(e) => setGen((g) => ({ ...g, narrative: e.target.value }))}
                     />
                   </div>
+                )}
+
+                {/* MT760 — undertaking form / purpose / rules */}
+                {gen.type === "MT760" && (
+                  <>
+                    <div className="flex flex-col gap-1.5">
+                      <Label>Form of undertaking (:22D:)</Label>
+                      <Select
+                        value={gen.form}
+                        onValueChange={(v) => setGen((g) => ({ ...g, form: v as "STBY" | "DGAR" }))}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="STBY">STBY — Standby Letter of Credit</SelectItem>
+                          <SelectItem value="DGAR">DGAR — Demand Guarantee</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="g-purpose">Purpose (:22A:)</Label>
+                        <Input
+                          id="g-purpose"
+                          value={gen.purpose}
+                          onChange={(e) => setGen((g) => ({ ...g, purpose: e.target.value }))}
+                          maxLength={4}
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="g-rules">Rules (:40C:)</Label>
+                        <Input
+                          id="g-rules"
+                          value={gen.applicableRules}
+                          onChange={(e) => setGen((g) => ({ ...g, applicableRules: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* Dates: payments use value date; MT760 uses issue + expiry */}
+                {gen.type !== "MT799" && (
                   <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="g-amt">Amount</Label>
+                    <Label htmlFor="g-date">{gen.type === "MT760" ? "Issue date (:30:)" : "Value date"}</Label>
                     <Input
-                      id="g-amt"
-                      inputMode="decimal"
-                      value={gen.amount}
-                      onChange={(e) => setGen((g) => ({ ...g, amount: e.target.value }))}
+                      id="g-date"
+                      type="date"
+                      value={gen.valueDate}
+                      onChange={(e) => setGen((g) => ({ ...g, valueDate: e.target.value }))}
                     />
                   </div>
-                </div>
-                <div className="flex flex-col gap-1.5 sm:col-span-2">
-                  <Label htmlFor="g-oacct">{gen.type === "MT103" ? "Ordering customer" : "Ordering institution"}</Label>
-                  <Input
-                    id="g-oacct"
-                    placeholder="Account / IBAN"
-                    value={gen.orderingAccount}
-                    onChange={(e) => setGen((g) => ({ ...g, orderingAccount: e.target.value }))}
-                  />
-                  <Input
-                    placeholder="Name"
-                    value={gen.orderingName}
-                    onChange={(e) => setGen((g) => ({ ...g, orderingName: e.target.value }))}
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5 sm:col-span-2">
-                  <Label htmlFor="g-bacct">
-                    {gen.type === "MT103" ? "Beneficiary customer" : "Beneficiary institution"}
-                  </Label>
-                  <Input
-                    id="g-bacct"
-                    placeholder="Account / IBAN"
-                    value={gen.beneficiaryAccount}
-                    onChange={(e) => setGen((g) => ({ ...g, beneficiaryAccount: e.target.value }))}
-                  />
-                  <Input
-                    placeholder="Name"
-                    value={gen.beneficiaryName}
-                    onChange={(e) => setGen((g) => ({ ...g, beneficiaryName: e.target.value }))}
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5 sm:col-span-2">
-                  <Label htmlFor="g-rem">Remittance info</Label>
-                  <Input
-                    id="g-rem"
-                    value={gen.remittanceInfo}
-                    onChange={(e) => setGen((g) => ({ ...g, remittanceInfo: e.target.value }))}
-                  />
-                </div>
+                )}
+                {gen.type === "MT760" && (
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="g-exp">Expiry date (:31E:)</Label>
+                    <Input
+                      id="g-exp"
+                      type="date"
+                      value={gen.expiryDate}
+                      onChange={(e) => setGen((g) => ({ ...g, expiryDate: e.target.value }))}
+                    />
+                  </div>
+                )}
+
+                {/* Currency + amount for payments and the MT760 undertaking */}
+                {gen.type !== "MT799" && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="g-ccy">Currency</Label>
+                      <Input
+                        id="g-ccy"
+                        value={gen.currency}
+                        onChange={(e) => setGen((g) => ({ ...g, currency: e.target.value }))}
+                        maxLength={3}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="g-amt">{gen.type === "MT760" ? "Undertaking amount (:32B:)" : "Amount"}</Label>
+                      <Input
+                        id="g-amt"
+                        inputMode="decimal"
+                        value={gen.amount}
+                        onChange={(e) => setGen((g) => ({ ...g, amount: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Ordering / applicant + beneficiary for payments and MT760 */}
+                {gen.type !== "MT799" && (
+                  <>
+                    <div className="flex flex-col gap-1.5 sm:col-span-2">
+                      <Label htmlFor="g-oacct">
+                        {gen.type === "MT103"
+                          ? "Ordering customer"
+                          : gen.type === "MT760"
+                            ? "Applicant (:50:)"
+                            : "Ordering institution"}
+                      </Label>
+                      <Input
+                        id="g-oacct"
+                        placeholder="Account / IBAN"
+                        value={gen.orderingAccount}
+                        onChange={(e) => setGen((g) => ({ ...g, orderingAccount: e.target.value }))}
+                      />
+                      <Input
+                        placeholder="Name"
+                        value={gen.orderingName}
+                        onChange={(e) => setGen((g) => ({ ...g, orderingName: e.target.value }))}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5 sm:col-span-2">
+                      <Label htmlFor="g-bacct">
+                        {gen.type === "MT103"
+                          ? "Beneficiary customer"
+                          : gen.type === "MT760"
+                            ? "Beneficiary of undertaking (:59:)"
+                            : "Beneficiary institution"}
+                      </Label>
+                      <Input
+                        id="g-bacct"
+                        placeholder="Account / IBAN"
+                        value={gen.beneficiaryAccount}
+                        onChange={(e) => setGen((g) => ({ ...g, beneficiaryAccount: e.target.value }))}
+                      />
+                      <Input
+                        placeholder="Name"
+                        value={gen.beneficiaryName}
+                        onChange={(e) => setGen((g) => ({ ...g, beneficiaryName: e.target.value }))}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* Remittance info for payments only */}
+                {(gen.type === "MT103" || gen.type === "MT202") && (
+                  <div className="flex flex-col gap-1.5 sm:col-span-2">
+                    <Label htmlFor="g-rem">Remittance info</Label>
+                    <Input
+                      id="g-rem"
+                      value={gen.remittanceInfo}
+                      onChange={(e) => setGen((g) => ({ ...g, remittanceInfo: e.target.value }))}
+                    />
+                  </div>
+                )}
+
+                {/* MT760 terms & conditions */}
+                {gen.type === "MT760" && (
+                  <div className="flex flex-col gap-1.5 sm:col-span-2">
+                    <Label htmlFor="g-terms">Terms &amp; conditions (:77C:)</Label>
+                    <Textarea
+                      id="g-terms"
+                      rows={3}
+                      value={gen.terms}
+                      onChange={(e) => setGen((g) => ({ ...g, terms: e.target.value }))}
+                    />
+                  </div>
+                )}
+
                 {gen.type === "MT103" && (
                   <div className="flex flex-col gap-1.5">
                     <Label>Charges (:71A:)</Label>
