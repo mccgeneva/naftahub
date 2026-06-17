@@ -1,6 +1,8 @@
 // Shared helpers for exporting tabular data to CSV and importing CSV files.
 // Runs entirely in the browser — triggers a real file download / file picker.
 
+// A single exportable record. Indexable by string so we can read values by
+// column key; callers may pass interface-typed objects (see exportToCsv).
 type Row = Record<string, unknown>
 
 function escapeCsvValue(value: unknown): string {
@@ -55,11 +57,11 @@ export function downloadFile(filename: string, content: string, mimeType = "text
  */
 export function exportToCsv(
   baseName: string,
-  rows: Row[],
+  rows: readonly object[],
   columns?: { key: string; label?: string }[],
 ) {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")
-  const csv = toCsv(rows, columns)
+  const csv = toCsv(rows as Row[], columns)
   downloadFile(`${baseName}-${stamp}.csv`, csv)
   return rows.length
 }

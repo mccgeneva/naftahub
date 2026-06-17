@@ -39,6 +39,12 @@ import { generateIban, formatIban, countrySupportsIban } from "@/lib/iban"
 import { useLedger } from "@/lib/ledger-store"
 import { useActivityLog } from "@/components/activity-tracker"
 import { BankInventoryManager } from "@/components/admin/bank-inventory-manager"
+import {
+  allocateBankSlotAdmin,
+  getBankAvailabilityForCurrency,
+  type BankAvailability,
+} from "@/app/actions/bank-inventory"
+import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { toast } from "sonner"
 
 const formatCurrency = (value: number, currency: string) =>
@@ -120,6 +126,22 @@ export function AdminGatewaySection() {
     [accounts],
   )
 
+  // Load live per-bank availability for a currency so the approve dialog can
+  // reflect which correspondent pools still have free account slots.
+  const refreshApproveAvailability = async (currency: string) => {
+    setLoadingAvailability(true)
+    try {
+      const rows = await getBankAvailabilityForCurrency(currency)
+      const map = new Map<string, BankAvailability>()
+      for (const row of rows) map.set(row.bankKey, row)
+      setApproveAvailability(map)
+    } catch {
+      setApproveAvailability(new Map())
+    } finally {
+      setLoadingAvailability(false)
+    }
+  }
+
   const openApprove = (account: GatewayAccount) => {
     setApproveTarget(account)
     // Default to the client's preferred bank if it supports the currency,
@@ -129,6 +151,7 @@ export function AdminGatewaySection() {
       ? preferred.key
       : suggestedBankFor(account.currency).key
     setBankKey(usable)
+    void refreshApproveAvailability(account.currency)
   }
 
   const confirmApprove = async () => {
@@ -237,6 +260,13 @@ export function AdminGatewaySection() {
         return supporting.length ? supporting : PARTNER_BANKS
       })()
     : []
+
+  // The selected bank's currency pool is exhausted/disabled — block approval.
+  const selectedBankExhausted = (() => {
+    if (!bankKey) return false
+    const avail = approveAvailability.get(bankKey)
+    return !!avail && (!avail.enabled || avail.remaining <= 0)
+  })()
 
   return (
     <>
@@ -418,13 +448,25 @@ export function AdminGatewaySection() {
                     <SelectValue placeholder="Select a partner bank" />
                   </SelectTrigger>
                   <SelectContent>
-                    {eligibleBanks.map((b) => (
-                      <SelectItem key={b.key} value={b.key}>
-                        {b.name} — {b.country} ({b.bic})
-                      </SelectItem>
-                    ))}
+                    {eligibleBanks.map((b) => {
+                      const avail = approveAvailability.get(b.key)
+                      const exhausted = !!avail && (!avail.enabled || avail.remaining <= 0)
+                      return (
+                        <SelectItem key={b.key} value={b.key} disabled={exhausted}>
+                          {b.name} — {b.country} ({b.bic})
+                          {avail
+                            ? !avail.enabled
+                              ? " · pool disabled"
+                              : ` · ${avail.remaining} slot${avail.remaining === 1 ? "" : "s"} left`
+                            : ""}
+                        </SelectItem>
+                      )
+                    })}
                   </SelectContent>
                 </Select>
+                {loadingAvailability && (
+                  <p className="text-xs text-muted-foreground">Checking pool availability…</p>
+                )}
                 {bankKey && (
                   <p className="text-xs text-muted-foreground">
                     {countrySupportsIban(partnerBankByKey(bankKey)?.countryCode)
@@ -437,8 +479,11 @@ export function AdminGatewaySection() {
                 <Button variant="outline" onClick={() => setApproveTarget(null)}>
                   Cancel
                 </Button>
-                <Button onClick={confirmApprove} disabled={!bankKey}>
-                  Approve &amp; assign
+                <Button
+                  onClick={confirmApprove}
+                  disabled={!bankKey || approving || selectedBankExhausted}
+                >
+                  {approving ? "Approving…" : "Approve & assign"}
                 </Button>
               </DialogFooter>
             </>
