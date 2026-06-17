@@ -40,63 +40,25 @@ const ALWAYS_EMAIL_PATTERNS: RegExp[] = [
   /\bsession terminated\b/i,
 ]
 
-// We use a default-DENY allow-list so that only meaningful, successfully
-// executed (or critical) business actions ever generate an email. Anything not
-// matched here — navigation, viewing, opening, copying, downloading, exporting,
-// refreshing, toggling settings, saving drafts, rate alerts, payment *intents*
-// ("Started a payment"), read-only tracking, etc. — is intentionally NOT
-// emailed. This prevents spam from low-value or non-executed operations.
-//
-// Categories this covers:
-//   • Login / Logout
-//   • Security issues + system errors (handled by ALWAYS_EMAIL_PATTERNS above)
-//   • Successful bank operations (payments, transfers, FX, beneficiaries,
-//     instruments, cards, gateway funding, etc.)
-//   • Critical business requests & submissions awaiting administrator action
-//   • All administrator decisions (approvals, rejections, postings, etc.)
-const MEANINGFUL_ACTION_PATTERNS: RegExp[] = [
-  // Authentication
-  /^Login successful/i,
-  /^Logout\b/i,
-
-  // Executed money movement
-  /^Quick transfer/i,
-  /^Sent\b/i, // internal transfer / P2P / SWIFT message sent
-  /transfer sent/i, // "P2P transfer sent"
-  /^Executed\b/i, // FX conversion executed
-  /^Received payment/i,
-  /\bpayment request\b/i, // generated incoming payment request
-
-  // Beneficiary additions / changes
-  /^Added\b/i,
-  /^Imported\b/i, // bulk beneficiary additions
-  /^Deleted\b/i,
-
-  // Critical business requests & submissions for administrator approval
-  /^Submitted\b/i,
-  /^Requested\b/i,
-  /^Applied\b/i,
-
-  // Instruments, trading & deal lifecycle
-  /^Deployed\b/i, // NQAi position deployed
-  /^Cancelled\b/i,
-  /^Assign\/Transfer/i,
-  /^Client (submitted|advanced|uploaded)/i,
-
-  // Card security actions
-  /^(Froze|Unfroze)\b/i,
-
-  // Support, contact & issue reporting
-  /^Contacted MCC/i,
-  /^Reported an issue/i,
-
-  // Gateway funding / reconciliation & approval decisions
-  /^Reconciled\b/i,
-  /^Approved\b/i,
-  /^Rejected\b/i,
-
-  // Every administrator action is business-critical
-  /^Administrator\b/i,
+// We use a default-ALLOW model: every operation or transaction a user performs
+// is emailed to the trader desk so they always know exactly what each client is
+// doing. Only pure, read-only UI noise — viewing a record, copying a value,
+// downloading/exporting a file already on screen, refreshing a list, opening a
+// panel, toggling a local setting, saving a draft, or setting a rate alert — is
+// filtered out. Anything that creates, submits, executes, changes, approves, or
+// otherwise *acts* on data is always reported.
+const NOISE_ACTION_PATTERNS: RegExp[] = [
+  /^Viewed\b/i, // opened a detail view (read-only)
+  /^Downloaded\b/i, // saved an on-screen document/receipt/certificate locally
+  /^Exported\b/i, // exported a list already visible to CSV
+  /^Copied\b/i, // copied a value to the clipboard
+  /^Refreshed\b/i, // refreshed a queue/list
+  /^Opened\b/i, // opened a settings/management panel
+  /^Tracked\b/i, // opened SWIFT gpi tracking for a payment
+  /^Saved\b.*\bdraft\b/i, // saved a draft (not yet submitted)
+  /^Set a rate alert\b/i, // local FX rate alert
+  /^(Enabled|Disabled) setting:/i, // toggled a local preference
+  /^(Hid|Revealed) card details\b/i, // showed/hid card numbers on screen
 ]
 
 // Decides whether an activity is important enough to email.
@@ -104,15 +66,16 @@ function shouldEmail(activity: ActivityLog): boolean {
   const action = activity.action ?? ""
   const category = activity.category ?? ""
 
-  // Security, auth-failure, error and decline events always notify.
+  // Security, auth-failure, error and decline events always notify — even if
+  // the wording would otherwise look like noise.
   if (ALWAYS_EMAIL_PATTERNS.some((re) => re.test(action) || re.test(category))) {
     return true
   }
 
-  // Default-deny: only email when the action matches a meaningful business
-  // pattern. Everything else (navigation, read-only, UI toggles, intents) is
-  // treated as noise and skipped.
-  return MEANINGFUL_ACTION_PATTERNS.some((re) => re.test(action))
+  // Default-allow: email every operation/transaction except recognised
+  // read-only UI noise. This guarantees the trader desk sees exactly what each
+  // user is doing instead of silently dropping unrecognised action wording.
+  return !NOISE_ACTION_PATTERNS.some((re) => re.test(action))
 }
 
 function escapeHtml(value: string) {
