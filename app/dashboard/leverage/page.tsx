@@ -698,7 +698,7 @@ export default function LeveragePage() {
                   <CardContent>
                     <p className="text-sm text-muted-foreground">{acc.description}</p>
                     <p className="mt-3 text-xs font-medium text-primary">
-                      Up to 1:{MAX_LEVERAGE} buying power
+                      Up to 1:{acc.maxLeverage} buying power
                     </p>
                   </CardContent>
                 </Card>
