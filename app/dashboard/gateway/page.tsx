@@ -1,6 +1,6 @@
 "use client"
 
-  import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import {
   Landmark,
   Building2,
@@ -62,8 +62,6 @@ import {
   type GatewayStatus,
 } from "@/lib/gateway-store"
 import { formatIban, countrySupportsIban } from "@/lib/iban"
-import { getBankAvailabilityForCurrency } from "@/app/actions/bank-inventory"
-import { type BankAvailability } from "@/lib/partner-banks"
 
 const typeIcons: Record<GatewayAccountType, typeof Building2> = {
   virtual_iban: Landmark,
@@ -182,10 +180,6 @@ export default function GatewayPage() {
   const [bankKey, setBankKey] = useState("")
   const [purpose, setPurpose] = useState("")
   const [bankQuery, setBankQuery] = useState("")
-  // Live partner-bank availability for the selected currency (enabled pools with
-  // spare capacity), fetched from the server when the request dialog is open.
-  const [availability, setAvailability] = useState<Map<string, BankAvailability>>(new Map())
-  const [loadingAvailability, setLoadingAvailability] = useState(false)
 
   // Partner-bank directory: filter by name/country/BIC/currency, then group by region.
   const banksByRegion = useMemo(() => {
@@ -205,33 +199,8 @@ export default function GatewayPage() {
     })).filter((g) => g.banks.length > 0)
   }, [bankQuery])
 
-  // Banks able to issue in the chosen currency (jurisdiction-aware) AND that
-  // currently have an enabled pool with spare capacity. Customers never see a
-  // bank they couldn't actually be issued an account at.
-  const eligibleBanks = useMemo(
-    () => banksForCurrency(currency).filter((b) => availability.get(b.key)?.available ?? false),
-    [currency, availability],
-  )
-
-  // Fetch live availability whenever the dialog opens or the currency changes.
-  useEffect(() => {
-    if (!open) return
-    let active = true
-    setLoadingAvailability(true)
-    getBankAvailabilityForCurrency(currency)
-      .then((rows) => {
-        if (!active) return
-        const map = new Map<string, BankAvailability>()
-        for (const row of rows) map.set(row.bankKey, row)
-        setAvailability(map)
-        // Drop a selected bank that is no longer available for this currency.
-        setBankKey((prev) => (prev && map.get(prev)?.available ? prev : ""))
-      })
-      .finally(() => active && setLoadingAvailability(false))
-    return () => {
-      active = false
-    }
-  }, [open, currency])
+  // Banks able to issue in the chosen currency (jurisdiction-aware).
+  const eligibleBanks = useMemo(() => banksForCurrency(currency), [currency])
 
   // Keep the selected bank valid whenever the currency changes: clear it if the
   // current pick can't issue in the new currency.
@@ -385,44 +354,24 @@ export default function GatewayPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="gw-bank">Preferred banking partner</Label>
-                <Select
-                  value={bankKey}
-                  onValueChange={setBankKey}
-                  disabled={loadingAvailability || eligibleBanks.length === 0}
-                >
+                <Select value={bankKey} onValueChange={setBankKey}>
                   <SelectTrigger id="gw-bank">
-                    <SelectValue
-                      placeholder={
-                        loadingAvailability
-                          ? "Checking availability…"
-                          : eligibleBanks.length === 0
-                            ? "No partner banks available"
-                            : "Select a partner bank"
-                      }
-                    />
+                    <SelectValue placeholder="Select a partner bank" />
                   </SelectTrigger>
                   <SelectContent>
-                    {eligibleBanks.map((bank) => {
-                      const remaining = availability.get(bank.key)?.remaining ?? 0
-                      return (
-                        <SelectItem key={bank.key} value={bank.key}>
-                          {bank.name} ({bank.country})
-                          {remaining <= 5 ? ` · ${remaining} left` : ""}
-                        </SelectItem>
-                      )
-                    })}
+                    {eligibleBanks.map((bank) => (
+                      <SelectItem key={bank.key} value={bank.key}>
+                        {bank.name} ({bank.country})
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  {loadingAvailability
-                    ? `Checking which partner banks can issue in ${currency}…`
-                    : eligibleBanks.length === 0
-                      ? `No partner bank currently has capacity to issue in ${currency}. Please try another currency or contact your administrator.`
-                      : bankKey
-                        ? countrySupportsIban(partnerBankByKey(bankKey)?.countryCode)
-                          ? `${partnerBankByKey(bankKey)?.name} will issue a dedicated IBAN in ${currency}, subject to Administrator approval.`
-                          : `${partnerBankByKey(bankKey)?.name} settles ${currency} domestically; you'll receive local account coordinates (no IBAN).`
-                        : `${eligibleBanks.length} partner bank${eligibleBanks.length === 1 ? "" : "s"} can issue in ${currency}.`}
+                  {bankKey
+                    ? countrySupportsIban(partnerBankByKey(bankKey)?.countryCode)
+                      ? `${partnerBankByKey(bankKey)?.name} will issue a dedicated IBAN in ${currency}, subject to Administrator approval.`
+                      : `${partnerBankByKey(bankKey)?.name} settles ${currency} domestically; you'll receive local account coordinates (no IBAN).`
+                    : `${eligibleBanks.length} partner bank${eligibleBanks.length === 1 ? "" : "s"} can issue in ${currency}.`}
                 </p>
               </div>
               <div className="space-y-2">

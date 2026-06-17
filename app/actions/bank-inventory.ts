@@ -6,16 +6,7 @@ import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { getUserBySessionToken, type UserProfile } from "@/lib/users"
 import { logActivity } from "@/app/actions/log-activity"
-import {
-  PARTNER_BANKS,
-  partnerBankByKey,
-  banksForCurrency,
-  DEFAULT_BANK_CAPACITY,
-  type BankInventoryRow,
-  type BankAvailability,
-  type BankInventoryResult,
-  type AllocationResult,
-} from "@/lib/partner-banks"
+import { PARTNER_BANKS, partnerBankByKey, banksForCurrency } from "@/lib/partner-banks"
 
 // ---------------------------------------------------------------------------
 // Partner-bank account inventory.
@@ -31,6 +22,28 @@ import {
 // they change availability or capacity, and allocation always upserts a row so
 // the live count is authoritative.
 // ---------------------------------------------------------------------------
+
+/** Default issuable-account capacity for a bank+currency with no explicit row. */
+export const DEFAULT_BANK_CAPACITY = 25
+
+export interface BankInventoryRow {
+  bankKey: string
+  currency: string
+  enabled: boolean
+  capacity: number
+  allocated: number
+}
+
+/** A bank's availability for a specific currency, resolved for the client UI. */
+export interface BankAvailability {
+  bankKey: string
+  currency: string
+  enabled: boolean
+  capacity: number
+  allocated: number
+  remaining: number
+  available: boolean // enabled AND remaining > 0
+}
 
 async function getSessionUser(): Promise<UserProfile | undefined> {
   const cookieStore = await cookies()
@@ -141,11 +154,16 @@ export async function getBankAvailabilityForCurrency(
 // Admin reads & configuration (passcode verified server-side).
 // ---------------------------------------------------------------------------
 
+export type BankInventoryResult =
+  | { ok: true; inventory: BankAvailability[] }
+  | { ok: false; error: string }
+
 /**
  * Full inventory matrix for the admin panel: every (bank, supported currency)
  * pair with its resolved availability, including lazily-defaulted rows.
  */
-export async function getBankInventoryAdmin(passcode: string): Promise<BankInventoryResult> {  try {
+export async function getBankInventoryAdmin(passcode: string): Promise<BankInventoryResult> {
+  try {
     await requireAdmin(passcode)
     const explicit = await readInventory()
     const inventory: BankAvailability[] = []
@@ -235,6 +253,10 @@ export async function setBankAvailabilityAdmin(
     return { ok: false, error: "The pool could not be updated. Please try again." }
   }
 }
+
+export type AllocationResult =
+  | { ok: true; remaining: number; capacity: number }
+  | { ok: false; error: string }
 
 /**
  * Atomically reserve one account slot from a bank's currency pool. Returns an

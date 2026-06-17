@@ -26,6 +26,7 @@ import {
 import {
   useGateway,
   ACCOUNT_TYPES,
+  PARTNER_BANKS,
   partnerBankByKey,
   banksForCurrency,
   suggestedBankFor,
@@ -38,12 +39,6 @@ import { generateIban, formatIban, countrySupportsIban } from "@/lib/iban"
 import { useLedger } from "@/lib/ledger-store"
 import { useActivityLog } from "@/components/activity-tracker"
 import { BankInventoryManager } from "@/components/admin/bank-inventory-manager"
-import {
-  getBankAvailabilityForCurrency as getBankAvailability,
-  allocateBankSlotAdmin,
-} from "@/app/actions/bank-inventory"
-import { type BankAvailability } from "@/lib/partner-banks"
-import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { toast } from "sonner"
 
 const formatCurrency = (value: number, currency: string) =>
@@ -125,36 +120,14 @@ export function AdminGatewaySection() {
     [accounts],
   )
 
-  const refreshApproveAvailability = async (currency: string) => {
-    setLoadingAvailability(true)
-    const rows = await getBankAvailability(currency)
-    const map = new Map<string, BankAvailability>()
-    for (const row of rows) map.set(row.bankKey, row)
-    setApproveAvailability(map)
-    setLoadingAvailability(false)
-    return map
-  }
-
-  const openApprove = async (account: GatewayAccount) => {
+  const openApprove = (account: GatewayAccount) => {
     setApproveTarget(account)
-    setBankKey("")
-    const map = await refreshApproveAvailability(account.currency)
-    // Default to the client's preferred bank when it is available (enabled with
-    // remaining capacity), otherwise the first available bank for the currency.
-    const isAvailable = (key?: string) => {
-      if (!key) return false
-      const row = map.get(key)
-      return !!row && row.enabled && row.remaining > 0
-    }
+    // Default to the client's preferred bank if it supports the currency,
+    // otherwise the suggested correspondent for that currency.
     const preferred = partnerBankByKey(account.preferredBankKey)
-    const suggested = suggestedBankFor(account.currency)
-    const firstAvailable = banksForCurrency(account.currency).find((b) => isAvailable(b.key))
-    const usable =
-      preferred && isAvailable(preferred.key)
-        ? preferred.key
-        : isAvailable(suggested.key)
-          ? suggested.key
-          : (firstAvailable?.key ?? "")
+    const usable = preferred?.currencies.includes(account.currency)
+      ? preferred.key
+      : suggestedBankFor(account.currency).key
     setBankKey(usable)
   }
 
@@ -258,18 +231,12 @@ export function AdminGatewaySection() {
     setFundTarget(null)
   }
 
-  // Banks the admin may route this account to: supports the currency AND is
-  // enabled with remaining capacity. Banks that are disabled or exhausted are
-  // still listed but disabled in the picker so the constraint is transparent.
   const eligibleBanks = approveTarget
-    ? banksForCurrency(approveTarget.currency).map((bank) => {
-        const row = approveAvailability.get(bank.key)
-        const enabled = row?.enabled ?? false
-        const remaining = row?.remaining ?? 0
-        return { bank, enabled, remaining, available: enabled && remaining > 0 }
-      })
+    ? (() => {
+        const supporting = banksForCurrency(approveTarget.currency)
+        return supporting.length ? supporting : PARTNER_BANKS
+      })()
     : []
-  const hasAvailableBank = eligibleBanks.some((b) => b.available)
 
   return (
     <>
@@ -446,33 +413,18 @@ export function AdminGatewaySection() {
               </DialogHeader>
               <div className="space-y-2 py-2">
                 <Label>Partner bank</Label>
-                <Select value={bankKey} onValueChange={setBankKey} disabled={loadingAvailability}>
+                <Select value={bankKey} onValueChange={setBankKey}>
                   <SelectTrigger>
-                    <SelectValue
-                      placeholder={
-                        loadingAvailability ? "Checking availability…" : "Select a partner bank"
-                      }
-                    />
+                    <SelectValue placeholder="Select a partner bank" />
                   </SelectTrigger>
                   <SelectContent>
-                    {eligibleBanks.map(({ bank, available, enabled, remaining }) => (
-                      <SelectItem key={bank.key} value={bank.key} disabled={!available}>
-                        {bank.name} — {bank.country} ({bank.bic}) ·{" "}
-                        {!enabled
-                          ? "disabled"
-                          : remaining > 0
-                            ? `${remaining} left`
-                            : "no capacity"}
+                    {eligibleBanks.map((b) => (
+                      <SelectItem key={b.key} value={b.key}>
+                        {b.name} — {b.country} ({b.bic})
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                {!loadingAvailability && !hasAvailableBank && (
-                  <p className="text-xs text-destructive">
-                    No partner bank currently has available capacity for {approveTarget.currency}.
-                    Enable a bank or add capacity in Partner Bank Availability above.
-                  </p>
-                )}
                 {bankKey && (
                   <p className="text-xs text-muted-foreground">
                     {countrySupportsIban(partnerBankByKey(bankKey)?.countryCode)
@@ -482,11 +434,11 @@ export function AdminGatewaySection() {
                 )}
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setApproveTarget(null)} disabled={approving}>
+                <Button variant="outline" onClick={() => setApproveTarget(null)}>
                   Cancel
                 </Button>
-                <Button onClick={confirmApprove} disabled={!bankKey || approving || loadingAvailability}>
-                  {approving ? "Allocating…" : "Approve & assign"}
+                <Button onClick={confirmApprove} disabled={!bankKey}>
+                  Approve &amp; assign
                 </Button>
               </DialogFooter>
             </>

@@ -6,44 +6,7 @@
 // from both client components and server actions (e.g. the account-inventory
 // allocation logic). The client gateway store re-exports everything here so
 // existing `@/lib/gateway-store` imports continue to work unchanged.
-//
-// Account-inventory types and the default pool capacity also live here, because
-// the inventory server-action module is "use server" and may only export async
-// functions — it cannot export constants, interfaces, or type aliases.
 // ---------------------------------------------------------------------------
-
-/** Default issuable-account capacity for a bank+currency with no explicit row. */
-export const DEFAULT_BANK_CAPACITY = 25
-
-/** A persisted inventory row for a single bank+currency account pool. */
-export interface BankInventoryRow {
-  bankKey: string
-  currency: string
-  enabled: boolean
-  capacity: number
-  allocated: number
-}
-
-/** A bank's availability for a specific currency, resolved for the UI. */
-export interface BankAvailability {
-  bankKey: string
-  currency: string
-  enabled: boolean
-  capacity: number
-  allocated: number
-  remaining: number
-  available: boolean // enabled AND remaining > 0
-}
-
-/** Result of an admin inventory read/update. */
-export type BankInventoryResult =
-  | { ok: true; inventory: BankAvailability[] }
-  | { ok: false; error: string }
-
-/** Result of reserving one account slot at approval time. */
-export type AllocationResult =
-  | { ok: true; remaining: number; capacity: number }
-  | { ok: false; error: string }
 
 // The principal partner banks the gateway routes through. Each carries the BIC
 // stem and the currencies it is the natural correspondent for, so the admin

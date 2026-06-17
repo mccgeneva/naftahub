@@ -15,10 +15,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
-import { PARTNER_BANKS, partnerBankByKey, type BankRegion, BANK_REGIONS, type BankAvailability } from "@/lib/partner-banks"
+import { PARTNER_BANKS, partnerBankByKey, type BankRegion, BANK_REGIONS } from "@/lib/partner-banks"
 import {
   getBankInventoryAdmin,
   setBankAvailabilityAdmin,
+  type BankAvailability,
 } from "@/app/actions/bank-inventory"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
