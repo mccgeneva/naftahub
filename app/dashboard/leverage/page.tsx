@@ -392,6 +392,20 @@ export default function LeveragePage() {
     () => activeInstruments.find((i) => i.id === pledgedInstrumentId),
     [activeInstruments, pledgedInstrumentId],
   )
+  // Instruments currently pledged to a live or in-flight leverage line, so the
+  // collateral list can flag which ones are already committed vs. available.
+  const pledgedInstrumentIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const r of requests) {
+      if (
+        r.pledgedInstrumentId &&
+        (r.status === "approved" || r.status === "switchoff_pending" || r.status === "pending")
+      ) {
+        ids.add(r.pledgedInstrumentId)
+      }
+    }
+    return ids
+  }, [requests])
 
   // Live clock so accrued interest ticks up while the page is open.
   const [now, setNow] = useState(() => Date.now())
@@ -1036,6 +1050,65 @@ export default function LeveragePage() {
                       </div>
                     )
                   })}
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {/* Bank instrument collateral — approved/active instruments (any of
+              EUR/USD/GBP/CHF) that can back a leverage line. Surfaced here so
+              the client can see, per currency, what collateral is available and
+              what is already pledged to a line. */}
+          {activeInstruments.length > 0 ? (
+            <Card className="border-border bg-card">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Banknote className="h-4 w-4 text-primary" />
+                  Bank Instrument Collateral
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Your active bank instruments eligible to fund a leverage line. Pledge one from the
+                  Request Leverage tab using its face value as equity.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {activeInstruments.map((inst) => {
+                  const pledged = pledgedInstrumentIds.has(inst.id)
+                  return (
+                    <div
+                      key={inst.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-secondary/40 p-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-foreground">
+                          {inst.type} · {inst.id}
+                        </p>
+                        <p className="truncate text-[11px] text-muted-foreground">
+                          {inst.issuer} · {inst.typeFull}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-foreground">
+                            {formatMoney(inst.faceValue, inst.currency)}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            Face value · {inst.currency}
+                          </p>
+                        </div>
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            pledged
+                              ? "border-primary/30 text-primary"
+                              : "border-green-500/30 text-green-500",
+                          )}
+                        >
+                          {pledged ? "Pledged" : "Available"}
+                        </Badge>
+                      </div>
+                    </div>
+                  )
+                })}
               </CardContent>
             </Card>
           ) : null}
