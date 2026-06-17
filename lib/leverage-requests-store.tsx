@@ -98,6 +98,10 @@ export interface LeverageRequest {
   interestRate: number // annual debit interest rate on the borrowed amount
   instrumentType: string // asset class to be traded
   notes?: string
+  // When the funding account is "instruments", the specific active bank
+  // instrument (SBLC / BG / MTN) pledged as collateral for this line.
+  pledgedInstrumentId?: string
+  pledgedInstrumentLabel?: string
   status: LeverageRequestStatus
   submittedAt: string
   decidedAt?: string // when the activation request was approved/rejected
