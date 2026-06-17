@@ -7,18 +7,19 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
+import { useInstrumentRequests } from "@/lib/instrument-requests-store"
 
-const instruments: {
-  id: string
-  type: string
-  typeFull: string
-  issuer: string
-  faceValue: string
-  status: string
-  expiryDate: string
-  daysRemaining: number
-  rating: string
-}[] = []
+const currencySymbols: Record<string, string> = {
+  EUR: "€",
+  USD: "$",
+  GBP: "£",
+  CHF: "CHF ",
+}
+
+function formatFaceValue(amount: number, currency: string): string {
+  const symbol = currencySymbols[currency] || `${currency} `
+  return `${symbol}${amount.toLocaleString("en-US")}`
+}
 
 const typeColors = {
   SBLC: "bg-blue-500/10 text-blue-400 border-blue-500/20",
@@ -33,6 +34,7 @@ const statusIcons = {
 }
 
 export function Instruments() {
+  const { instruments } = useInstrumentRequests()
   return (
     <Card className="bg-card border-border">
       <CardHeader className="flex flex-row items-center justify-between">
@@ -98,7 +100,7 @@ export function Instruments() {
                   </div>
                   <div className="text-right">
                     <p className="text-lg font-bold text-foreground">
-                      {instrument.faceValue}
+                      {formatFaceValue(instrument.faceValue, instrument.currency)}
                     </p>
                     <div className="flex items-center justify-end gap-1">
                       <StatusIcon

@@ -45,6 +45,8 @@ import {
 } from "@/lib/dof-requests-store"
 import { getCorrespondentBank } from "@/lib/swift-gpi"
 import { SwiftGpiTracker } from "@/components/swift-gpi-tracker"
+import { VerifiedBankField } from "@/components/verified-bank-field"
+import { validateBic } from "@/lib/iban-swift"
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "AED", "SGD"]
 const SETTLEMENT_METHODS: { value: DOFSettlementMethod; label: string; hint: string }[] = [
@@ -160,19 +162,24 @@ export default function InstitutionalPage() {
   const isSecurities = form.settlementMethod !== "SWIFT"
 
   const amountNumber = Number.parseFloat(form.amount.replace(/,/g, ""))
+  const bicCheck = validateBic(form.originatorBankBic)
   const canSubmit =
     Number.isFinite(amountNumber) &&
     amountNumber > 0 &&
     form.purpose.trim().length > 0 &&
     form.originatorName.trim().length > 0 &&
     form.originatorBank.trim().length > 0 &&
-    form.originatorBankBic.trim().length > 0
+    bicCheck.valid
 
   const handleSubmit = () => {
     if (!canSubmit) {
-      toast.error("Missing required details", {
+      const bicProblem =
+        form.originatorBankBic.trim().length > 0 && !bicCheck.valid
+          ? ` ${bicCheck.error}.`
+          : ""
+      toast.error("Missing or invalid details", {
         description:
-          "Please provide the amount, purpose, and originating institution (name, bank, and BIC).",
+          `Please provide the amount, purpose, and originating institution (name, bank, and a valid SWIFT/BIC).${bicProblem}`,
       })
       return
     }
@@ -425,15 +432,21 @@ export default function InstitutionalPage() {
                   placeholder="e.g. Emirates NBD"
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="originatorBankBic">Sending Bank BIC / SWIFT *</Label>
-                <Input
-                  id="originatorBankBic"
-                  value={form.originatorBankBic}
-                  onChange={(e) => set("originatorBankBic", e.target.value)}
-                  placeholder="e.g. EBILAEAD"
-                />
-              </div>
+              <VerifiedBankField
+                id="originatorBankBic"
+                label="Sending Bank BIC / SWIFT"
+                kind="bic"
+                required
+                maxLength={11}
+                placeholder="e.g. EBILAEAD"
+                value={form.originatorBankBic}
+                onChange={(v) => set("originatorBankBic", v)}
+                onResolved={(info) => {
+                  if (info?.country && !form.originatorCountry.trim()) {
+                    set("originatorCountry", info.country)
+                  }
+                }}
+              />
               <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="originatorAccount">Sending Account / IBAN</Label>
                 <Input

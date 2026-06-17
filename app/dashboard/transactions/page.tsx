@@ -66,6 +66,7 @@ type Transaction = {
   amountValue: number
   currency: string
   fee: string
+  feeValue: number
   counterparty: string
   account: string
   category: string
@@ -110,9 +111,21 @@ export default function TransactionsPage() {
   const { entries } = useLedger()
 
   // Build the transaction list from the persisted ledger so every recorded
-  // incoming payment (and outgoing payment) appears here automatically.
+  // incoming payment (and outgoing payment) appears here automatically. The 2%
+  // platform fee is posted as a separate "<id>-FEE" debit at approval time; we
+  // surface it both as its own row AND inline on the principal payment it
+  // belongs to, so the payment and fee details read clearly together.
+  const feeByPrincipal = new Map<string, { amount: number; currency: string }>()
+  for (const e of entries) {
+    if (e.id.endsWith("-FEE")) {
+      feeByPrincipal.set(e.id.slice(0, -"-FEE".length), { amount: e.amount, currency: e.currency })
+    }
+  }
+
   const transactions: Transaction[] = entries.map((e) => {
     const d = new Date(e.date)
+    const isFeeRow = e.id.endsWith("-FEE")
+    const linkedFee = feeByPrincipal.get(e.id)
     return {
       id: e.id,
       type: "payment",
@@ -120,10 +133,18 @@ export default function TransactionsPage() {
       amount: formatAmount(e.amount, e.currency),
       amountValue: e.amount,
       currency: e.currency,
-      fee: formatAmount(0, e.currency),
+      // Show the linked 2% platform fee inline on the principal payment row.
+      fee: linkedFee ? formatAmount(linkedFee.amount, linkedFee.currency) : formatAmount(0, e.currency),
+      feeValue: linkedFee?.amount ?? 0,
       counterparty: e.counterparty,
       account: e.account || "MCC Capital",
-      category: e.category || (e.direction === "credit" ? "Incoming Transfer" : "Outgoing Payment"),
+      category:
+        e.category ||
+        (isFeeRow
+          ? "Platform Fee (2%)"
+          : e.direction === "credit"
+          ? "Incoming Transfer"
+          : "Outgoing Payment"),
       status: e.status === "completed" ? "completed" : "pending",
       date: Number.isNaN(d.getTime()) ? e.date : d.toISOString().split("T")[0],
       time: Number.isNaN(d.getTime())
@@ -505,14 +526,11 @@ export default function TransactionsPage() {
                           {txn.direction === "outgoing" && "-"}
                           {txn.amount}
                         </p>
-                        {txn.fee !== "€0.00" &&
-                          txn.fee !== "$0.00" &&
-                          txn.fee !== "£0.00" &&
-                          txn.fee !== "CHF 0.00" && (
-                            <p className="text-[10px] text-muted-foreground">
-                              Fee: {txn.fee}
-                            </p>
-                          )}
+                        {txn.feeValue > 0 && (
+                          <p className="text-[10px] text-muted-foreground">
+                            +2% fee: {txn.fee}
+                          </p>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Badge
@@ -571,26 +589,37 @@ export default function TransactionsPage() {
           </DialogHeader>
           {selectedTxn && (
             <div className="space-y-3">
-              {[
-                { label: "Transaction ID", value: selectedTxn.id },
-                { label: "Type", value: selectedTxn.type },
-                { label: "Direction", value: selectedTxn.direction },
-                { label: "Counterparty", value: selectedTxn.counterparty },
-                { label: "Account", value: selectedTxn.account },
-                { label: "Amount", value: selectedTxn.amount },
-                { label: "Fee", value: selectedTxn.fee },
-                { label: "Status", value: selectedTxn.status },
-              ].map((row) => (
-                <div
-                  key={row.label}
-                  className="flex items-center justify-between gap-4 border-b border-border pb-2 last:border-0"
-                >
-                  <span className="text-xs text-muted-foreground">{row.label}</span>
-                  <span className="text-sm font-medium text-foreground capitalize text-right break-all">
-                    {row.value || "—"}
-                  </span>
-                </div>
-              ))}
+              {(() => {
+                const linkedFee = feeByPrincipal.get(selectedTxn.id)
+                const showTotal = selectedTxn.direction === "outgoing" && !!linkedFee
+                const total = selectedTxn.amountValue + (linkedFee?.amount ?? 0)
+                const rows = [
+                  { label: "Transaction ID", value: selectedTxn.id },
+                  { label: "Type", value: selectedTxn.type },
+                  { label: "Direction", value: selectedTxn.direction },
+                  { label: "Counterparty", value: selectedTxn.counterparty },
+                  { label: "Account", value: selectedTxn.account },
+                  { label: "Amount", value: selectedTxn.amount },
+                  ...(linkedFee
+                    ? [{ label: "Platform Fee (2%)", value: selectedTxn.fee }]
+                    : []),
+                  ...(showTotal
+                    ? [{ label: "Total Debited", value: formatAmount(total, selectedTxn.currency) }]
+                    : []),
+                  { label: "Status", value: selectedTxn.status },
+                ]
+                return rows.map((row) => (
+                  <div
+                    key={row.label}
+                    className="flex items-center justify-between gap-4 border-b border-border pb-2 last:border-0"
+                  >
+                    <span className="text-xs text-muted-foreground">{row.label}</span>
+                    <span className="text-sm font-medium text-foreground capitalize text-right break-all">
+                      {row.value || "—"}
+                    </span>
+                  </div>
+                ))
+              })()}
               <Button
                 className="w-full"
                 variant="outline"

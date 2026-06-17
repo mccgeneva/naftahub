@@ -1,6 +1,7 @@
 import { DashboardSidebar } from "@/components/dashboard/sidebar"
 import { DashboardHeader } from "@/components/dashboard/header"
 import { MarketTicker } from "@/components/dashboard/market-ticker"
+import { BackToTop } from "@/components/dashboard/back-to-top"
 import { ActivityTracker } from "@/components/activity-tracker"
 import { SessionGuard } from "@/components/session-guard"
 import { DemoSeedGate } from "@/components/demo-seed-gate"
@@ -8,6 +9,7 @@ import { BeneficiariesProvider } from "@/lib/beneficiaries-store"
 import { LedgerProvider } from "@/lib/ledger-store"
 import { PaymentRequestsProvider } from "@/lib/payment-requests-store"
 import { InstrumentRequestsProvider } from "@/lib/instrument-requests-store"
+import { MonetizationRequestsProvider } from "@/lib/monetization-requests-store"
 import { PPPRequestsProvider } from "@/lib/ppp-requests-store"
 import { DOFRequestsProvider } from "@/lib/dof-requests-store"
 import { DTCRequestsProvider } from "@/lib/dtc-requests-store"
@@ -28,6 +30,7 @@ export default function DashboardLayout({
       <LedgerProvider>
       <PaymentRequestsProvider>
       <InstrumentRequestsProvider>
+      <MonetizationRequestsProvider>
       <PPPRequestsProvider>
       <DOFRequestsProvider>
       <DTCRequestsProvider>
@@ -48,6 +51,7 @@ export default function DashboardLayout({
           <MarketTicker />
           <main className="flex-1 overflow-y-auto p-4 md:p-6">{children}</main>
         </div>
+        <BackToTop />
       </div>
       </GatewayProvider>
       </TreasuryProvider>
@@ -56,6 +60,7 @@ export default function DashboardLayout({
       </DTCRequestsProvider>
       </DOFRequestsProvider>
       </PPPRequestsProvider>
+      </MonetizationRequestsProvider>
       </InstrumentRequestsProvider>
       </PaymentRequestsProvider>
       </LedgerProvider>

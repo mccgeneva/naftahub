@@ -23,6 +23,9 @@ import {
   Landmark,
   Copy,
   ShieldCheck,
+  Banknote,
+  Percent,
+  Globe,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -59,7 +62,39 @@ import { useActivityLog } from "@/components/activity-tracker"
 import { exportToCsv } from "@/lib/export-utils"
 import { toast } from "sonner"
 import { useInstrumentRequests, type Instrument } from "@/lib/instrument-requests-store"
+import {
+  useMonetizationRequests,
+  type MonetizationStructure,
+} from "@/lib/monetization-requests-store"
 import { generateInstrumentCertificate } from "@/lib/certificate-pdf"
+
+const MONETIZATION_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "AED", "SGD"]
+
+const MONETIZATION_STRUCTURES: {
+  value: MonetizationStructure
+  label: string
+  hint: string
+  defaultRate: number
+}[] = [
+  {
+    value: "CreditLine",
+    label: "Non-recourse credit line",
+    hint: "Loan / credit facility secured against the instrument (no recourse to the holder).",
+    defaultRate: 65,
+  },
+  {
+    value: "Discounting",
+    label: "Discounting / outright purchase",
+    hint: "The monetizer discounts and purchases the instrument for immediate proceeds.",
+    defaultRate: 80,
+  },
+  {
+    value: "CollateralTransfer",
+    label: "Collateral transfer (MT760)",
+    hint: "Instrument is collateral-transferred via SWIFT MT760 for credit enhancement.",
+    defaultRate: 50,
+  },
+]
 
 const BANKING_DETAILS = [
   { label: "Bank", value: "Barclays Bank PLC" },
@@ -132,6 +167,7 @@ export default function InstrumentsPage() {
   const [filterStatus, setFilterStatus] = useState("all")
   const { instruments, addInstrument, cancelInstrument, deleteInstrument } =
     useInstrumentRequests()
+  const { addRequest: addMonetizationRequest } = useMonetizationRequests()
 
   // New trade form state
   const [tradeType, setTradeType] = useState("")
@@ -149,6 +185,22 @@ export default function InstrumentsPage() {
     action: "Assign/Transfer" | "Monetize"
   } | null>(null)
   const [actionDestination, setActionDestination] = useState("")
+
+  // Dedicated bank-instrument monetization request (MT760, advance rate, etc.)
+  const [monetizeTarget, setMonetizeTarget] = useState<Instrument | null>(null)
+  const [monetizeForm, setMonetizeForm] = useState({
+    structure: "CreditLine" as MonetizationStructure,
+    advanceRate: "65",
+    proceedsCurrency: "EUR",
+    monetizationPlatform: "",
+    receivingBank: "MCC Capital Master Account",
+    receivingBankBic: "",
+    mt760Ref: "",
+    mt799Ref: "",
+    pofReference: "",
+    bclReference: "",
+    notes: "",
+  })
 
   const logActivity = useActivityLog()
 
@@ -298,29 +350,121 @@ export default function InstrumentsPage() {
     instrument: Instrument,
     action: "Assign/Transfer" | "Monetize",
   ) => {
+    if (action === "Monetize") {
+      const defaultStructure = MONETIZATION_STRUCTURES[0]
+      setMonetizeForm({
+        structure: defaultStructure.value,
+        advanceRate: String(defaultStructure.defaultRate),
+        proceedsCurrency: MONETIZATION_CURRENCIES.includes(instrument.currency)
+          ? instrument.currency
+          : "EUR",
+        monetizationPlatform: "",
+        receivingBank: "MCC Capital Master Account",
+        receivingBankBic: "",
+        mt760Ref: "",
+        mt799Ref: "",
+        pofReference: "",
+        bclReference: "",
+        notes: "",
+      })
+      setMonetizeTarget(instrument)
+      return
+    }
     setActionDestination("")
     setActionTarget({ instrument, action })
+  }
+
+  const setMon = <K extends keyof typeof monetizeForm>(
+    key: K,
+    value: (typeof monetizeForm)[K],
+  ) => setMonetizeForm((prev) => ({ ...prev, [key]: value }))
+
+  const monetizeAdvanceRate = Number.parseFloat(monetizeForm.advanceRate)
+  const monetizeProceeds =
+    monetizeTarget && Number.isFinite(monetizeAdvanceRate)
+      ? Math.round(monetizeTarget.faceValue * (monetizeAdvanceRate / 100))
+      : 0
+  const canSubmitMonetization =
+    !!monetizeTarget &&
+    Number.isFinite(monetizeAdvanceRate) &&
+    monetizeAdvanceRate > 0 &&
+    monetizeAdvanceRate <= 100
+
+  const confirmMonetization = () => {
+    if (!monetizeTarget) return
+    if (!canSubmitMonetization) {
+      toast.error("Check the advance rate", {
+        description: "Enter a loan-to-value / advance rate between 1 and 100 percent.",
+      })
+      return
+    }
+    const instrument = monetizeTarget
+    const structureLabel =
+      MONETIZATION_STRUCTURES.find((s) => s.value === monetizeForm.structure)?.label ??
+      monetizeForm.structure
+
+    const created = addMonetizationRequest({
+      instrumentId: instrument.id,
+      instrumentType: instrument.type,
+      instrumentTypeFull: instrument.typeFull,
+      issuer: instrument.issuer,
+      faceValue: instrument.faceValue,
+      currency: instrument.currency,
+      structure: monetizeForm.structure,
+      advanceRatePercent: monetizeAdvanceRate,
+      grossProceeds: monetizeProceeds,
+      proceedsCurrency: monetizeForm.proceedsCurrency,
+      monetizationPlatform: monetizeForm.monetizationPlatform.trim(),
+      receivingBank: monetizeForm.receivingBank.trim(),
+      receivingBankBic: monetizeForm.receivingBankBic.trim().toUpperCase(),
+      mt760Ref: monetizeForm.mt760Ref.trim(),
+      mt799Ref: monetizeForm.mt799Ref.trim(),
+      pofReference: monetizeForm.pofReference.trim(),
+      bclReference: monetizeForm.bclReference.trim(),
+      notes: monetizeForm.notes.trim(),
+    })
+
+    toast.success("Monetization request submitted", {
+      description: `Request ${created.id} for ${instrument.id} is now pending Administrator authorization.`,
+    })
+    logActivity({
+      action: `Requested monetization of ${instrument.type} ${instrument.id} (${formatCurrency(instrument.faceValue, instrument.currency)})`,
+      category: "Bank Instruments",
+      details: {
+        summary: `Client submitted a monetization request ${created.id} for the ${instrument.typeFull} (${instrument.type}) ${instrument.id} issued by ${instrument.issuer}, face value ${formatCurrency(instrument.faceValue, instrument.currency)}. Structure: ${structureLabel} at ${monetizeAdvanceRate}% LTV for gross proceeds of ${formatCurrency(monetizeProceeds, monetizeForm.proceedsCurrency)}. UETR ${created.uetr}.`,
+        referenceId: created.id,
+        uetr: created.uetr,
+        instrumentRef: instrument.id,
+        instrumentType: `${instrument.type} — ${instrument.typeFull}`,
+        faceValue: formatCurrency(instrument.faceValue, instrument.currency),
+        structure: structureLabel,
+        advanceRate: `${monetizeAdvanceRate}%`,
+        grossProceeds: formatCurrency(monetizeProceeds, monetizeForm.proceedsCurrency),
+        monetizationPlatform: monetizeForm.monetizationPlatform.trim() || "—",
+        mt760: monetizeForm.mt760Ref.trim() || "(pending)",
+        decision: "Submitted",
+      },
+    })
+
+    setMonetizeTarget(null)
   }
 
   const confirmInstrumentAction = () => {
     if (!actionTarget) return
     const { instrument, action } = actionTarget
-    const isMonetize = action === "Monetize"
     const destinationLabel = actionDestination.trim()
 
     logActivity({
       action: `Requested ${action} for ${instrument.type} ${instrument.id} (${formatCurrency(instrument.faceValue, instrument.currency)})`,
       category: "Bank Instruments",
       details: {
-        summary: isMonetize
-          ? `Client submitted a monetization request for the ${instrument.typeFull} (${instrument.type}) ${instrument.id} with a face value of ${formatCurrency(instrument.faceValue, instrument.currency)}${destinationLabel ? `, targeting ${destinationLabel}` : ""}. Pending desk review.`
-          : `Client submitted an assignment/transfer request for the ${instrument.typeFull} (${instrument.type}) ${instrument.id} with a face value of ${formatCurrency(instrument.faceValue, instrument.currency)}${destinationLabel ? ` to ${destinationLabel}` : ""}. Pending desk review.`,
+        summary: `Client submitted an assignment/transfer request for the ${instrument.typeFull} (${instrument.type}) ${instrument.id} with a face value of ${formatCurrency(instrument.faceValue, instrument.currency)}${destinationLabel ? ` to ${destinationLabel}` : ""}. Pending desk review.`,
         referenceId: instrument.id,
         instrumentType: `${instrument.type} — ${instrument.typeFull}`,
         faceValue: formatCurrency(instrument.faceValue, instrument.currency),
         issuingBank: instrument.issuer,
         requestType: action,
-        [isMonetize ? "monetizationTarget" : "transferTo"]: destinationLabel || "—",
+        transferTo: destinationLabel || "—",
         status: "Submitted for review",
       },
     })
@@ -1136,19 +1280,15 @@ export default function InstrumentsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Assign/Transfer & Monetize dialog */}
+      {/* Assign / Transfer dialog */}
       <Dialog open={!!actionTarget} onOpenChange={(open) => !open && setActionTarget(null)}>
         <DialogContent className="sm:max-w-md">
           {actionTarget && (
             <>
               <DialogHeader>
-                <DialogTitle>
-                  {actionTarget.action === "Monetize" ? "Monetize Instrument" : "Assign / Transfer Instrument"}
-                </DialogTitle>
+                <DialogTitle>Assign / Transfer Instrument</DialogTitle>
                 <DialogDescription>
-                  {actionTarget.action === "Monetize"
-                    ? `Submit a monetization request for ${actionTarget.instrument.id}. Our instruments desk will review and respond.`
-                    : `Submit an assignment or transfer request for ${actionTarget.instrument.id}. Our instruments desk will review and respond.`}
+                  {`Submit an assignment or transfer request for ${actionTarget.instrument.id}. Our instruments desk will review and respond.`}
                 </DialogDescription>
               </DialogHeader>
               <div className="rounded-lg border border-border bg-secondary/30 p-3">
@@ -1161,19 +1301,13 @@ export default function InstrumentsPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="action-destination">
-                  {actionTarget.action === "Monetize"
-                    ? "Monetization platform / program (optional)"
-                    : "Transfer to (beneficiary or bank, optional)"}
+                  Transfer to (beneficiary or bank, optional)
                 </Label>
                 <Input
                   id="action-destination"
                   value={actionDestination}
                   onChange={(e) => setActionDestination(e.target.value)}
-                  placeholder={
-                    actionTarget.action === "Monetize"
-                      ? "e.g. PPP / Yield Program"
-                      : "e.g. Beneficiary name or receiving bank"
-                  }
+                  placeholder="e.g. Beneficiary name or receiving bank"
                 />
               </div>
               <DialogFooter>
@@ -1181,6 +1315,206 @@ export default function InstrumentsPage() {
                   Cancel
                 </Button>
                 <Button onClick={confirmInstrumentAction}>Submit Request</Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Bank Instrument Monetization dialog */}
+      <Dialog open={!!monetizeTarget} onOpenChange={(open) => !open && setMonetizeTarget(null)}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+          {monetizeTarget && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Banknote className="h-5 w-5 text-primary" />
+                  Monetize Bank Instrument
+                </DialogTitle>
+                <DialogDescription>
+                  {`Raise liquidity against ${monetizeTarget.id} (${monetizeTarget.typeFull}). The request is verified against its SWIFT messaging and authorized by the Administrator before proceeds are credited.`}
+                </DialogDescription>
+              </DialogHeader>
+
+              {/* Instrument summary */}
+              <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3">
+                {[
+                  ["Instrument", `${monetizeTarget.type} — ${monetizeTarget.typeFull}`],
+                  ["Issuing Bank", monetizeTarget.issuer],
+                  [
+                    "Face Value",
+                    formatCurrency(monetizeTarget.faceValue, monetizeTarget.currency),
+                  ],
+                ].map(([label, value]) => (
+                  <div key={label} className="bg-card p-3">
+                    <p className="text-xs text-muted-foreground">{label}</p>
+                    <p className="mt-0.5 text-sm font-medium text-foreground break-words">{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Structure & economics */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="mon-structure">Monetization Structure *</Label>
+                  <Select
+                    value={monetizeForm.structure}
+                    onValueChange={(v) => {
+                      const next = MONETIZATION_STRUCTURES.find((s) => s.value === v)
+                      setMonetizeForm((prev) => ({
+                        ...prev,
+                        structure: v as MonetizationStructure,
+                        advanceRate: next ? String(next.defaultRate) : prev.advanceRate,
+                      }))
+                    }}
+                  >
+                    <SelectTrigger id="mon-structure">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MONETIZATION_STRUCTURES.map((s) => (
+                        <SelectItem key={s.value} value={s.value}>
+                          {s.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {MONETIZATION_STRUCTURES.find((s) => s.value === monetizeForm.structure)?.hint}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="mon-rate">Advance Rate / LTV (%) *</Label>
+                  <div className="relative">
+                    <Percent className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="mon-rate"
+                      inputMode="decimal"
+                      className="pl-9"
+                      value={monetizeForm.advanceRate}
+                      onChange={(e) => setMon("advanceRate", e.target.value)}
+                      placeholder="e.g. 65"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="mon-currency">Proceeds Currency *</Label>
+                  <Select
+                    value={monetizeForm.proceedsCurrency}
+                    onValueChange={(v) => setMon("proceedsCurrency", v)}
+                  >
+                    <SelectTrigger id="mon-currency">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MONETIZATION_CURRENCIES.map((c) => (
+                        <SelectItem key={c} value={c}>
+                          {c}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 sm:col-span-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">
+                      Estimated gross proceeds ({monetizeForm.advanceRate || "0"}% of face value)
+                    </span>
+                    <span className="text-lg font-semibold text-foreground">
+                      {formatCurrency(monetizeProceeds, monetizeForm.proceedsCurrency)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Coordination */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="mon-platform">Monetizer / Program (optional)</Label>
+                  <Input
+                    id="mon-platform"
+                    value={monetizeForm.monetizationPlatform}
+                    onChange={(e) => setMon("monetizationPlatform", e.target.value)}
+                    placeholder="e.g. PPP / Yield Program"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="mon-recv-bic">Receiving Bank BIC (optional)</Label>
+                  <Input
+                    id="mon-recv-bic"
+                    value={monetizeForm.receivingBankBic}
+                    onChange={(e) => setMon("receivingBankBic", e.target.value)}
+                    placeholder="e.g. BARCGB22"
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="mon-recv-bank">Receiving Bank</Label>
+                  <Input
+                    id="mon-recv-bank"
+                    value={monetizeForm.receivingBank}
+                    onChange={(e) => setMon("receivingBank", e.target.value)}
+                    placeholder="Bank receiving the monetization proceeds"
+                  />
+                </div>
+              </div>
+
+              {/* SWIFT messaging & documentation */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="mon-mt760">MT760 Reference</Label>
+                  <Input
+                    id="mon-mt760"
+                    value={monetizeForm.mt760Ref}
+                    onChange={(e) => setMon("mt760Ref", e.target.value)}
+                    placeholder="Guarantee / collateral transfer ref"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="mon-mt799">MT799 Reference</Label>
+                  <Input
+                    id="mon-mt799"
+                    value={monetizeForm.mt799Ref}
+                    onChange={(e) => setMon("mt799Ref", e.target.value)}
+                    placeholder="Pre-advice / RWA assurance ref"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="mon-pof">Proof of Funds (POF) Reference</Label>
+                  <Input
+                    id="mon-pof"
+                    value={monetizeForm.pofReference}
+                    onChange={(e) => setMon("pofReference", e.target.value)}
+                    placeholder="POF document reference"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="mon-bcl">Bank Comfort Letter (BCL) Reference</Label>
+                  <Input
+                    id="mon-bcl"
+                    value={monetizeForm.bclReference}
+                    onChange={(e) => setMon("bclReference", e.target.value)}
+                    placeholder="BCL document reference"
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="mon-notes">Notes (optional)</Label>
+                  <Input
+                    id="mon-notes"
+                    value={monetizeForm.notes}
+                    onChange={(e) => setMon("notes", e.target.value)}
+                    placeholder="Any additional coordination detail"
+                  />
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setMonetizeTarget(null)}>
+                  Cancel
+                </Button>
+                <Button onClick={confirmMonetization} disabled={!canSubmitMonetization}>
+                  <ShieldCheck className="mr-2 h-4 w-4" />
+                  Submit for Authorization
+                </Button>
               </DialogFooter>
             </>
           )}

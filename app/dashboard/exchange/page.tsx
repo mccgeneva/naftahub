@@ -80,18 +80,6 @@ const liveRates = [
   { pair: "EUR/CHF", rate: 0.9642, change: 0.08, trend: "up" },
 ]
 
-const recentExchanges: {
-  id: string
-  fromCurrency: string
-  toCurrency: string
-  fromAmount: number
-  toAmount: number
-  rate: number
-  status: string
-  date: string
-  time: string
-}[] = []
-
 const chartData = [
   { time: "00:00", rate: 1.0875 },
   { time: "04:00", rate: 1.0882 },
@@ -111,7 +99,35 @@ export default function ExchangePage() {
   const [lastUpdate, setLastUpdate] = useState(new Date())
   const [isExecuting, setIsExecuting] = useState(false)
   const logActivity = useActivityLog()
-  const { addReceipt, addDebit, balanceFor } = useLedger()
+  const { addReceipt, addDebit, balanceFor, entries } = useLedger()
+
+  // Derive the on-page "Recent Exchanges" list directly from the ledger so every
+  // executed conversion shows up here in real time. Each conversion posts a
+  // source debit (id = ref, category "Currency Exchange") and a target credit
+  // (id = `${ref}-RCV`); we pair them by reference to reconstruct the trade.
+  const recentExchanges = entries
+    .filter((e) => e.direction === "debit" && e.category === "Currency Exchange")
+    .map((debit) => {
+      const credit = entries.find((e) => e.id === `${debit.id}-RCV`)
+      const d = new Date(debit.date)
+      const rate = credit && debit.amount > 0 ? credit.amount / debit.amount : 0
+      return {
+        id: debit.id,
+        fromCurrency: debit.currency,
+        toCurrency: credit?.currency ?? "",
+        fromAmount: debit.amount,
+        toAmount: credit?.amount ?? 0,
+        rate: Number(rate.toFixed(4)),
+        status: debit.status === "completed" ? "completed" : "pending",
+        date: Number.isNaN(d.getTime()) ? debit.date : d.toISOString().split("T")[0],
+        time: Number.isNaN(d.getTime())
+          ? ""
+          : d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
+        sortKey: Number.isNaN(d.getTime()) ? 0 : d.getTime(),
+      }
+    })
+    .sort((a, b) => b.sortKey - a.sortKey)
+    .slice(0, 8)
 
   const currentRate = getRate(fromCurrency, toCurrency)
   const conversionFee = 0.004 // 0.4%

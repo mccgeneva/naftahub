@@ -1,7 +1,18 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { Send, ArrowUpRight, ArrowDownLeft, Users, Info, Wallet, Loader2 } from "lucide-react"
+import { useMemo, useState } from "react"
+import {
+  Send,
+  ArrowUpRight,
+  ArrowDownLeft,
+  Users,
+  Info,
+  Wallet,
+  ShieldCheck,
+  Clock,
+  CheckCircle2,
+  XCircle,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -23,10 +34,13 @@ import {
 } from "@/components/ui/select"
 import { useActivityLog } from "@/components/activity-tracker"
 import { useLedger } from "@/lib/ledger-store"
-import { sendTransfer, getMyTransfers, type TransferRecord } from "@/app/actions/transfers"
+import { usePaymentRequests } from "@/lib/payment-requests-store"
 import { toast } from "sonner"
 
 const currencySymbols: Record<string, string> = { EUR: "€", USD: "$", GBP: "£", CHF: "CHF" }
+
+// Internal transfers carry no platform fee (unlike external SWIFT payments).
+const TRANSFER_FEE_RATE = 0
 
 function formatCurrency(amount: number, currency: string): string {
   const symbol = currencySymbols[currency] || currency
@@ -37,92 +51,114 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })
 }
 
+const statusBadge: Record<string, { label: string; className: string; icon: typeof Clock }> = {
+  pending: {
+    label: "Pending approval",
+    className: "border-yellow-500/20 bg-yellow-500/10 text-yellow-500",
+    icon: Clock,
+  },
+  approved: {
+    label: "Approved",
+    className: "border-green-500/20 bg-green-500/10 text-green-500",
+    icon: CheckCircle2,
+  },
+  rejected: {
+    label: "Rejected",
+    className: "border-red-500/20 bg-red-500/10 text-red-500",
+    icon: XCircle,
+  },
+}
+
 export default function SendMoneyPage() {
   const logActivity = useActivityLog()
-  const { balanceFor, refreshTransfers } = useLedger()
+  const { balanceFor } = useLedger()
+  const { requests, addRequest } = usePaymentRequests()
 
-  const [recipientEmail, setRecipientEmail] = useState("")
+  const [recipient, setRecipient] = useState("")
   const [amount, setAmount] = useState("")
   const [currency, setCurrency] = useState("EUR")
   const [note, setNote] = useState("")
-  const [submitting, setSubmitting] = useState(false)
-
-  const [history, setHistory] = useState<TransferRecord[]>([])
-  const [loadingHistory, setLoadingHistory] = useState(true)
 
   const availableBalance = balanceFor(currency)
 
-  const loadHistory = async () => {
-    const rows = await getMyTransfers()
-    setHistory(rows)
-    setLoadingHistory(false)
-  }
-
-  useEffect(() => {
-    void loadHistory()
-  }, [])
+  // The history of transfers the customer has submitted is derived directly
+  // from the persisted payment-requests store, so rows never disappear on
+  // navigation and always reflect the latest Administrator decision.
+  const history = useMemo(
+    () =>
+      requests
+        .filter((r) => r.payeeSource === "Send Money (internal transfer)")
+        .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()),
+    [requests],
+  )
 
   const resetForm = () => {
-    setRecipientEmail("")
+    setRecipient("")
     setAmount("")
     setNote("")
   }
 
-  const handleSend = async () => {
+  const handleSubmit = () => {
     const amountValue = Number.parseFloat(amount)
-    const email = recipientEmail.trim().toLowerCase()
+    const to = recipient.trim()
 
-    if (!email) {
-      toast.error("Enter the recipient's registered email address")
+    if (!to) {
+      toast.error("Enter the recipient's name or registered email address")
       return
     }
     if (!Number.isFinite(amountValue) || amountValue <= 0) {
       toast.error("Enter a valid amount greater than 0")
       return
     }
-    if (amountValue > availableBalance) {
+
+    const feeValue = Math.round(amountValue * TRANSFER_FEE_RATE * 100) / 100
+    const totalDebit = amountValue + feeValue
+
+    // Soft pre-check. Funds are NOT moved here — they are only debited once an
+    // Administrator approves the request.
+    if (totalDebit > availableBalance) {
       toast.error("Insufficient balance", {
-        description: `Your available ${currency} balance is ${formatCurrency(availableBalance, currency)}.`,
+        description: `This transfer needs ${formatCurrency(totalDebit, currency)} but only ${formatCurrency(availableBalance, currency)} is available.`,
       })
       return
     }
 
-    setSubmitting(true)
-    try {
-      const result = await sendTransfer({
-        recipientEmail: email,
-        amount: amountValue,
-        currency,
-        note: note.trim() || undefined,
-      })
+    const requestId = `TRF-${new Date().getTime().toString().slice(-8)}`
+    const formatted = formatCurrency(amountValue, currency)
 
-      if (!result.ok) {
-        toast.error("Transfer failed", { description: result.error })
-        return
-      }
+    // Create a PENDING request. No ledger movement happens until an
+    // Administrator approves it — the customer cannot move funds directly.
+    addRequest({
+      id: requestId,
+      beneficiary: to,
+      beneficiaryCountry: "—",
+      iban: to,
+      swiftCode: "—",
+      reference: note.trim() || `Internal transfer to ${to}`,
+      notes: note.trim(),
+      currency,
+      amount: amountValue,
+      fee: feeValue,
+      total: totalDebit,
+      payeeSource: "Send Money (internal transfer)",
+    })
 
-      const formatted = formatCurrency(amountValue, currency)
-      toast.success(`Sent ${formatted}`, {
-        description: `${formatted} sent to ${result.transfer.counterpartyName} (ref ${result.transfer.id}).`,
-      })
-      logActivity({
-        action: `Sent internal transfer ${formatted}`,
-        category: "Transfers",
-        details: {
-          summary: `Instant P2P transfer of ${formatted} sent to ${result.transfer.counterpartyName} <${email}> (ref ${result.transfer.id}).`,
-          reference: result.transfer.id,
-          recipient: `${result.transfer.counterpartyName} <${email}>`,
-          amount: formatted,
-        },
-      })
+    logActivity({
+      action: `Submitted internal transfer of ${formatted} to ${to} for Administrator approval`,
+      category: "Transfers",
+      details: {
+        summary: `Submitted an internal transfer request of ${formatted} to "${to}" for mandatory Administrator approval. No funds have left the account yet — they will only be debited once the request is approved. Reference: ${requestId}.`,
+        reference: requestId,
+        recipient: to,
+        amount: formatted,
+        status: "Pending Administrator Approval",
+      },
+    })
 
-      resetForm()
-      // Refresh both the local history list and the global ledger so the
-      // sender's balance updates immediately.
-      await Promise.all([loadHistory(), refreshTransfers()])
-    } finally {
-      setSubmitting(false)
-    }
+    toast.success("Transfer submitted for approval", {
+      description: `Your transfer of ${formatted} to ${to} is pending Administrator approval. Funds will only be debited once it is approved.`,
+    })
+    resetForm()
   }
 
   return (
@@ -131,22 +167,23 @@ export default function SendMoneyPage() {
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-bold text-foreground">Send Money</h1>
         <p className="text-sm text-muted-foreground">
-          Instantly transfer funds to another MCC Capital account holder using their registered email address.
+          Submit an internal transfer to another MCC Capital account holder for Administrator approval.
         </p>
       </div>
 
-      {/* Info banner */}
+      {/* Approval notice */}
       <div className="flex items-start gap-3 rounded-lg border border-border bg-secondary/30 p-4">
-        <Info className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+        <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
         <p className="text-sm text-muted-foreground">
-          <span className="font-medium text-foreground">Instant internal transfers:</span> funds move
-          immediately between platform accounts. The recipient is identified by their registered email
-          and the amount is credited to them straight away &mdash; on any device they sign in from.
+          <span className="font-medium text-foreground">Administrator approval required:</span> for your
+          security, every outgoing transfer is reviewed and authorised by an MCC Administrator before any
+          funds move. When you submit a transfer it is placed in a pending queue &mdash; no funds leave your
+          account until the request is approved.
         </p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Send form */}
+        {/* Request form */}
         <Card className="bg-card border-border">
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -154,8 +191,8 @@ export default function SendMoneyPage() {
                 <Send className="h-5 w-5" />
               </div>
               <div>
-                <CardTitle className="text-lg">Transfer to a User</CardTitle>
-                <CardDescription>Send funds using the recipient&apos;s email address</CardDescription>
+                <CardTitle className="text-lg">Request a Transfer</CardTitle>
+                <CardDescription>Submit funds to another account holder for approval</CardDescription>
               </div>
             </div>
           </CardHeader>
@@ -172,15 +209,14 @@ export default function SendMoneyPage() {
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="recipient">Recipient Email</Label>
+              <Label htmlFor="recipient">Recipient</Label>
               <Input
                 id="recipient"
-                type="email"
                 inputMode="email"
                 autoComplete="off"
-                placeholder="name@example.com"
-                value={recipientEmail}
-                onChange={(e) => setRecipientEmail(e.target.value)}
+                placeholder="Name or name@example.com"
+                value={recipient}
+                onChange={(e) => setRecipient(e.target.value)}
               />
             </div>
 
@@ -224,18 +260,9 @@ export default function SendMoneyPage() {
               />
             </div>
 
-            <Button onClick={handleSend} disabled={submitting} className="w-full sm:w-auto">
-              {submitting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Sending&hellip;
-                </>
-              ) : (
-                <>
-                  <Send className="mr-2 h-4 w-4" />
-                  Send Transfer
-                </>
-              )}
+            <Button onClick={handleSubmit} className="w-full sm:w-auto">
+              <Send className="mr-2 h-4 w-4" />
+              Submit for Approval
             </Button>
           </CardContent>
         </Card>
@@ -248,68 +275,58 @@ export default function SendMoneyPage() {
                 <Users className="h-5 w-5" />
               </div>
               <div>
-                <CardTitle className="text-lg">Transfer Activity</CardTitle>
-                <CardDescription>Money you&apos;ve sent to and received from other users</CardDescription>
+                <CardTitle className="text-lg">Your Transfer Requests</CardTitle>
+                <CardDescription>Transfers you&apos;ve submitted and their approval status</CardDescription>
               </div>
             </div>
           </CardHeader>
           <CardContent>
-            {loadingHistory ? (
-              <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Loading activity&hellip;
-              </div>
-            ) : history.length === 0 ? (
+            {history.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
                 <Users className="h-8 w-8 text-muted-foreground/50" />
                 <p className="text-sm text-muted-foreground">No transfers yet.</p>
                 <p className="text-xs text-muted-foreground">
-                  Transfers you send or receive will appear here.
+                  Transfers you submit will appear here with their approval status.
                 </p>
               </div>
             ) : (
               <ul className="divide-y divide-border">
                 {history.map((t) => {
-                  const incoming = t.direction === "credit"
+                  const badge = statusBadge[t.status] ?? statusBadge.pending
+                  const BadgeIcon = badge.icon
                   return (
                     <li key={t.id} className="flex items-center gap-3 py-3">
-                      <div
-                        className={
-                          incoming
-                            ? "rounded-lg bg-emerald-500/10 p-2 text-emerald-400"
-                            : "rounded-lg bg-blue-500/10 p-2 text-blue-400"
-                        }
-                      >
-                        {incoming ? (
-                          <ArrowDownLeft className="h-4 w-4" />
-                        ) : (
+                      <div className="rounded-lg bg-blue-500/10 p-2 text-blue-400">
+                        {t.status === "approved" ? (
                           <ArrowUpRight className="h-4 w-4" />
+                        ) : t.status === "rejected" ? (
+                          <XCircle className="h-4 w-4" />
+                        ) : (
+                          <ArrowDownLeft className="h-4 w-4" />
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-foreground">
-                          {incoming ? "From" : "To"} {t.counterpartyName}
-                        </p>
+                        <p className="truncate text-sm font-medium text-foreground">To {t.beneficiary}</p>
                         <p className="truncate text-xs text-muted-foreground">
-                          {t.counterpartyEmail} &middot; {formatDate(t.createdAt)}
+                          {t.id} &middot; {formatDate(t.submittedAt)}
                         </p>
-                        {t.note && (
-                          <p className="truncate text-xs text-muted-foreground italic">&ldquo;{t.note}&rdquo;</p>
+                        {t.notes && (
+                          <p className="truncate text-xs text-muted-foreground italic">&ldquo;{t.notes}&rdquo;</p>
+                        )}
+                        {t.status === "rejected" && t.decisionNote && (
+                          <p className="truncate text-xs text-red-400">Reason: {t.decisionNote}</p>
                         )}
                       </div>
                       <div className="text-right">
-                        <p
-                          className={
-                            incoming
-                              ? "text-sm font-semibold text-emerald-400"
-                              : "text-sm font-semibold text-foreground"
-                          }
-                        >
-                          {incoming ? "+" : "−"}
+                        <p className="text-sm font-semibold text-foreground">
                           {formatCurrency(t.amount, t.currency)}
                         </p>
-                        <Badge variant="outline" className="mt-0.5 text-[10px]">
-                          {t.id}
+                        <Badge
+                          variant="outline"
+                          className={`mt-0.5 gap-1 text-[10px] ${badge.className}`}
+                        >
+                          <BadgeIcon className="h-3 w-3" />
+                          {badge.label}
                         </Badge>
                       </div>
                     </li>

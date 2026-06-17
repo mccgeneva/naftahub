@@ -104,6 +104,8 @@ export interface CommodityDeal {
   submittedAt: string
   decidedAt?: string
   decisionNote?: string
+  // Ledger entry created when the deal is authorized for execution (proceeds credited).
+  settledEntryId?: string
 }
 
 const KEY_BASE = "mcc.commodity-deals.v1"
@@ -163,7 +165,7 @@ interface CommodityDealsContextValue {
   /** Admin: reject a document with an optional reason. */
   rejectDocument: (dealId: string, docId: string, reason?: string) => CommodityDeal | null
   /** Admin: approve the deal — advances it to the execution stage. */
-  approveDeal: (dealId: string, note?: string) => CommodityDeal | null
+  approveDeal: (dealId: string, note?: string, settledEntryId?: string) => CommodityDeal | null
   /** Admin: reject the deal with an optional reason. Nothing executes. */
   rejectDeal: (dealId: string, reason?: string) => CommodityDeal | null
   hydrated: boolean
@@ -358,7 +360,7 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
     return updated
   }
 
-  const approveDeal: CommodityDealsContextValue["approveDeal"] = (dealId, note) => {
+  const approveDeal: CommodityDealsContextValue["approveDeal"] = (dealId, note, settledEntryId) => {
     let updated: CommodityDeal | null = null
     setDeals((prev) =>
       prev.map((d) => {
@@ -369,6 +371,7 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
             stage: "execution",
             decidedAt: new Date().toISOString(),
             decisionNote: note?.trim() || undefined,
+            settledEntryId: settledEntryId || undefined,
           }
           return updated
         }

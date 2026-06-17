@@ -41,6 +41,10 @@ import { useActivityLog } from "@/components/activity-tracker"
 import { useLedger } from "@/lib/ledger-store"
 import { usePaymentRequests, type PaymentRequest } from "@/lib/payment-requests-store"
 import { useInstrumentRequests, type Instrument } from "@/lib/instrument-requests-store"
+import {
+  useMonetizationRequests,
+  type MonetizationRequest,
+} from "@/lib/monetization-requests-store"
 import { usePPPRequests, type PPPRequest } from "@/lib/ppp-requests-store"
 import { useDOFRequests, type DOFRequest } from "@/lib/dof-requests-store"
 import { useDTCRequests, type DTCRequest } from "@/lib/dtc-requests-store"
@@ -54,6 +58,7 @@ import { useLeverageRequests, accruedInterest, type LeverageRequest } from "@/li
 import { ADMIN_PASSCODE, ADMIN_SESSION_KEY } from "@/lib/admin-config"
 import { resetAccountData } from "@/lib/reset-account"
 import { AdminGatewaySection } from "@/components/dashboard/admin-gateway-section"
+import { AdminReconciliationSection } from "@/components/dashboard/admin-reconciliation-section"
 import { TreasuryManager } from "@/components/admin/treasury-manager"
 import { toast } from "sonner"
 
@@ -85,6 +90,11 @@ export default function AdminPage() {
     approveInstrument,
     rejectInstrument,
   } = useInstrumentRequests()
+  const {
+    requests: monetizationRequests,
+    approveRequest: approveMonetization,
+    rejectRequest: rejectMonetization,
+  } = useMonetizationRequests()
   const {
     requests: pppRequests,
     approveRequest: approvePPP,
@@ -125,6 +135,9 @@ export default function AdminPage() {
   const [rejectPPPReason, setRejectPPPReason] = useState("")
   const [rejectDOFTarget, setRejectDOFTarget] = useState<DOFRequest | null>(null)
   const [rejectDOFReason, setRejectDOFReason] = useState("")
+  const [rejectMonetizationTarget, setRejectMonetizationTarget] =
+    useState<MonetizationRequest | null>(null)
+  const [rejectMonetizationReason, setRejectMonetizationReason] = useState("")
   const [rejectDTCTarget, setRejectDTCTarget] = useState<DTCRequest | null>(null)
   const [rejectDTCReason, setRejectDTCReason] = useState("")
   const [rejectDealTarget, setRejectDealTarget] = useState<CommodityDeal | null>(null)
@@ -599,6 +612,98 @@ export default function AdminPage() {
     setRejectDOFReason("")
   }
 
+  const pendingMonetization = useMemo(
+    () =>
+      monetizationRequests
+        .filter((r) => r.status === "pending")
+        .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()),
+    [monetizationRequests],
+  )
+  const decidedMonetization = useMemo(
+    () =>
+      monetizationRequests
+        .filter((r) => r.status !== "pending")
+        .sort(
+          (a, b) =>
+            new Date(b.decidedAt || b.submittedAt).getTime() -
+            new Date(a.decidedAt || a.submittedAt).getTime(),
+        ),
+    [monetizationRequests],
+  )
+
+  const MONETIZATION_STRUCTURE_LABELS: Record<MonetizationRequest["structure"], string> = {
+    CreditLine: "Non-recourse credit line",
+    Discounting: "Discounting / purchase",
+    CollateralTransfer: "Collateral transfer (MT760)",
+  }
+  const formatMonetizationProceeds = (r: MonetizationRequest) =>
+    formatCurrency(r.grossProceeds, r.proceedsCurrency)
+
+  const handleApproveMonetization = (request: MonetizationRequest) => {
+    // Credit the monetization proceeds into the master ledger at approval time.
+    const credited = addReceipt({
+      id: request.id,
+      amount: request.grossProceeds,
+      currency: request.proceedsCurrency,
+      status: "completed",
+      date: new Date().toISOString(),
+      counterparty: request.monetizationPlatform || request.issuer,
+      bank: request.receivingBank
+        ? `${request.receivingBank}${request.receivingBankBic ? ` (${request.receivingBankBic})` : ""}`
+        : undefined,
+      reference: request.mt760Ref || request.id,
+      comment: `Monetization of ${request.instrumentTypeFull} (${request.instrumentType}) ${request.instrumentId} issued by ${request.issuer}. Structure: ${MONETIZATION_STRUCTURE_LABELS[request.structure]} at ${request.advanceRatePercent}% LTV on ${formatCurrency(request.faceValue, request.currency)} face value. UETR ${request.uetr}.${request.mt760Ref ? ` MT760 ${request.mt760Ref}.` : ""}`,
+      category: "Instrument Monetization",
+    })
+
+    const approved = approveMonetization(request.id, credited.id)
+    if (!approved) return
+
+    toast.success("Monetization authorized", {
+      description: `${formatMonetizationProceeds(request)} of proceeds for ${request.instrumentId} has been credited to the master account.`,
+    })
+    logActivity({
+      action: `Administrator authorized monetization ${request.id} of ${formatMonetizationProceeds(request)}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator authorized monetization ${request.id} of the ${request.instrumentTypeFull} (${request.instrumentType}) ${request.instrumentId} issued by ${request.issuer}. Credited ${formatMonetizationProceeds(request)} (${MONETIZATION_STRUCTURE_LABELS[request.structure]}, ${request.advanceRatePercent}% LTV on ${formatCurrency(request.faceValue, request.currency)}) into the master account. UETR ${request.uetr}.`,
+        referenceId: request.id,
+        uetr: request.uetr,
+        instrumentRef: request.instrumentId,
+        instrument: `${request.instrumentType} — ${request.instrumentTypeFull}`,
+        structure: MONETIZATION_STRUCTURE_LABELS[request.structure],
+        advanceRate: `${request.advanceRatePercent}%`,
+        proceedsCredited: formatMonetizationProceeds(request),
+        mt760: request.mt760Ref || "(none)",
+        decision: "Approved",
+      },
+    })
+  }
+
+  const confirmRejectMonetization = () => {
+    if (!rejectMonetizationTarget) return
+    const request = rejectMonetizationTarget
+    rejectMonetization(request.id, rejectMonetizationReason)
+    toast.success("Monetization rejected", {
+      description: `The request ${request.id} for ${request.instrumentId} was rejected. No proceeds were credited.`,
+    })
+    logActivity({
+      action: `Administrator rejected monetization ${request.id} of ${formatMonetizationProceeds(request)}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator rejected monetization ${request.id} of the ${request.instrumentTypeFull} (${request.instrumentType}) ${request.instrumentId}. No proceeds were credited.${rejectMonetizationReason.trim() ? ` Reason: ${rejectMonetizationReason.trim()}` : ""}`,
+        referenceId: request.id,
+        uetr: request.uetr,
+        instrumentRef: request.instrumentId,
+        proceeds: formatMonetizationProceeds(request),
+        decision: "Rejected",
+        reason: rejectMonetizationReason.trim() || "(none)",
+      },
+    })
+    setRejectMonetizationTarget(null)
+    setRejectMonetizationReason("")
+  }
+
   const pendingDTC = useMemo(
     () =>
       dtcRequests
@@ -789,20 +894,44 @@ export default function AdminPage() {
         description: `${unverified.length} document(s) remain unverified. You can still authorize, but review them first.`,
       })
     }
-    const approved = approveDeal(deal.id)
+    // Credit the deal proceeds into the master ledger so balances and the
+    // Transactions section reflect the executed commodity trade. Mirrors the
+    // DOF / DTC / monetization settlement pattern.
+    let settledEntryId: string | undefined
+    if (deal.approxValue > 0) {
+      const swiftRef =
+        deal.mt103Ref || deal.mt202Ref || deal.mt799Ref || deal.uetr
+      const credited = addReceipt({
+        id: deal.id,
+        amount: deal.approxValue,
+        currency: deal.currency,
+        status: "completed",
+        date: new Date().toISOString(),
+        counterparty: deal.buyerName || deal.sellerName || "Commodity counterparty",
+        bank: deal.receivingBank
+          ? `${deal.receivingBank}${deal.receivingBankBic ? ` (${deal.receivingBankBic})` : ""}`
+          : deal.sendingBank || undefined,
+        reference: swiftRef,
+        category: "Commodity Settlement",
+        comment: `Proceeds from authorized commodity deal ${deal.id} "${deal.title}" (${deal.category}${deal.commodity ? `, ${deal.commodity}` : ""}${deal.quantity ? ` ${deal.quantity}` : ""}). Buyer ${deal.buyerName}, Seller ${deal.sellerName}. Routed ${deal.sendingBankBic || deal.sendingBank || "—"} → ${deal.receivingBankBic || deal.receivingBank || "—"}. UETR ${deal.uetr}.`,
+      })
+      settledEntryId = credited.id
+    }
+    const approved = approveDeal(deal.id, undefined, settledEntryId)
     if (!approved) return
     toast.success("Deal authorized for execution", {
-      description: `${deal.id} "${deal.title}" moved to the Execution stage.`,
+      description: `${deal.id} "${deal.title}" moved to the Execution stage${settledEntryId ? ` and ${formatCurrency(deal.approxValue, deal.currency)} credited to the master account.` : "."}`,
     })
     logActivity({
       action: `Administrator authorized commodity deal ${deal.id} (${formatCurrency(deal.approxValue, deal.currency)})`,
       category: "Administration",
       details: {
-        summary: `Administrator authorized commodity deal ${deal.id} "${deal.title}" (${deal.category}, ${deal.commodity || "—"} ${deal.quantity ? `${deal.quantity}` : ""}) valued ~${formatCurrency(deal.approxValue, deal.currency)}. Buyer ${deal.buyerName}, Seller ${deal.sellerName}. Advanced to Execution. UETR ${deal.uetr}.`,
+        summary: `Administrator authorized commodity deal ${deal.id} "${deal.title}" (${deal.category}, ${deal.commodity || "—"} ${deal.quantity ? `${deal.quantity}` : ""}) valued ~${formatCurrency(deal.approxValue, deal.currency)}. Buyer ${deal.buyerName}, Seller ${deal.sellerName}. Advanced to Execution.${settledEntryId ? ` ${formatCurrency(deal.approxValue, deal.currency)} credited to the master account (ref ${settledEntryId}).` : ""} UETR ${deal.uetr}.`,
         referenceId: deal.id,
         uetr: deal.uetr,
         category: deal.category,
         value: formatCurrency(deal.approxValue, deal.currency),
+        settledEntryId,
         decision: "Approved",
       },
     })
@@ -1015,13 +1144,15 @@ export default function AdminPage() {
                   pendingInstruments.length +
                   pendingPPP.length +
                   pendingDOF.length +
+                  pendingMonetization.length +
                   pendingLeverage.length +
                   pendingSwitchOff.length}
               </p>
               <p className="mt-1 text-[11px] text-muted-foreground">
                 {pending.length} payments · {pendingInstruments.length} instruments ·{" "}
-                {pendingPPP.length} PPP · {pendingDOF.length} DOF · {pendingLeverage.length} leverage ·{" "}
-                {pendingSwitchOff.length} switch-off
+                {pendingPPP.length} PPP · {pendingDOF.length} DOF · {pendingMonetization.length}{" "}
+                monetization · {pendingLeverage.length} leverage · {pendingSwitchOff.length}{" "}
+                switch-off
               </p>
             </div>
             <div className="rounded-lg bg-secondary p-3">
@@ -1951,6 +2082,180 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      {/* Pending Bank Instrument Monetization */}
+      <Card className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">
+            Pending Bank Instrument Monetization
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {pendingMonetization.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
+              <Check className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                No pending monetization requests. All requests have been reviewed.
+              </p>
+            </div>
+          ) : (
+            pendingMonetization.map((r) => (
+              <div key={r.id} className="rounded-lg border border-border bg-secondary/30 p-4">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge
+                        variant="outline"
+                        className="border-yellow-500/20 bg-yellow-500/10 text-yellow-500 text-[10px]"
+                      >
+                        <Clock className="mr-1 h-3 w-3" />
+                        Pending
+                      </Badge>
+                      <Badge variant="outline" className="text-[10px]">
+                        {r.instrumentType}
+                      </Badge>
+                      <Badge variant="outline" className="text-[10px]">
+                        {MONETIZATION_STRUCTURE_LABELS[r.structure]}
+                      </Badge>
+                      <span className="font-medium text-foreground">{r.instrumentId}</span>
+                      <span className="text-xs text-muted-foreground">{r.id}</span>
+                      <span className="text-xs text-muted-foreground">
+                        Submitted {formatTimestamp(r.submittedAt)}
+                      </span>
+                    </div>
+                    <div className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                      <div className="flex items-center gap-2">
+                        <Building2 className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-muted-foreground">Issuer:</span>
+                        <span className="text-foreground">{r.issuer}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-muted-foreground">Face Value:</span>
+                        <span className="text-foreground">
+                          {formatCurrency(r.faceValue, r.currency)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-muted-foreground">Advance Rate:</span>
+                        <span className="text-foreground">{r.advanceRatePercent}% LTV</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Globe className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-muted-foreground">Monetizer:</span>
+                        <span className="text-foreground">{r.monetizationPlatform || "—"}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-muted-foreground">MT760 / MT799:</span>
+                        <span className="text-foreground">
+                          {r.mt760Ref || "—"} / {r.mt799Ref || "—"}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-muted-foreground">POF / BCL:</span>
+                        <span className="text-foreground">
+                          {r.pofReference || "—"} / {r.bclReference || "—"}
+                        </span>
+                      </div>
+                    </div>
+                    <p className="font-mono text-xs text-muted-foreground break-all">
+                      UETR {r.uetr}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col items-stretch gap-3 lg:w-56 lg:shrink-0">
+                    <div className="rounded-lg border border-border bg-card p-3 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Proceeds</span>
+                        <span className="font-semibold text-foreground">
+                          {formatMonetizationProceeds(r)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        className="flex-1"
+                        size="sm"
+                        onClick={() => handleApproveMonetization(r)}
+                      >
+                        <Check className="mr-1 h-4 w-4" />
+                        Authorize
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => {
+                          setRejectMonetizationReason("")
+                          setRejectMonetizationTarget(r)
+                        }}
+                      >
+                        <X className="mr-1 h-4 w-4" />
+                        Reject
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Monetization decision history */}
+      <Card className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">
+            Monetization Decision History
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {decidedMonetization.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              No decisions yet. Authorized and rejected requests will appear here.
+            </p>
+          ) : (
+            decidedMonetization.map((r) => (
+              <div
+                key={r.id}
+                className="flex flex-col gap-2 rounded-lg border border-border p-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="flex items-center gap-3">
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "text-[10px]",
+                      r.status === "approved"
+                        ? "border-green-500/20 bg-green-500/10 text-green-500"
+                        : "border-red-500/20 bg-red-500/10 text-red-500",
+                    )}
+                  >
+                    {r.status === "approved" ? (
+                      <Check className="mr-1 h-3 w-3" />
+                    ) : (
+                      <X className="mr-1 h-3 w-3" />
+                    )}
+                    {r.status === "approved" ? "Authorized" : "Rejected"}
+                  </Badge>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{r.instrumentId}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {r.id} · {formatTimestamp(r.decidedAt)}
+                      {r.decisionNote ? ` · ${r.decisionNote}` : ""}
+                    </p>
+                  </div>
+                </div>
+                <span className="text-sm font-medium text-foreground">
+                  {formatMonetizationProceeds(r)}
+                </span>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
       {/* Pending Securities Settlement (DTC / Euroclear) */}
       <Card className="bg-card border-border">
         <CardHeader>
@@ -2416,6 +2721,9 @@ export default function AdminPage() {
       {/* Payment Gateway administration */}
       <AdminGatewaySection />
 
+      {/* Automated payment reconciliation engine */}
+      <AdminReconciliationSection />
+
       {/* Treasury Services: security deposits & approved 1:10 leverage */}
       <TreasuryManager />
 
@@ -2802,6 +3110,55 @@ export default function AdminPage() {
                   Cancel
                 </Button>
                 <Button variant="destructive" onClick={confirmRejectDOF}>
+                  Reject Request
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject Monetization dialog */}
+      <Dialog
+        open={!!rejectMonetizationTarget}
+        onOpenChange={(open) => !open && setRejectMonetizationTarget(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          {rejectMonetizationTarget && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Reject Monetization</DialogTitle>
+                <DialogDescription>
+                  Reject request {rejectMonetizationTarget.id} to monetize{" "}
+                  {rejectMonetizationTarget.instrumentId} for{" "}
+                  {formatMonetizationProceeds(rejectMonetizationTarget)}. No proceeds will be
+                  credited.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 p-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                <p className="text-xs text-muted-foreground text-pretty">
+                  This action cannot be undone. The client will see the request marked as rejected.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reject-monetization-reason">Reason (optional)</Label>
+                <Textarea
+                  id="reject-monetization-reason"
+                  value={rejectMonetizationReason}
+                  onChange={(e) => setRejectMonetizationReason(e.target.value)}
+                  placeholder="e.g. MT760 could not be verified with the issuing bank."
+                  rows={3}
+                />
+              </div>
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setRejectMonetizationTarget(null)}
+                >
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={confirmRejectMonetization}>
                   Reject Request
                 </Button>
               </DialogFooter>
