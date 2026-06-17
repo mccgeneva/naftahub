@@ -26,6 +26,12 @@ export interface IncomingPayment {
   senderBic?: string
   /** Value date (ISO string). */
   valueDate?: string
+  /** SWIFT gpi UETR (Block 3 field 121), when sourced from an MT message. */
+  uetr?: string
+  /** Detected SWIFT message type (e.g. "MT103"), when parsed from raw FIN. */
+  swiftType?: string
+  /** Raw SWIFT FIN message text, retained for audit when parsed. */
+  swiftRaw?: string
 }
 
 export type ReconciliationStatus =
