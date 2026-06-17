@@ -33,6 +33,8 @@ export function BankInventoryManager() {
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [search, setSearch] = useState("")
   const [region, setRegion] = useState<BankRegion | "all">("all")
+  // Currently selected bank key — settings only render for this one bank.
+  const [selectedKey, setSelectedKey] = useState<string>("")
   // Draft capacity inputs keyed by bank::currency so typing doesn't fight state.
   const [drafts, setDrafts] = useState<Record<string, string>>({})
 
@@ -72,6 +74,20 @@ export function BankInventoryManager() {
       )
     })
   }, [search, region])
+
+  // The bank whose settings panel is open. Cleared automatically when it falls
+  // outside the current search/region filters so the panel never shows a bank
+  // the admin can no longer see in the dropdown.
+  const selectedBank = useMemo(
+    () => banks.find((b) => b.key === selectedKey) ?? null,
+    [banks, selectedKey],
+  )
+
+  useEffect(() => {
+    if (selectedKey && !banks.some((b) => b.key === selectedKey)) {
+      setSelectedKey("")
+    }
+  }, [banks, selectedKey])
 
   const save = async (
     bankKey: string,
@@ -166,17 +182,45 @@ export function BankInventoryManager() {
           </Select>
         </div>
 
+        {/* Bank picker — settings only open for the chosen bank */}
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium text-foreground">Select a bank to configure</label>
+          <Select value={selectedKey} onValueChange={setSelectedKey} disabled={loading}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder={loading ? "Loading banks…" : "Choose a partner bank…"} />
+            </SelectTrigger>
+            <SelectContent>
+              {banks.length === 0 ? (
+                <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                  No banks match your filters.
+                </div>
+              ) : (
+                banks.map((bank) => (
+                  <SelectItem key={bank.key} value={bank.key}>
+                    {bank.name} · {bank.country}
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+        </div>
+
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading account pools…
           </div>
-        ) : banks.length === 0 ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">
-            No partner banks match your filters.
-          </p>
+        ) : !selectedBank ? (
+          <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border py-12 text-center">
+            <Layers className="h-6 w-6 text-muted-foreground" />
+            <p className="text-sm font-medium text-foreground">No bank selected</p>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              Pick a partner bank from the dropdown above to view and edit its currency pools,
+              availability, and capacity.
+            </p>
+          </div>
         ) : (
           <div className="space-y-3">
-            {banks.map((bank) => (
+            {[selectedBank].map((bank) => (
               <div key={bank.key} className="rounded-lg border border-border bg-secondary/20 p-4">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <div>
