@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { LifeBuoy, Mail, Phone, MessageSquare, Clock, Send, ChevronDown, UserRound } from "lucide-react"
+import { LifeBuoy, Mail, Phone, MessageSquare, Clock, Send, ChevronDown, UserRound, MapPin } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -17,11 +17,14 @@ import { useCurrentUser } from "@/lib/use-current-user"
 
 const relationshipManager = {
   name: "André Koller",
-  title: "Relationship Manager — MCC Geneva",
-  email: "A.koller@mccgva.ch",
-  phone: "+41 79 807 41 07",
-  phoneHref: "+41798074107",
-  whatsapp: true,
+  title: "Chief Executive Officer | MCC®",
+  email: "a.koller@mccgva.ch",
+  mobile: "+41 79 807 4107",
+  mobileHref: "+41798074107",
+  phone: "+41 22 548 10 61",
+  phoneHref: "+41225481061",
+  teams: "mccgeneva",
+  offices: ["Rue du Rhône 8–14, 1204 Geneva, Switzerland", "33 St. James's Square, London, United Kingdom"],
 }
 
 const channels = [
@@ -83,7 +86,7 @@ export default function SupportPage() {
 
       {/* Dedicated relationship manager */}
       <Card className="border-primary/30 bg-secondary/40">
-        <CardContent className="flex flex-col gap-4 pt-6 sm:flex-row sm:items-center sm:justify-between">
+        <CardContent className="flex flex-col gap-5 pt-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex items-center gap-4">
             <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/15">
               <UserRound className="h-6 w-6 text-primary" />
@@ -94,24 +97,39 @@ export default function SupportPage() {
               </p>
               <p className="text-lg font-semibold text-foreground">{relationshipManager.name}</p>
               <p className="text-sm text-muted-foreground">{relationshipManager.title}</p>
+              <div className="mt-3 space-y-1">
+                {relationshipManager.offices.map((office) => (
+                  <p key={office} className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                    <MapPin className="mt-0.5 h-3 w-3 shrink-0" /> {office}
+                  </p>
+                ))}
+              </div>
             </div>
           </div>
-          <div className="flex flex-col gap-2 sm:items-end">
-            <Button asChild variant="outline" size="sm" className="justify-start gap-2 sm:w-auto">
-              <a href={`mailto:${relationshipManager.email}`}>
-                <Mail className="h-4 w-4" /> {relationshipManager.email}
-              </a>
-            </Button>
-            <Button asChild variant="outline" size="sm" className="justify-start gap-2 sm:w-auto">
+          <div className="flex flex-col gap-2 lg:w-72">
+            <Button asChild variant="outline" size="sm" className="justify-start gap-2">
               <a
-                href={`https://wa.me/${relationshipManager.phoneHref.replace(/\D/g, "")}`}
+                href={`https://wa.me/${relationshipManager.mobileHref.replace(/\D/g, "")}`}
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                <MessageSquare className="h-4 w-4" /> {relationshipManager.phone}
+                <MessageSquare className="h-4 w-4 shrink-0" /> {relationshipManager.mobile}
                 <span className="text-xs text-muted-foreground">(WhatsApp)</span>
               </a>
             </Button>
+            <Button asChild variant="outline" size="sm" className="justify-start gap-2">
+              <a href={`tel:${relationshipManager.phoneHref}`}>
+                <Phone className="h-4 w-4 shrink-0" /> {relationshipManager.phone}
+              </a>
+            </Button>
+            <Button asChild variant="outline" size="sm" className="justify-start gap-2">
+              <a href={`mailto:${relationshipManager.email}`}>
+                <Mail className="h-4 w-4 shrink-0" /> {relationshipManager.email}
+              </a>
+            </Button>
+            <p className="flex items-center gap-2 px-1 pt-1 text-xs text-muted-foreground">
+              <MessageSquare className="h-3.5 w-3.5 shrink-0" /> MS Teams: {relationshipManager.teams}
+            </p>
           </div>
         </CardContent>
       </Card>
