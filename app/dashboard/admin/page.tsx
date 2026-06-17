@@ -16,6 +16,7 @@ import {
   TrendingUp,
   Trash2,
   Layers,
+  Landmark,
   Ship,
   Package,
   Banknote,
@@ -49,6 +50,7 @@ import {
 import { usePPPRequests, type PPPRequest } from "@/lib/ppp-requests-store"
 import { useDOFRequests, type DOFRequest } from "@/lib/dof-requests-store"
 import { useDTCRequests, type DTCRequest } from "@/lib/dtc-requests-store"
+import { useEuroclearRequests, type EuroclearRequest } from "@/lib/euroclear-requests-store"
 import {
   useCommodityDeals,
   DEAL_STAGES,
@@ -112,6 +114,11 @@ export default function AdminPage() {
     rejectRequest: rejectDTC,
   } = useDTCRequests()
   const {
+    requests: euroclearRequests,
+    approveRequest: approveEuroclear,
+    rejectRequest: rejectEuroclear,
+  } = useEuroclearRequests()
+  const {
     deals: commodityDeals,
     approveDeal,
     rejectDeal,
@@ -142,6 +149,8 @@ export default function AdminPage() {
   const [swiftViewTarget, setSwiftViewTarget] = useState<MonetizationRequest | null>(null)
   const [rejectDTCTarget, setRejectDTCTarget] = useState<DTCRequest | null>(null)
   const [rejectDTCReason, setRejectDTCReason] = useState("")
+  const [rejectEuroclearTarget, setRejectEuroclearTarget] = useState<EuroclearRequest | null>(null)
+  const [rejectEuroclearReason, setRejectEuroclearReason] = useState("")
   const [rejectDealTarget, setRejectDealTarget] = useState<CommodityDeal | null>(null)
   const [rejectDealReason, setRejectDealReason] = useState("")
   const [rejectDocTarget, setRejectDocTarget] = useState<{ deal: CommodityDeal; doc: DealDocument } | null>(
@@ -820,6 +829,123 @@ export default function AdminPage() {
     })
     setRejectDTCTarget(null)
     setRejectDTCReason("")
+  }
+
+  // --- Euroclear Settlement (MT540-543 securities instructions) ---------
+  const pendingEuroclear = useMemo(
+    () =>
+      euroclearRequests
+        .filter((r) => r.status === "pending")
+        .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()),
+    [euroclearRequests],
+  )
+  const decidedEuroclear = useMemo(
+    () =>
+      euroclearRequests
+        .filter((r) => r.status !== "pending")
+        .sort(
+          (a, b) =>
+            new Date(b.decidedAt || b.submittedAt).getTime() -
+            new Date(a.decidedAt || a.submittedAt).getTime(),
+        ),
+    [euroclearRequests],
+  )
+
+  const formatEuroclearCash = (r: EuroclearRequest) =>
+    r.settlementBasis === "DVP" ? formatCurrency(r.cashAmount, r.currency) : "Free of Payment"
+
+  const handleApproveEuroclear = (request: EuroclearRequest) => {
+    // For DVP trades the cash leg moves at settlement: a delivery credits the
+    // proceeds, a receipt debits the cost. FOP trades move no cash.
+    if (request.settlementBasis === "DVP" && request.direction === "receive") {
+      if (request.currency === MASTER_ACCOUNT_CURRENCY && request.cashAmount > masterBalance) {
+        toast.error("Insufficient funds to settle", {
+          description: `This receipt needs ${formatCurrency(request.cashAmount, request.currency)} but only ${formatCurrency(masterBalance, MASTER_ACCOUNT_CURRENCY)} is available.`,
+        })
+        return
+      }
+    }
+
+    let settledEntryId: string | undefined
+    if (request.settlementBasis === "DVP" && request.cashAmount > 0) {
+      const common = {
+        amount: request.cashAmount,
+        currency: request.currency,
+        status: "completed" as const,
+        date: new Date().toISOString(),
+        counterparty: request.counterpartyName,
+        bank: request.custodianBank
+          ? `${request.custodianBank}${request.custodianBic ? ` (${request.custodianBic})` : ""}`
+          : undefined,
+        reference: request.mt54xRef || request.id,
+      }
+      if (request.direction === "deliver") {
+        const credited = addReceipt({
+          ...common,
+          id: request.id,
+          comment: `DVP cash proceeds from delivery of ${request.securityName} (ISIN ${request.isin}) via Euroclear. Counterparty ${request.counterpartyName}. UETR ${request.uetr}.`,
+          category: "Securities Settlement",
+        })
+        settledEntryId = credited.id
+      } else {
+        const debited = addDebit({
+          ...common,
+          id: request.id,
+          comment: `DVP cash payment for receipt of ${request.securityName} (ISIN ${request.isin}) via Euroclear. Counterparty ${request.counterpartyName}. UETR ${request.uetr}.`,
+          category: "Securities Settlement",
+        })
+        settledEntryId = debited.id
+      }
+    }
+
+    const approved = approveEuroclear(request.id, settledEntryId)
+    if (!approved) return
+
+    toast.success("Euroclear settlement authorized", {
+      description: `Euroclear ${request.direction === "deliver" ? "delivery" : "receipt"} of ${request.securityName} has settled (${formatEuroclearCash(request)}).`,
+    })
+    logActivity({
+      action: `Administrator authorized Euroclear settlement ${request.id} (${formatEuroclearCash(request)})`,
+      category: "Administration",
+      details: {
+        summary: `Administrator authorized Euroclear ${request.settlementBasis} settlement ${request.id}: ${request.direction === "deliver" ? "delivered" : "received"} ${request.quantity.toLocaleString()} of ${request.securityName} (ISIN ${request.isin}) against ${formatEuroclearCash(request)}. Counterparty ${request.counterpartyName}. UETR ${request.uetr}.`,
+        referenceId: request.id,
+        uetr: request.uetr,
+        depository: "Euroclear",
+        settlementBasis: request.settlementBasis,
+        direction: request.direction,
+        security: `${request.securityName} (${request.isin})`,
+        cashLeg: formatEuroclearCash(request),
+        counterparty: request.counterpartyName,
+        decision: "Approved",
+      },
+    })
+  }
+
+  const confirmRejectEuroclear = () => {
+    if (!rejectEuroclearTarget) return
+    const request = rejectEuroclearTarget
+    rejectEuroclear(request.id, rejectEuroclearReason)
+    toast.success("Euroclear settlement rejected", {
+      description: `Instruction ${request.id} for ${request.securityName} was rejected. Nothing settled.`,
+    })
+    logActivity({
+      action: `Administrator rejected Euroclear settlement ${request.id} (${formatEuroclearCash(request)})`,
+      category: "Administration",
+      details: {
+        summary: `Administrator rejected Euroclear ${request.settlementBasis} settlement ${request.id} for ${request.securityName} (ISIN ${request.isin}). No securities settled and no cash moved.${rejectEuroclearReason.trim() ? ` Reason: ${rejectEuroclearReason.trim()}` : ""}`,
+        referenceId: request.id,
+        uetr: request.uetr,
+        depository: "Euroclear",
+        security: `${request.securityName} (${request.isin})`,
+        cashLeg: formatEuroclearCash(request),
+        counterparty: request.counterpartyName,
+        decision: "Rejected",
+        reason: rejectEuroclearReason.trim() || "(none)",
+      },
+    })
+    setRejectEuroclearTarget(null)
+    setRejectEuroclearReason("")
   }
 
   // --- Commodity Trading (deals + POP/POF documents) -------------------
@@ -2450,6 +2576,207 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      {/* Pending Euroclear Settlement (MT540-543) */}
+      <Card className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+            <Landmark className="h-5 w-5 text-primary" />
+            Pending Euroclear Settlement
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {pendingEuroclear.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
+              <Check className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                No pending Euroclear settlement instructions. All have been reviewed.
+              </p>
+            </div>
+          ) : (
+            pendingEuroclear.map((r) => {
+              const mt =
+                r.direction === "deliver"
+                  ? r.settlementBasis === "DVP"
+                    ? "543"
+                    : "542"
+                  : r.settlementBasis === "DVP"
+                    ? "541"
+                    : "540"
+              return (
+                <div key={r.id} className="rounded-lg border border-border bg-secondary/30 p-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge
+                          variant="outline"
+                          className="border-yellow-500/20 bg-yellow-500/10 text-yellow-500 text-[10px]"
+                        >
+                          <Clock className="mr-1 h-3 w-3" />
+                          Pending
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px]">
+                          Euroclear
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px]">
+                          MT{mt}
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px]">
+                          {r.direction === "deliver" ? "Deliver" : "Receive"} · {r.settlementBasis}
+                        </Badge>
+                        <span className="font-medium text-foreground">{r.securityName}</span>
+                        <span className="text-xs text-muted-foreground">{r.id}</span>
+                        <span className="text-xs text-muted-foreground">
+                          Submitted {formatTimestamp(r.submittedAt)}
+                        </span>
+                      </div>
+                      <div className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">ISIN:</span>
+                          <span className="text-foreground">{r.isin}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Layers className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Quantity:</span>
+                          <span className="text-foreground">{r.quantity.toLocaleString()}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Counterparty:</span>
+                          <span className="text-foreground">{r.counterpartyName}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Euroclear Acct:</span>
+                          <span className="text-foreground">{r.euroclearAccount}</span>
+                        </div>
+                        {r.custodianBank && (
+                          <div className="flex items-center gap-2">
+                            <Building2 className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">Custodian:</span>
+                            <span className="text-foreground">{r.custodianBank}</span>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <Clock className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Settlement Date:</span>
+                          <span className="text-foreground">{r.valueDate}</span>
+                        </div>
+                        {r.mt54xRef && (
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">MT54x Ref:</span>
+                            <span className="text-foreground">{r.mt54xRef}</span>
+                          </div>
+                        )}
+                      </div>
+                      <p className="font-mono text-xs text-muted-foreground break-all">
+                        UETR {r.uetr}
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col items-stretch gap-3 lg:w-56 lg:shrink-0">
+                      <div className="rounded-lg border border-border bg-card p-3 text-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="text-muted-foreground">Cash Leg</span>
+                          <span className="font-semibold text-foreground">
+                            {formatEuroclearCash(r)}
+                          </span>
+                        </div>
+                        {r.settlementBasis === "DVP" && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {r.direction === "deliver"
+                              ? "Will credit master account"
+                              : "Will debit master account"}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          className="flex-1"
+                          size="sm"
+                          onClick={() => handleApproveEuroclear(r)}
+                        >
+                          <Check className="mr-1 h-4 w-4" />
+                          Authorize
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          onClick={() => {
+                            setRejectEuroclearReason("")
+                            setRejectEuroclearTarget(r)
+                          }}
+                        >
+                          <X className="mr-1 h-4 w-4" />
+                          Reject
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Euroclear Settlement decision history */}
+      <Card className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">
+            Euroclear Settlement Decision History
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {decidedEuroclear.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              No decisions yet. Settled and rejected instructions will appear here.
+            </p>
+          ) : (
+            decidedEuroclear.map((r) => (
+              <div
+                key={r.id}
+                className="flex flex-col gap-2 rounded-lg border border-border p-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="flex items-center gap-3">
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "text-[10px]",
+                      r.status === "approved"
+                        ? "border-green-500/20 bg-green-500/10 text-green-500"
+                        : "border-red-500/20 bg-red-500/10 text-red-500",
+                    )}
+                  >
+                    {r.status === "approved" ? (
+                      <Check className="mr-1 h-3 w-3" />
+                    ) : (
+                      <X className="mr-1 h-3 w-3" />
+                    )}
+                    {r.status === "approved" ? "Settled" : "Rejected"}
+                  </Badge>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">
+                      {r.securityName}{" "}
+                      <span className="text-xs text-muted-foreground">(Euroclear · {r.isin})</span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {r.id} · {formatTimestamp(r.decidedAt)}
+                      {r.decisionNote ? ` · ${r.decisionNote}` : ""}
+                    </p>
+                  </div>
+                </div>
+                <span className="text-sm font-medium text-foreground">
+                  {formatEuroclearCash(r)}
+                </span>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
       {/* Pending Commodity Deals (POP / POF review + execution authorization) */}
       <Card className="bg-card border-border">
         <CardHeader>
@@ -3056,7 +3383,7 @@ export default function AdminPage() {
                 <DialogTitle>Reject Switch-Off Request</DialogTitle>
                 <DialogDescription>
                   Decline the switch-off of line {rejectSwitchOffTarget.id} (
-                  {rejectSwitchOffTarget.accountLabel} · 1:{rejectSwitchOffTarget.leverageRatio}). The line
+                  {rejectSwitchOffTarget.accountLabel} �� 1:{rejectSwitchOffTarget.leverageRatio}). The line
                   stays active and debit interest keeps accruing.
                 </DialogDescription>
               </DialogHeader>
@@ -3270,6 +3597,52 @@ export default function AdminPage() {
                   Cancel
                 </Button>
                 <Button variant="destructive" onClick={confirmRejectDTC}>
+                  Reject Instruction
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject Euroclear Settlement dialog */}
+      <Dialog
+        open={!!rejectEuroclearTarget}
+        onOpenChange={(open) => !open && setRejectEuroclearTarget(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          {rejectEuroclearTarget && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Reject Euroclear Settlement</DialogTitle>
+                <DialogDescription>
+                  Reject instruction {rejectEuroclearTarget.id} for{" "}
+                  {rejectEuroclearTarget.securityName} (Euroclear). No securities will settle and no
+                  cash will move.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 p-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                <p className="text-xs text-muted-foreground text-pretty">
+                  This action cannot be undone. The client will see the instruction marked as
+                  rejected.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reject-euroclear-reason">Reason (optional)</Label>
+                <Textarea
+                  id="reject-euroclear-reason"
+                  value={rejectEuroclearReason}
+                  onChange={(e) => setRejectEuroclearReason(e.target.value)}
+                  placeholder="e.g. Settlement instructions could not be matched with the counterparty."
+                  rows={3}
+                />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setRejectEuroclearTarget(null)}>
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={confirmRejectEuroclear}>
                   Reject Instruction
                 </Button>
               </DialogFooter>
