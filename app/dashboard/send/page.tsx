@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   Send,
   ArrowUpRight,
@@ -49,6 +49,7 @@ import {
   type TransferDirectoryEntry,
 } from "@/lib/users"
 import { exportToCsv } from "@/lib/export-utils"
+import { resolveTransferRecipient } from "@/app/actions/transfers"
 import { toast } from "sonner"
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "JPY", "AUD", "CAD", "SGD"]
@@ -134,10 +135,51 @@ export default function SendMoneyPage() {
   const availableBalance = balanceFor(currency)
 
   // Live recipient resolution for the instant method.
-  const resolvedRecipient = useMemo(
+  // Static accounts resolve instantly; for everything else we ask the server,
+  // which also checks administrator-created (dynamic) accounts in Neon. Without
+  // this, a real logged-in dynamic user shows "No account found".
+  const staticRecipient = useMemo(
     () => (recipientEmail.trim() ? findTransferRecipientByEmail(recipientEmail) : undefined),
     [recipientEmail],
   )
+  const [resolvedRecipient, setResolvedRecipient] = useState<TransferDirectoryEntry | undefined>(
+    undefined,
+  )
+  const [resolvingRecipient, setResolvingRecipient] = useState(false)
+
+  useEffect(() => {
+    const email = recipientEmail.trim()
+    if (!email) {
+      setResolvedRecipient(undefined)
+      setResolvingRecipient(false)
+      return
+    }
+    // Static hit: resolve immediately, no server round-trip.
+    if (staticRecipient) {
+      setResolvedRecipient(staticRecipient)
+      setResolvingRecipient(false)
+      return
+    }
+    // Otherwise debounce a server lookup that includes dynamic users.
+    let cancelled = false
+    setResolvingRecipient(true)
+    const handle = window.setTimeout(async () => {
+      try {
+        const res = await resolveTransferRecipient(email)
+        if (cancelled) return
+        setResolvedRecipient(res.ok ? (res.recipient ?? undefined) : undefined)
+      } catch {
+        if (!cancelled) setResolvedRecipient(undefined)
+      } finally {
+        if (!cancelled) setResolvingRecipient(false)
+      }
+    }, 350)
+    return () => {
+      cancelled = true
+      window.clearTimeout(handle)
+    }
+  }, [recipientEmail, staticRecipient])
+
   const recipientIsSelf = resolvedRecipient?.id === activeUserId
 
   // Unified history: instant settlements come from the ledger, approval
@@ -207,7 +249,7 @@ export default function SendMoneyPage() {
     setFormError(null)
   }
 
-  const handleInstantSend = () => {
+  const handleInstantSend = async () => {
     setFormError(null)
     const amountValue = Number.parseFloat(amount)
     const email = recipientEmail.trim().toLowerCase()
@@ -216,7 +258,13 @@ export default function SendMoneyPage() {
       setFormError("Please enter the recipient's registered email address.")
       return
     }
-    const recipient = findTransferRecipientByEmail(email)
+    // Resolve across static + dynamic (admin-created) accounts. Prefer the
+    // already-resolved recipient, but re-check on the server to be safe.
+    let recipient = resolvedRecipient
+    if (!recipient || recipient.email.toLowerCase() !== email) {
+      const res = await resolveTransferRecipient(email)
+      recipient = res.ok ? (res.recipient ?? undefined) : undefined
+    }
     if (!recipient) {
       setFormError("No platform account is registered to that email address.")
       return
@@ -512,7 +560,10 @@ export default function SendMoneyPage() {
                 {recipientEmail.trim() && recipientIsSelf && (
                   <p className="text-xs text-red-400">You cannot transfer to your own account.</p>
                 )}
-                {recipientEmail.trim() && !resolvedRecipient && (
+                {recipientEmail.trim() && !resolvedRecipient && resolvingRecipient && (
+                  <p className="text-xs text-muted-foreground">Checking account…</p>
+                )}
+                {recipientEmail.trim() && !resolvedRecipient && !resolvingRecipient && (
                   <p className="text-xs text-muted-foreground">
                     No account found for this email yet.
                   </p>
