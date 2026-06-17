@@ -106,15 +106,12 @@ export function DashboardSidebar() {
 
   const groupContainsActive = (group: NavGroup) => group.items.some((item) => isActive(item.href))
 
-  // Open the group containing the active route by default; users can toggle the rest.
+  // Open every group by default so all destinations (Internal Transfers, Treasury,
+  // Fiduciary, etc.) are immediately visible. Users can still collapse any group.
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {}
     for (const group of navGroups) {
-      initial[group.label] = group.items.some((item) => item.href === pathname)
-    }
-    // Always have at least the first group open on initial load.
-    if (!Object.values(initial).some(Boolean)) {
-      initial[navGroups[0].label] = true
+      initial[group.label] = true
     }
     return initial
   })
