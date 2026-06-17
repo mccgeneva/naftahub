@@ -50,6 +50,11 @@ import { parseSwiftMessage } from "@/lib/swift-mt"
 import { useActivityLog } from "@/components/activity-tracker"
 import { useLedger } from "@/lib/ledger-store"
 import { usePaymentRequests, type PaymentRequest } from "@/lib/payment-requests-store"
+import {
+  banksForCurrency,
+  partnerBankByKey,
+  suggestedBankFor,
+} from "@/lib/gateway-store"
 import { useInstrumentRequests, type Instrument } from "@/lib/instrument-requests-store"
 import {
   useMonetizationRequests,
@@ -153,6 +158,10 @@ export default function AdminPage() {
 
   const [rejectTarget, setRejectTarget] = useState<PaymentRequest | null>(null)
   const [rejectReason, setRejectReason] = useState("")
+  // Per-request payout partner bank selection (keyed by payment id). When a
+  // request has no explicit choice yet, the approval flow falls back to the
+  // currency's suggested correspondent bank.
+  const [payoutBankByRequest, setPayoutBankByRequest] = useState<Record<string, string>>({})
   const [rejectInstrumentTarget, setRejectInstrumentTarget] = useState<Instrument | null>(null)
   const [rejectInstrumentReason, setRejectInstrumentReason] = useState("")
   const [rejectPPPTarget, setRejectPPPTarget] = useState<PPPRequest | null>(null)
@@ -1282,7 +1291,16 @@ export default function AdminPage() {
       return
     }
 
-    const approved = approveRequest(request.id)
+    // Resolve the payout partner bank: the Administrator's explicit choice, or
+    // the suggested correspondent for the request currency as a sensible default.
+    const routedBank =
+      partnerBankByKey(payoutBankByRequest[request.id]) ?? suggestedBankFor(request.currency)
+
+    const approved = approveRequest(request.id, {
+      routedBankKey: routedBank.key,
+      routedBankName: routedBank.name,
+      routedBankBic: routedBank.bic,
+    })
     if (!approved) return
 
     // Debit the principal as the outgoing payment.
@@ -1296,7 +1314,7 @@ export default function AdminPage() {
       account: request.iban,
       bank: request.swiftCode,
       reference: request.reference,
-      comment: `Outgoing SWIFT payment to ${request.beneficiary} (${request.beneficiaryCountry}), approved by Administrator.`,
+      comment: `Outgoing SWIFT payment to ${request.beneficiary} (${request.beneficiaryCountry}), routed via ${routedBank.name} (${routedBank.bic}), approved by Administrator.`,
       category: "Outgoing Transfer",
     })
     // Debit the 2% platform fee as a separate entry.
@@ -1314,15 +1332,16 @@ export default function AdminPage() {
     }
 
     toast.success("Payment approved", {
-      description: `${formatCurrency(request.amount, request.currency)} to ${request.beneficiary} has been approved and debited.`,
+      description: `${formatCurrency(request.amount, request.currency)} to ${request.beneficiary} has been approved, routed via ${routedBank.name}, and debited.`,
     })
     logActivity({
       action: `Administrator approved payment ${request.id} of ${formatCurrency(request.amount, request.currency)} to ${request.beneficiary}`,
       category: "Administration",
       details: {
-        summary: `Administrator approved outgoing payment ${request.id} to ${request.beneficiary} (${request.beneficiaryCountry}). Debited ${formatCurrency(request.amount, request.currency)} plus a ${formatCurrency(request.fee, request.currency)} platform fee (2%) for a total of ${formatCurrency(request.total, request.currency)}. IBAN ${request.iban}, SWIFT ${request.swiftCode}.`,
+        summary: `Administrator approved outgoing payment ${request.id} to ${request.beneficiary} (${request.beneficiaryCountry}). Routed through ${routedBank.name} (${routedBank.bic}). Debited ${formatCurrency(request.amount, request.currency)} plus a ${formatCurrency(request.fee, request.currency)} platform fee (2%) for a total of ${formatCurrency(request.total, request.currency)}. IBAN ${request.iban}, SWIFT ${request.swiftCode}.`,
         paymentId: request.id,
         beneficiary: request.beneficiary,
+        routedVia: `${routedBank.name} (${routedBank.bic})`,
         amount: formatCurrency(request.amount, request.currency),
         platformFee: formatCurrency(request.fee, request.currency),
         totalDebited: formatCurrency(request.total, request.currency),
@@ -1567,6 +1586,33 @@ export default function AdminPage() {
                         <span className="text-foreground">Total</span>
                         <span className="text-foreground">{formatCurrency(r.total, r.currency)}</span>
                       </div>
+                    </div>
+                    <div className="rounded-lg border border-border bg-card p-3">
+                      <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Landmark className="h-3.5 w-3.5" />
+                        Route via partner bank
+                      </Label>
+                      <Select
+                        value={payoutBankByRequest[r.id] ?? suggestedBankFor(r.currency).key}
+                        onValueChange={(value) =>
+                          setPayoutBankByRequest((prev) => ({ ...prev, [r.id]: value }))
+                        }
+                      >
+                        <SelectTrigger className="mt-2 h-9 text-xs">
+                          <SelectValue placeholder="Select payout bank" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {banksForCurrency(r.currency).map((bank) => (
+                            <SelectItem key={bank.key} value={bank.key} className="text-xs">
+                              {bank.name} · {bank.bic}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground">
+                        Defaults to the suggested {r.currency} correspondent. Settlement is routed
+                        through the selected principal partner bank.
+                      </p>
                     </div>
                     <div className="flex gap-2">
                       <Button className="flex-1" size="sm" onClick={() => handleApprove(r)}>

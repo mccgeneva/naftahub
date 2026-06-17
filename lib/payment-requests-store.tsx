@@ -24,6 +24,17 @@ export interface PaymentRequest {
   submittedAt: string // ISO timestamp
   decidedAt?: string // ISO timestamp of approval/rejection
   decisionNote?: string // administrator note (e.g. rejection reason)
+  // --- Outgoing routing (assigned by the Administrator at approval) ---------
+  routedBankKey?: string // PartnerBank.key the payment is settled through
+  routedBankName?: string // human-readable partner bank name (denormalised)
+  routedBankBic?: string // partner bank BIC (denormalised for display/audit)
+}
+
+/** Routing details assigned to an outgoing payment when it is approved. */
+export interface PaymentRouting {
+  routedBankKey: string
+  routedBankName: string
+  routedBankBic: string
 }
 
 const KEY_BASE = "mcc.payment-requests.v1"
@@ -39,7 +50,7 @@ interface PaymentRequestsContextValue {
     >,
   ) => PaymentRequest
   /** Mark a pending request approved. Funds are debited by the caller (ledger). */
-  approveRequest: (id: string) => PaymentRequest | null
+  approveRequest: (id: string, routing?: PaymentRouting) => PaymentRequest | null
   /** Mark a pending request rejected with an optional reason. No funds move. */
   rejectRequest: (id: string, reason?: string) => PaymentRequest | null
   hydrated: boolean
@@ -113,12 +124,23 @@ export function PaymentRequestsProvider({ children }: { children: React.ReactNod
     return full
   }
 
-  const approveRequest: PaymentRequestsContextValue["approveRequest"] = (id) => {
+  const approveRequest: PaymentRequestsContextValue["approveRequest"] = (id, routing) => {
     let updated: PaymentRequest | null = null
     setRequests((prev) =>
       prev.map((r) => {
         if (r.id === id && r.status === "pending") {
-          updated = { ...r, status: "approved", decidedAt: new Date().toISOString() }
+          updated = {
+            ...r,
+            status: "approved",
+            decidedAt: new Date().toISOString(),
+            ...(routing
+              ? {
+                  routedBankKey: routing.routedBankKey,
+                  routedBankName: routing.routedBankName,
+                  routedBankBic: routing.routedBankBic,
+                }
+              : {}),
+          }
           return updated
         }
         return r
