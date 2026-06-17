@@ -15,6 +15,7 @@ const plans = [
     price: "€25,000",
     period: "/ year",
     deposit: "€500,000",
+    leverageDeposit: "€50,000",
     description: "For active private investors and SMEs",
     highlighted: false,
     features: [
@@ -28,11 +29,12 @@ const plans = [
   },
   {
     id: "avantgarde",
-    name: "AVANTGARDE",
+    name: "Avant-Garde",
     icon: Crown,
-    price: "€122,000",
+    price: "€120,000",
     period: "/ year",
     deposit: "€1,000,000",
+    leverageDeposit: "€100,000",
     description: "For institutions and high-net-worth clients",
     highlighted: true,
     features: [
@@ -130,6 +132,11 @@ export default function PlansPage() {
                   <p className="text-xs text-muted-foreground">
                     Refundable, blocked in our treasury bank
                   </p>
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    Or{" "}
+                    <span className="font-semibold text-primary">{plan.leverageDeposit}</span>{" "}
+                    with 1:10 leverage — subject to administrator approval
+                  </p>
                 </div>
               </div>
             </CardHeader>
@@ -147,7 +154,7 @@ export default function PlansPage() {
                 variant={plan.highlighted ? "default" : "outline"}
                 onClick={() => selectPlan(plan.name, plan.price, plan.deposit)}
               >
-                {plan.highlighted ? "Upgrade to AVANTGARDE" : "Select PRO"}
+                {plan.highlighted ? "Upgrade to Avant-Garde" : "Select PRO"}
               </Button>
             </CardContent>
           </Card>

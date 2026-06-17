@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import { Bell, User, LogOut, Settings, HelpCircle, Menu, BookOpen, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -27,6 +28,32 @@ const notifications: {
   type: string
 }[] = []
 
+/** Live UTC clock + market status pill, Bloomberg terminal style. */
+function TerminalClock() {
+  const [now, setNow] = useState<Date | null>(null)
+
+  useEffect(() => {
+    setNow(new Date())
+    const id = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  const time = now
+    ? now.toLocaleTimeString("en-GB", { hour12: false, timeZone: "UTC" })
+    : "--:--:--"
+
+  return (
+    <div className="hidden lg:flex items-center gap-3 rounded-sm border border-border bg-secondary px-3 py-1.5">
+      <span className="flex items-center gap-1.5">
+        <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-success">Live</span>
+      </span>
+      <span className="font-mono text-xs tabular-nums text-foreground">{time}</span>
+      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">UTC</span>
+    </div>
+  )
+}
+
 export function DashboardHeader() {
   const user = useCurrentUser()
   return (
@@ -53,11 +80,8 @@ export function DashboardHeader() {
 
       {/* Actions */}
       <div className="flex items-center gap-2">
-        {/* Live Rates Indicator */}
-        <div className="hidden lg:flex items-center gap-2 rounded-lg bg-secondary px-3 py-1.5">
-          <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-          <span className="text-xs text-muted-foreground">Markets Live</span>
-        </div>
+        {/* Live UTC clock + market status */}
+        <TerminalClock />
 
         {/* Notifications */}
         <DropdownMenu>

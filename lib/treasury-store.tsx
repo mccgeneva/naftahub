@@ -52,6 +52,20 @@ export function getProfile(key: TreasuryProfileKey): TreasuryProfile {
 // Security deposits and the leverage facility are denominated in EUR.
 export const TREASURY_CURRENCY = "EUR"
 
+// Maximum leverage that may be approved by the administrator on a security
+// deposit: 1:10. With it, a €50,000 contribution covers a €500,000 PRO deposit
+// and €100,000 covers a €1,000,000 Avant-Garde deposit. The administrator must
+// explicitly approve the facility per client.
+export const MAX_LEVERAGE_RATIO = 10
+
+/**
+ * Minimum customer contribution required to reach `requiredDeposit` under the
+ * approved 1:10 leverage facility (i.e. 10% of the required deposit).
+ */
+export function leverageMinContribution(requiredDeposit: number): number {
+  return Math.ceil(requiredDeposit / MAX_LEVERAGE_RATIO)
+}
+
 // Annual debit cycle fee charged on leveraged positions. Applied to the
 // financed (leveraged) amount of the security deposit plus any financial
 // transaction exposure associated with the leverage facility.

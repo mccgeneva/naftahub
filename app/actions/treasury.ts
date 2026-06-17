@@ -17,6 +17,10 @@ import type {
 // Annual debit cycle fee rate (kept in sync with lib/treasury-store.ts).
 const DEBIT_CYCLE_FEE_RATE = 0.018
 
+// Maximum leverage approved on a security deposit (1:10). Kept in sync with
+// MAX_LEVERAGE_RATIO in lib/treasury-store.ts.
+const MAX_LEVERAGE_RATIO = 10
+
 // --- Session / admin helpers ------------------------------------------------
 
 async function getSessionUser(): Promise<UserProfile | undefined> {
@@ -141,6 +145,22 @@ export async function saveTreasuryRecordAdmin(
 
   const contribution = Math.max(0, Number(fields.customerContribution) || 0)
   const leverageEnabled = Boolean(fields.leverageEnabled)
+
+  // The approved leverage facility is capped at 1:10. The customer contribution
+  // must therefore cover at least 10% of the required security deposit; the
+  // remaining (up to 90%) is financed by MCC HOLDING SA.
+  if (leverageEnabled) {
+    const minContribution = Math.ceil(required / MAX_LEVERAGE_RATIO)
+    if (contribution < minContribution) {
+      return {
+        ok: false,
+        error: `Leverage is capped at 1:${MAX_LEVERAGE_RATIO}. The customer must contribute at least EUR ${minContribution.toLocaleString(
+          "en-US",
+        )} (10%) of the EUR ${required.toLocaleString("en-US")} deposit.`,
+      }
+    }
+  }
+
   const exposure = leverageEnabled ? Math.max(0, Number(fields.transactionExposure) || 0) : 0
   const financed = leverageEnabled ? Math.max(0, required - contribution) : 0
   const ratio = leverageEnabled && contribution > 0 ? Math.round((required / contribution) * 100) / 100 : 1

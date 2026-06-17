@@ -75,28 +75,13 @@ const bankPartners = [
 
 const plans = [
   {
-    name: "Golden",
-    price: "€100,000",
-    description: "Entry-level trading platform access",
-    features: [
-      "Live rates dashboard",
-      "Transaction execution",
-      "Payment management",
-      "Transaction history",
-      "Bank accounts: NatWest, Lloyds, RBS",
-      "Trading volume up to €500M",
-      "Limited PPP access",
-    ],
-    limitations: ["6 month minimum commitment", "25k/month breach penalty"],
-    popular: false,
-    cta: "Get Started",
-  },
-  {
     name: "PRO",
-    price: "€500,000",
+    price: "€25,000",
+    subtitle: "€500,000 security deposit — or €50,000 with approved 1:10 leverage",
     description: "Full platform access for serious traders",
     features: [
-      "Everything in Golden, plus:",
+      "Live rates dashboard & transaction execution",
+      "Payment management & transaction history",
       "Extended bank network: HSBC, UBS, JP Morgan",
       "Fiduciary asset management",
       "Unlimited bank instruments trading",
@@ -112,9 +97,9 @@ const plans = [
     cta: "Upgrade to PRO",
   },
   {
-    name: "Avantgarde",
-    price: "€1,000,000",
-    subtitle: "€1,000,000 trading deposit",
+    name: "Avant-Garde",
+    price: "€120,000",
+    subtitle: "€1,000,000 security deposit — or €100,000 with approved 1:10 leverage",
     description: "Enterprise-grade platform for institutions",
     features: [
       "Everything in PRO, plus:",
@@ -315,7 +300,7 @@ export default function LandingPage() {
             </p>
           </div>
 
-          <div className="grid gap-8 lg:grid-cols-3">
+          <div className="grid gap-8 md:grid-cols-2 max-w-4xl mx-auto">
             {plans.map((plan) => (
               <Card
                 key={plan.name}
@@ -337,7 +322,7 @@ export default function LandingPage() {
                     <span className="text-4xl font-bold text-foreground">
                       {plan.price}
                     </span>
-                    <span className="text-muted-foreground"> /onboarding</span>
+                    <span className="text-muted-foreground"> / year</span>
                   </div>
                   {plan.subtitle && (
                     <p className="text-sm text-primary mt-1">{plan.subtitle}</p>

@@ -54,6 +54,7 @@ import { useLeverageRequests, accruedInterest, type LeverageRequest } from "@/li
 import { ADMIN_PASSCODE, ADMIN_SESSION_KEY } from "@/lib/admin-config"
 import { resetAccountData } from "@/lib/reset-account"
 import { AdminGatewaySection } from "@/components/dashboard/admin-gateway-section"
+import { TreasuryManager } from "@/components/admin/treasury-manager"
 import { toast } from "sonner"
 
 const MASTER_ACCOUNT_CURRENCY = "EUR"
@@ -2414,6 +2415,9 @@ export default function AdminPage() {
 
       {/* Payment Gateway administration */}
       <AdminGatewaySection />
+
+      {/* Treasury Services: security deposits & approved 1:10 leverage */}
+      <TreasuryManager />
 
       {/* Danger zone: reset account data */}
       <Card className="border-destructive/30 bg-destructive/5">

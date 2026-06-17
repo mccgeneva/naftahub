@@ -70,7 +70,7 @@ const programs = [
     description:
       "Entry-level PPP designed for investors starting with $50M. Monthly returns with quarterly compounding options.",
     requirements: [
-      "PRO or AVANTGARDE account",
+      "PRO or Avant-Garde account",
       "Cash funds or AAA+ rated instruments",
       "12-month commitment",
     ],
@@ -92,7 +92,7 @@ const programs = [
     description:
       "Standard PPP for qualified investors. Weekly distributions with reinvestment options available.",
     requirements: [
-      "PRO or AVANTGARDE account",
+      "PRO or Avant-Garde account",
       "Cash funds or Securities (BG/SBLC/MTN)",
       "40-week commitment",
     ],
@@ -114,7 +114,7 @@ const programs = [
     description:
       "Premium program for substantial investments. Enhanced returns with priority execution.",
     requirements: [
-      "AVANTGARDE account required",
+      "Avant-Garde account required",
       "Verified source of funds",
       "Joint venture agreement",
     ],
@@ -136,7 +136,7 @@ const programs = [
     description:
       "Exclusive program for institutional investors and major funds. Maximum returns with dedicated trading desk.",
     requirements: [
-      "AVANTGARDE account",
+      "Avant-Garde account",
       "Direct relationship with trading desk",
       "In-person verification meeting",
     ],

@@ -11,7 +11,7 @@ export type BankCard = {
   last4: string
   expiry: string
   network: "VISA" | "Mastercard"
-  variant: "gold" | "dark" | "platinum"
+  variant: "amber" | "dark" | "platinum"
   frozen?: boolean
 }
 
@@ -29,7 +29,7 @@ export function buildCards(holderPerson: string, holderCompany: string): BankCar
       last4: "4417",
       expiry: "08/29",
       network: "VISA",
-      variant: "gold",
+      variant: "amber",
     },
     {
       id: "card-2",
@@ -60,7 +60,7 @@ export function useCards(): BankCard[] {
 }
 
 const variantStyles: Record<BankCard["variant"], string> = {
-  gold: "bg-gradient-to-br from-primary via-primary/80 to-amber-700 text-primary-foreground",
+  amber: "bg-gradient-to-br from-primary via-primary/85 to-orange-800 text-primary-foreground",
   dark: "bg-gradient-to-br from-secondary via-card to-background text-foreground border border-border",
   platinum: "bg-gradient-to-br from-zinc-300 via-zinc-400 to-zinc-600 text-zinc-900",
 }

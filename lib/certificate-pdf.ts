@@ -24,7 +24,7 @@ const BRAND = {
   name: "MCC Capital",
   tagline: "MCC Banking & Trade Platform",
   address: "Rue du Rhone 14, 1204 Geneva, Switzerland",
-  gold: [197, 160, 71] as [number, number, number],
+  gold: [245, 140, 0] as [number, number, number],
   ink: [17, 17, 17] as [number, number, number],
   slate: [110, 116, 128] as [number, number, number],
   line: [225, 227, 231] as [number, number, number],
@@ -95,7 +95,7 @@ export function generateInstrumentCertificate(data: InstrumentCertificateData): 
 
   // Face value highlight
   y += 40
-  doc.setFillColor(248, 246, 240)
+  doc.setFillColor(255, 247, 237)
   doc.setDrawColor(...BRAND.line)
   doc.roundedRect(margin, y, contentWidth, 64, 6, 6, "FD")
   doc.setTextColor(...BRAND.slate)

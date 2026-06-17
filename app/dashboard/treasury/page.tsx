@@ -258,7 +258,7 @@ export default function TreasuryPage() {
                   <div className="flex items-start gap-2 rounded-lg border border-border bg-secondary/40 p-3 text-sm text-muted-foreground">
                     <Building2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                     <span className="text-pretty">
-                      Under the leveraged security deposit mechanism, your contribution of{" "}
+                      Under the approved 1:10 leveraged security deposit mechanism, your contribution of{" "}
                       {fmt0(account.customerContribution, account.currency)} is amplified at 1:{account.leverageRatio}.
                       The remaining {fmt0(account.financedAmount, account.currency)} is financed by{" "}
                       <span className="font-medium text-foreground">MCC HOLDING SA, Switzerland</span> and recorded
@@ -269,8 +269,9 @@ export default function TreasuryPage() {
               ) : (
                 <p className="text-sm text-muted-foreground text-pretty">
                   No leverage facility is currently applied to your security deposit. The deposit is held in
-                  full from your own contribution. Should MCC CAPITAL approve a leverage facility, the financed
-                  portion and its debit cycle fee will appear here.
+                  full from your own contribution. Should MCC CAPITAL approve a leverage facility (up to 1:10),
+                  your contribution would cover 10% of the deposit — the financed portion and its debit cycle
+                  fee will appear here.
                 </p>
               )}
             </CardContent>
