@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import {
   LayoutDashboard,
   ArrowLeftRight,
+  Send,
   CreditCard,
   FileText,
   TrendingUp,
@@ -49,10 +50,13 @@ const navGroups: NavGroup[] = [
     items: [
       { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
       { title: "Payments & Payees", href: "/dashboard/payments", icon: ArrowLeftRight },
+      { title: "Send Money", href: "/dashboard/send", icon: Send, badge: "Direct" },
+      { title: "Internal Transfers", href: "/dashboard/transfers", icon: ArrowLeftRight, badge: "P2P" },
       { title: "Beneficiaries", href: "/dashboard/beneficiaries", icon: Users },
       { title: "Transactions", href: "/dashboard/transactions", icon: CreditCard },
       { title: "Live FX Rates", href: "/dashboard/exchange", icon: DollarSign },
       { title: "Bank Accounts", href: "/dashboard/accounts", icon: Building2 },
+      { title: "Payment Gateway", href: "/dashboard/gateway", icon: Globe, badge: "IBAN" },
       { title: "Cards", href: "/dashboard/cards", icon: CreditCard },
     ],
   },
@@ -64,8 +68,10 @@ const navGroups: NavGroup[] = [
       { title: "Bank Instruments", href: "/dashboard/instruments", icon: FileText, badge: "New" },
       { title: "Institutional Desk", href: "/dashboard/institutional", icon: Banknote, badge: "DOF" },
       { title: "Securities Settlement", href: "/dashboard/dtc", icon: Layers, badge: "DTC" },
+      { title: "Euroclear Settlement", href: "/dashboard/euroclear", icon: Landmark, badge: "ICSD" },
       { title: "Commodity Trading", href: "/dashboard/commodity", icon: Ship, badge: "POP/POF" },
       { title: "Leverage & Risk", href: "/dashboard/leverage", icon: Gauge, badge: "1:30" },
+      { title: "Treasury Services", href: "/dashboard/treasury", icon: ShieldCheck, badge: "Deposit" },
       { title: "Yield / PPP", href: "/dashboard/ppp", icon: TrendingUp },
       { title: "Fiduciary & Assets", href: "/dashboard/fiduciary", icon: Landmark },
     ],
@@ -86,15 +92,12 @@ const navGroups: NavGroup[] = [
 export function MobileSidebar() {
   const pathname = usePathname()
 
-  // Open the group that contains the active route by default.
+  // Open every group by default so all destinations (Send Money, Internal Transfers,
+  // Treasury, Fiduciary, etc.) are immediately visible. Users can still collapse any group.
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
     const state: Record<string, boolean> = {}
     for (const group of navGroups) {
-      state[group.label] = group.items.some((item) => item.href === pathname)
-    }
-    // Ensure at least the first group is open on initial load.
-    if (!Object.values(state).some(Boolean)) {
-      state[navGroups[0].label] = true
+      state[group.label] = true
     }
     return state
   })
