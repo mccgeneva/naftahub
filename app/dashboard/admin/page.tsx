@@ -83,6 +83,8 @@ import { resetAccountData } from "@/lib/reset-account"
 import { AdminGatewaySection } from "@/components/dashboard/admin-gateway-section"
 import { AdminReconciliationSection } from "@/components/dashboard/admin-reconciliation-section"
 import { TreasuryManager } from "@/components/admin/treasury-manager"
+import { UserManager } from "@/components/admin/user-manager"
+import { BalanceManager } from "@/components/admin/balance-manager"
 import { toast } from "sonner"
 
 const MASTER_ACCOUNT_CURRENCY = "EUR"

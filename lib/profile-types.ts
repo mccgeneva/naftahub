@@ -32,6 +32,11 @@ export interface SerializableProfileItem {
   value: string
 }
 
+/** Lifecycle status of a dynamic (admin-created) account. Defined here (a
+ * client-safe module) so client components can import it without pulling in the
+ * server-only DB layer. */
+export type UserStatus = "active" | "suspended" | "inactive"
+
 /** A full UserProfile with all icon components stripped — safe to send from a
  * Server Action to the client. */
 export interface SerializableUserProfile {

@@ -13,9 +13,9 @@
 
 import "server-only"
 import { pool } from "@/lib/db"
-import type { SerializableUserProfile, SerializableProfileItem } from "@/lib/profile-types"
+import type { SerializableUserProfile, SerializableProfileItem, UserStatus } from "@/lib/profile-types"
 
-export type UserStatus = "active" | "suspended" | "inactive"
+export type { UserStatus }
 
 export interface DynamicUserRecord {
   id: string
