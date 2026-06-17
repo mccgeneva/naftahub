@@ -13,6 +13,7 @@ import { MonetizationRequestsProvider } from "@/lib/monetization-requests-store"
 import { PPPRequestsProvider } from "@/lib/ppp-requests-store"
 import { DOFRequestsProvider } from "@/lib/dof-requests-store"
 import { DTCRequestsProvider } from "@/lib/dtc-requests-store"
+import { EuroclearRequestsProvider } from "@/lib/euroclear-requests-store"
 import { CommodityDealsProvider } from "@/lib/commodity-deals-store"
 import { LeverageRequestsProvider } from "@/lib/leverage-requests-store"
 import { TreasuryProvider } from "@/lib/treasury-store"
@@ -34,6 +35,7 @@ export default function DashboardLayout({
       <PPPRequestsProvider>
       <DOFRequestsProvider>
       <DTCRequestsProvider>
+      <EuroclearRequestsProvider>
       <CommodityDealsProvider>
       <LeverageRequestsProvider>
       <TreasuryProvider>
@@ -57,6 +59,7 @@ export default function DashboardLayout({
       </TreasuryProvider>
       </LeverageRequestsProvider>
       </CommodityDealsProvider>
+      </EuroclearRequestsProvider>
       </DTCRequestsProvider>
       </DOFRequestsProvider>
       </PPPRequestsProvider>
