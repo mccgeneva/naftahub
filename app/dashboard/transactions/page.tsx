@@ -56,7 +56,12 @@ import { cn } from "@/lib/utils"
 import { generateReceiptPdf } from "@/lib/receipt-pdf"
 import { useActivityLog } from "@/components/activity-tracker"
 import { toast } from "sonner"
-import { useLedger } from "@/lib/ledger-store"
+import { useLedger, convertCurrency } from "@/lib/ledger-store"
+
+// The core multi-currency accounts every client holds. Transactions for all of
+// these settle into the master account, so the page must surface them — not
+// just EUR.
+const CORE_CURRENCIES = ["EUR", "GBP", "USD", "CHF"]
 
 type Transaction = {
   id: string
@@ -105,6 +110,7 @@ export default function TransactionsPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [filterType, setFilterType] = useState("all")
   const [filterStatus, setFilterStatus] = useState("all")
+  const [filterCurrency, setFilterCurrency] = useState("all")
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined)
   const [selectedTxn, setSelectedTxn] = useState<Transaction | null>(null)
   const logActivity = useActivityLog()
@@ -160,6 +166,7 @@ export default function TransactionsPage() {
       txn.category.toLowerCase().includes(searchQuery.toLowerCase())
     const matchesType = filterType === "all" || txn.type === filterType
     const matchesStatus = filterStatus === "all" || txn.status === filterStatus
+    const matchesCurrency = filterCurrency === "all" || txn.currency === filterCurrency
 
     let matchesDate = true
     if (dateRange?.from) {
@@ -173,16 +180,20 @@ export default function TransactionsPage() {
       }
     }
 
-    return matchesSearch && matchesType && matchesStatus && matchesDate
+    return matchesSearch && matchesType && matchesStatus && matchesCurrency && matchesDate
   })
 
   // KPIs are derived from the transactions actually shown (after filters) so the
-  // numbers always stay consistent with the list — no more €0.00 volume while a
-  // transaction exists. Total Volume sums the absolute amount of every EUR entry.
+  // numbers always stay consistent with the list. Total Volume now covers EVERY
+  // currency (EUR, GBP, USD, CHF, …): when a specific currency is selected we sum
+  // it natively; otherwise we convert each entry into EUR so the headline figure
+  // reflects the client's full multi-currency activity, not just EUR.
   const now = new Date()
-  const totalVolume = filteredTransactions
-    .filter((t) => t.currency === "EUR")
-    .reduce((sum, t) => sum + Math.abs(t.amountValue), 0)
+  const volumeCurrency = filterCurrency === "all" ? "EUR" : filterCurrency
+  const totalVolume = filteredTransactions.reduce(
+    (sum, t) => sum + convertCurrency(Math.abs(t.amountValue), t.currency, volumeCurrency),
+    0,
+  )
   const todayCount = filteredTransactions.filter((t) => {
     const d = new Date(t.date)
     return !Number.isNaN(d.getTime()) && d.toDateString() === now.toDateString()
@@ -192,8 +203,15 @@ export default function TransactionsPage() {
   const stats = [
     {
       title: "Total Volume",
-      value: formatAmount(totalVolume, "EUR"),
-      subtext: hasDateFilter ? "Selected period" : "All transactions",
+      value: formatAmount(totalVolume, volumeCurrency),
+      subtext:
+        filterCurrency === "all"
+          ? hasDateFilter
+            ? "All currencies · selected period"
+            : "All currencies (in EUR)"
+          : hasDateFilter
+            ? `${filterCurrency} · selected period`
+            : `${filterCurrency} transactions`,
       icon: TrendingUp,
       color: "text-primary",
     },
@@ -426,6 +444,19 @@ export default function TransactionsPage() {
                   <SelectItem value="pending">Pending</SelectItem>
                 </SelectContent>
               </Select>
+              <Select value={filterCurrency} onValueChange={setFilterCurrency}>
+                <SelectTrigger className="w-full sm:w-[140px]">
+                  <SelectValue placeholder="Currency" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Currencies</SelectItem>
+                  {CORE_CURRENCIES.map((cur) => (
+                    <SelectItem key={cur} value={cur}>
+                      {cur}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </CardHeader>
@@ -525,6 +556,9 @@ export default function TransactionsPage() {
                           {txn.direction === "incoming" && "+"}
                           {txn.direction === "outgoing" && "-"}
                           {txn.amount}
+                          <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                            {txn.currency}
+                          </span>
                         </p>
                         {txn.feeValue > 0 && (
                           <p className="text-[10px] text-muted-foreground">
