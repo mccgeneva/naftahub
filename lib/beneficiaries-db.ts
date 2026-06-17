@@ -116,13 +116,31 @@ export async function replaceBeneficiariesForUser(
   }
 }
 
-/** Update only the status of one beneficiary (approve / suspend / block). */
+/**
+ * Update the status of one beneficiary (approve / suspend / block).
+ *
+ * Approval is also the KYC decision: when a beneficiary is set to "active" we
+ * flip `data.kycVerified` to true and stamp `data.amlScreeningDate` with today,
+ * so the client's detail view shows "Verified" instead of "Pending". Any other
+ * status (pending / suspended / blocked) clears `kycVerified` back to false
+ * while preserving the previous AML screening date.
+ */
 export async function setBeneficiaryStatus(id: string, status: string): Promise<StoredBeneficiary | null> {
   await ensureTable()
   const { rows } = await pool.query(
     `UPDATE client_beneficiaries
        SET status = $2,
-           data = jsonb_set(data, '{status}', to_jsonb($2::text)),
+           data = jsonb_set(
+                    jsonb_set(
+                      jsonb_set(data, '{status}', to_jsonb($2::text)),
+                      '{kycVerified}', to_jsonb($2 = 'active')
+                    ),
+                    '{amlScreeningDate}',
+                    CASE WHEN $2 = 'active'
+                         THEN to_jsonb(to_char(now(), 'YYYY-MM-DD'))
+                         ELSE COALESCE(data->'amlScreeningDate', 'null'::jsonb)
+                    END
+                  ),
            updated_at = now()
      WHERE id = $1
      RETURNING *`,
