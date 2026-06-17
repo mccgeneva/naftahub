@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { LifeBuoy, Mail, Phone, MessageSquare, Clock, Send, ChevronDown } from "lucide-react"
+import { LifeBuoy, Mail, Phone, MessageSquare, Clock, Send, ChevronDown, UserRound } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -14,6 +14,15 @@ import {
 } from "@/components/ui/collapsible"
 import { useActivityLog } from "@/components/activity-tracker"
 import { useCurrentUser } from "@/lib/use-current-user"
+
+const relationshipManager = {
+  name: "André Koller",
+  title: "Relationship Manager — MCC Geneva",
+  email: "A.koller@mccgva.ch",
+  phone: "+41 79 807 41 07",
+  phoneHref: "+41798074107",
+  whatsapp: true,
+}
 
 const channels = [
   { icon: Mail, label: "Email", value: "admin@mccgva.ch", note: "Replies within 24 hours" },
@@ -71,6 +80,41 @@ export default function SupportPage() {
           Get help with your account, transactions, and instruments
         </p>
       </div>
+
+      {/* Dedicated relationship manager */}
+      <Card className="border-primary/30 bg-secondary/40">
+        <CardContent className="flex flex-col gap-4 pt-6 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/15">
+              <UserRound className="h-6 w-6 text-primary" />
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Your Relationship Manager
+              </p>
+              <p className="text-lg font-semibold text-foreground">{relationshipManager.name}</p>
+              <p className="text-sm text-muted-foreground">{relationshipManager.title}</p>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 sm:items-end">
+            <Button asChild variant="outline" size="sm" className="justify-start gap-2 sm:w-auto">
+              <a href={`mailto:${relationshipManager.email}`}>
+                <Mail className="h-4 w-4" /> {relationshipManager.email}
+              </a>
+            </Button>
+            <Button asChild variant="outline" size="sm" className="justify-start gap-2 sm:w-auto">
+              <a
+                href={`https://wa.me/${relationshipManager.phoneHref.replace(/\D/g, "")}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <MessageSquare className="h-4 w-4" /> {relationshipManager.phone}
+                <span className="text-xs text-muted-foreground">(WhatsApp)</span>
+              </a>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Contact channels */}
       <div className="grid gap-4 sm:grid-cols-3">

@@ -242,7 +242,7 @@ const USER_DEMO: UserProfile = {
     { label: "Represented By", value: "MCC Capital Demonstration Desk", icon: User },
     { label: "Account Type", value: "Demo / Showcase Portfolio", icon: Briefcase },
     { label: "Nationality", value: "Swiss (Suisse)", icon: Flag },
-    { label: "Relationship Manager", value: "MCC Geneva — Private Office", icon: User },
+    { label: "Relationship Manager", value: "André Koller — MCC Geneva", icon: User },
     { label: "Onboarding Date", value: "08-03-2025", icon: CalendarDays },
     { label: "Client Tier", value: "Tier 1 — Institutional", icon: BadgeCheck },
     { label: "Risk Profile", value: "Balanced / Growth", icon: BadgeCheck },

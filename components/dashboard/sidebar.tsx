@@ -291,7 +291,7 @@ export function DashboardSidebar() {
               <span className="text-xs font-semibold text-sidebar-foreground">Relationship Manager</span>
             </div>
             <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-              Sophie Laurent is available 24/7 for priority clients.
+              André Koller is available 24/7 for priority clients.
             </p>
             <Button asChild size="sm" className="mt-2 h-8 w-full text-xs">
               <Link href="/dashboard/support">Contact RM</Link>
