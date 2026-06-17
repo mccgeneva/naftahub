@@ -84,6 +84,7 @@ import { AdminGatewaySection } from "@/components/dashboard/admin-gateway-sectio
 import { AdminReconciliationSection } from "@/components/dashboard/admin-reconciliation-section"
 import { TreasuryManager } from "@/components/admin/treasury-manager"
 import { UserManager } from "@/components/admin/user-manager"
+import { BeneficiaryManager } from "@/components/admin/beneficiary-manager"
 import { BalanceManager } from "@/components/admin/balance-manager"
 import { toast } from "sonner"
 
@@ -3397,6 +3398,15 @@ export default function AdminPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Client account administration: create, edit, suspend, reset credentials */}
+      <UserManager />
+
+      {/* Balance & transaction management: credit, debit, adjust, reverse */}
+      <BalanceManager />
+
+      {/* Beneficiary management: add, edit, remove, approve on behalf of clients */}
+      <BeneficiaryManager />
 
       {/* Payment Gateway administration */}
       <AdminGatewaySection />

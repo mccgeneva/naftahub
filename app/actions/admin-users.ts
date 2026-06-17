@@ -403,3 +403,48 @@ export async function getMyProfile(): Promise<SerializableUserProfile | null> {
     return null
   }
 }
+
+// --- Shared client picker --------------------------------------------------
+
+export interface SelectableClient {
+  id: string
+  fullName: string
+  company: string
+  email: string
+  kind: "static" | "dynamic"
+}
+
+/**
+ * Returns every account an administrator can act on (manage balances,
+ * beneficiaries, etc.): the static registry users plus all *active* dynamic
+ * (admin-created) users. Passcode-gated. Used by admin pickers so dynamic users
+ * are first-class throughout the control panel — not just in User Management.
+ */
+export async function listSelectableClients(passcode: string): Promise<SelectableClient[]> {
+  const { USERS } = await import("@/lib/users")
+  const staticClients: SelectableClient[] = USERS.map((u) => ({
+    id: u.id,
+    fullName: u.fullName,
+    company: u.company,
+    email: u.email,
+    kind: "static" as const,
+  }))
+
+  try {
+    requireAdmin(passcode)
+    const dynamic = (await listDynamicUsers())
+      .filter((u) => u.status === "active")
+      .map((u) => ({
+        id: u.id,
+        fullName: u.profile.fullName,
+        company: u.profile.company,
+        email: u.email,
+        kind: "dynamic" as const,
+      }))
+    return [...staticClients, ...dynamic]
+  } catch {
+    // DB unavailable or unauthorized — still return the static registry so the
+    // existing accounts remain manageable.
+    return staticClients
+  }
+}

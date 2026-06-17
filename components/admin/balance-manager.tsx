@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { ArrowDownLeft, ArrowUpRight, Trash2, Wallet, Plus, Loader2 } from "lucide-react"
+import { ArrowDownLeft, ArrowUpRight, Trash2, Wallet, Plus, Loader2, Pencil, Undo2 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,6 +15,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { useLedger, type LedgerDirection, type LedgerEntry, type LedgerStatus } from "@/lib/ledger-store"
@@ -22,8 +30,11 @@ import {
   getLedgerForUserAdmin,
   addLedgerEntryForUserAdmin,
   removeLedgerEntryForUserAdmin,
+  updateLedgerEntryForUserAdmin,
+  reverseLedgerEntryForUserAdmin,
 } from "@/app/actions/ledger"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
+import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
 import { USERS, getUserById } from "@/lib/users"
 import { getActiveUserId } from "@/lib/user-scope"
 import { useActivityLog } from "@/components/activity-tracker"
@@ -54,6 +65,23 @@ export function BalanceManager() {
   const logActivity = useActivityLog()
 
   const [targetUserId, setTargetUserId] = useState(USERS[0]?.id ?? "u1")
+  // The full set of accounts the admin can manage: static registry users plus
+  // active dynamic (admin-created) users, fetched once on mount.
+  const [clients, setClients] = useState<SelectableClient[]>(
+    USERS.map((u) => ({ id: u.id, fullName: u.fullName, company: u.company, email: u.email, kind: "static" as const })),
+  )
+
+  useEffect(() => {
+    let active = true
+    listSelectableClients(ADMIN_PASSCODE)
+      .then((list) => {
+        if (active && list.length) setClients(list)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
   const [direction, setDirection] = useState<LedgerDirection>("credit")
   const [amount, setAmount] = useState("")
   const [currency, setCurrency] = useState("EUR")
@@ -70,7 +98,16 @@ export function BalanceManager() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
-  const targetUser = getUserById(targetUserId)
+  // Edit-an-existing-entry dialog state.
+  const [editEntry, setEditEntry] = useState<LedgerEntry | null>(null)
+  const [editAmount, setEditAmount] = useState("")
+  const [editStatus, setEditStatus] = useState<LedgerStatus>("completed")
+  const [editCounterparty, setEditCounterparty] = useState("")
+  const [editComment, setEditComment] = useState("")
+  const [editBusy, setEditBusy] = useState(false)
+  const [reversingId, setReversingId] = useState<string | null>(null)
+
+  const targetUser = clients.find((c) => c.id === targetUserId) ?? getUserById(targetUserId)
   const isIncoming = direction === "credit"
 
   // Load the selected client's ledger from the server whenever the target
@@ -206,8 +243,78 @@ export function BalanceManager() {
     })
   }
 
+  const openEdit = (e: LedgerEntry) => {
+    setEditEntry(e)
+    setEditAmount(String(e.amount))
+    setEditStatus(e.status)
+    setEditCounterparty(e.counterparty ?? "")
+    setEditComment(e.comment ?? "")
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editEntry) return
+    const numeric = Number(editAmount)
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      toast.error("Enter a valid amount greater than zero.")
+      return
+    }
+    setEditBusy(true)
+    const res = await updateLedgerEntryForUserAdmin(ADMIN_PASSCODE, targetUserId, {
+      ...editEntry,
+      amount: numeric,
+      status: editStatus,
+      counterparty: editCounterparty.trim(),
+      comment: editComment.trim() || undefined,
+    })
+    setEditBusy(false)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    setEntries(res.entries)
+    refreshLiveIfSelf()
+    toast.success("Transaction updated", {
+      description: `${editEntry.id} was updated on ${targetUser.fullName}'s ledger.`,
+    })
+    logActivity({
+      action: `Administrator edited ledger entry ${editEntry.id} for ${targetUser.fullName}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator edited transaction ${editEntry.id} on the account of ${targetUser.fullName} (${targetUser.company}). New amount: ${fmt(numeric, editEntry.currency)}. Status: ${editStatus}.`,
+        referenceId: editEntry.id,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        status: editStatus,
+      },
+    })
+    setEditEntry(null)
+  }
+
+  const handleReverse = async (entryId: string) => {
+    setReversingId(entryId)
+    const res = await reverseLedgerEntryForUserAdmin(ADMIN_PASSCODE, targetUserId, entryId)
+    setReversingId(null)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    setEntries(res.entries)
+    refreshLiveIfSelf()
+    toast.success("Transaction reversed", {
+      description: `A reversing entry for ${entryId} was posted to ${targetUser.fullName}'s ledger.`,
+    })
+    logActivity({
+      action: `Administrator reversed ledger entry ${entryId} for ${targetUser.fullName}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator reversed transaction ${entryId} on the account of ${targetUser.fullName} (${targetUser.company}). A mirror entry was posted to net the balance.`,
+        referenceId: entryId,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        decision: "Reversed",
+      },
+    })
+  }
+
   return (
-    <Card className="bg-card border-border">
       <CardHeader>
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
@@ -231,7 +338,7 @@ export function BalanceManager() {
               <SelectValue placeholder="Select a client" />
             </SelectTrigger>
             <SelectContent>
-              {USERS.map((u) => (
+              {clients.map((u) => (
                 <SelectItem key={u.id} value={u.id}>
                   {u.fullName} — {u.company} ({u.email})
                 </SelectItem>
