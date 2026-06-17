@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import {
   LayoutDashboard,
   ArrowLeftRight,
+  Send,
   CreditCard,
   FileText,
   TrendingUp,
@@ -56,6 +57,7 @@ const navGroups: NavGroup[] = [
     items: [
       { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
       { title: "Payments & Payees", href: "/dashboard/payments", icon: ArrowLeftRight },
+      { title: "Internal Transfers", href: "/dashboard/transfers", icon: Send, badge: "P2P" },
       { title: "Beneficiaries", href: "/dashboard/beneficiaries", icon: Users },
       { title: "Transactions", href: "/dashboard/transactions", icon: CreditCard },
       { title: "Live FX Rates", href: "/dashboard/exchange", icon: DollarSign },
