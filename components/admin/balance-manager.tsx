@@ -1,0 +1,479 @@
+"use client"
+
+import { useEffect, useMemo, useState } from "react"
+import { ArrowDownLeft, ArrowUpRight, Trash2, Wallet, Plus, Loader2 } from "lucide-react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Badge } from "@/components/ui/badge"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { cn } from "@/lib/utils"
+import { toast } from "sonner"
+import { useLedger, type LedgerDirection, type LedgerEntry, type LedgerStatus } from "@/lib/ledger-store"
+import {
+  getLedgerForUserAdmin,
+  addLedgerEntryForUserAdmin,
+  removeLedgerEntryForUserAdmin,
+} from "@/app/actions/ledger"
+import { ADMIN_PASSCODE } from "@/lib/admin-config"
+import { USERS, getUserById } from "@/lib/users"
+import { getActiveUserId } from "@/lib/user-scope"
+import { useActivityLog } from "@/components/activity-tracker"
+
+/** Generate a unique receipt/reference id, matching the platform's style. */
+function generateReceiptId(prefix = "ADM"): string {
+  const n = Math.floor(1_000_000 + Math.random() * 9_000_000)
+  return `${prefix}${n}`
+}
+
+const SUPPORTED_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "JPY", "AUD", "CAD", "SGD"]
+
+const todayISO = () => new Date().toISOString().slice(0, 10)
+
+const fmt = (value: number, currency: string) =>
+  `${currency} ${value.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+
+const fmtDate = (iso: string) => {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB")
+}
+
+export function BalanceManager() {
+  const { refresh: refreshLiveLedger } = useLedger()
+  const logActivity = useActivityLog()
+
+  const [targetUserId, setTargetUserId] = useState(USERS[0]?.id ?? "u1")
+  const [direction, setDirection] = useState<LedgerDirection>("credit")
+  const [amount, setAmount] = useState("")
+  const [currency, setCurrency] = useState("EUR")
+  const [status, setStatus] = useState<LedgerStatus>("completed")
+  const [date, setDate] = useState(todayISO())
+  const [counterparty, setCounterparty] = useState("")
+  const [account, setAccount] = useState("")
+  const [bank, setBank] = useState("")
+  const [reference, setReference] = useState("")
+  const [description, setDescription] = useState("")
+
+  // The target client's ledger, loaded from Neon (passcode-verified).
+  const [entries, setEntries] = useState<LedgerEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  const targetUser = getUserById(targetUserId)
+  const isIncoming = direction === "credit"
+
+  // Load the selected client's ledger from the server whenever the target
+  // changes. The admin passcode is verified server-side.
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    getLedgerForUserAdmin(ADMIN_PASSCODE, targetUserId)
+      .then((res) => {
+        if (!active) return
+        if (!res.ok) {
+          toast.error(res.error)
+          setEntries([])
+          return
+        }
+        setEntries(res.entries)
+      })
+      .finally(() => active && setLoading(false))
+    return () => {
+      active = false
+    }
+  }, [targetUserId])
+
+  const balances = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const e of entries) {
+      if (e.status !== "completed") continue
+      const cur = map.get(e.currency) ?? 0
+      map.set(e.currency, cur + (e.direction === "credit" ? e.amount : -e.amount))
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  }, [entries])
+
+  const resetForm = () => {
+    setAmount("")
+    setCounterparty("")
+    setAccount("")
+    setBank("")
+    setReference("")
+    setDescription("")
+    setDate(todayISO())
+    setStatus("completed")
+  }
+
+  // If the edited account is the one currently signed in, refresh its live view.
+  const refreshLiveIfSelf = () => {
+    if (getActiveUserId() === targetUserId) void refreshLiveLedger()
+  }
+
+  const handleSubmit = async () => {
+    const numeric = Number(amount)
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      toast.error("Enter a valid amount greater than zero.")
+      return
+    }
+    if (!counterparty.trim()) {
+      toast.error(isIncoming ? "Enter the sender name." : "Enter the beneficiary name.")
+      return
+    }
+
+    const id = reference.trim() || generateReceiptId(isIncoming ? "PPY" : "OUT")
+    const isoDate = date ? new Date(`${date}T12:00:00`).toISOString() : new Date().toISOString()
+
+    setSaving(true)
+    const res = await addLedgerEntryForUserAdmin(ADMIN_PASSCODE, targetUserId, {
+      id,
+      direction,
+      amount: numeric,
+      currency,
+      status,
+      date: isoDate,
+      counterparty: counterparty.trim(),
+      account: account.trim() || undefined,
+      bank: bank.trim() || undefined,
+      reference: id,
+      comment: description.trim() || undefined,
+      category: isIncoming ? "Incoming Payment" : "Outgoing Payment",
+    })
+    setSaving(false)
+
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+
+    setEntries(res.entries)
+    refreshLiveIfSelf()
+
+    toast.success(isIncoming ? "Incoming payment credited" : "Outgoing payment debited", {
+      description: `${fmt(numeric, currency)} ${isIncoming ? "credited to" : "debited from"} ${targetUser.fullName} (${targetUser.company}).`,
+    })
+
+    logActivity({
+      action: `Administrator ${isIncoming ? "credited" : "debited"} ${fmt(numeric, currency)} ${isIncoming ? "to" : "from"} ${targetUser.fullName}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator manually registered an ${isIncoming ? "incoming" : "outgoing"} payment of ${fmt(numeric, currency)} ${isIncoming ? "to" : "from"} the account of ${targetUser.fullName} (${targetUser.company}). Status: ${status}. ${counterparty.trim() ? `${isIncoming ? "Sender" : "Beneficiary"}: ${counterparty.trim()}.` : ""}${description.trim() ? ` Reference: ${description.trim()}.` : ""}`,
+        referenceId: id,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        type: isIncoming ? "Incoming Payment" : "Outgoing Payment",
+        amount: fmt(numeric, currency),
+        counterparty: counterparty.trim() || "(none)",
+        counterpartyAccount: account.trim() || "(none)",
+        counterpartyBank: bank.trim() || "(none)",
+        status,
+        valueDate: fmtDate(isoDate),
+      },
+    })
+
+    resetForm()
+  }
+
+  const handleDelete = async (entryId: string) => {
+    const res = await removeLedgerEntryForUserAdmin(ADMIN_PASSCODE, targetUserId, entryId)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    setEntries(res.entries)
+    refreshLiveIfSelf()
+    toast.success("Entry removed", {
+      description: `Transaction ${entryId} was removed from ${targetUser.fullName}'s ledger.`,
+    })
+    logActivity({
+      action: `Administrator removed ledger entry ${entryId} from ${targetUser.fullName}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator removed transaction ${entryId} from the account of ${targetUser.fullName} (${targetUser.company}).`,
+        referenceId: entryId,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        decision: "Removed",
+      },
+    })
+  }
+
+  return (
+    <Card className="bg-card border-border">
+      <CardHeader>
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
+            <Wallet className="h-5 w-5 text-primary" />
+          </div>
+          <div>
+            <CardTitle className="text-lg font-semibold">Balance Management</CardTitle>
+            <p className="text-sm text-muted-foreground text-pretty">
+              Register an incoming or outgoing payment directly to any client account. Changes
+              update the client&apos;s balance and transaction history immediately.
+            </p>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {/* Target account */}
+        <div className="space-y-2">
+          <Label>Client account</Label>
+          <Select value={targetUserId} onValueChange={setTargetUserId}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select a client" />
+            </SelectTrigger>
+            <SelectContent>
+              {USERS.map((u) => (
+                <SelectItem key={u.id} value={u.id}>
+                  {u.fullName} — {u.company} ({u.email})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {loading && (
+            <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> Loading ledger…
+            </p>
+          )}
+        </div>
+
+        {/* Current balances for the selected account */}
+        <div className="rounded-lg border border-border bg-secondary/40 p-3">
+          <p className="mb-2 text-xs font-medium text-muted-foreground">
+            Current balances — {targetUser.fullName}
+          </p>
+          {balances.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No balances yet (empty ledger).</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {balances.map(([cur, val]) => (
+                <Badge key={cur} variant="outline" className="text-sm font-semibold">
+                  {fmt(val, cur)}
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Direction */}
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => setDirection("credit")}
+            className={cn(
+              "flex items-center justify-center gap-2 rounded-lg border p-3 text-sm font-medium transition-colors",
+              isIncoming
+                ? "border-green-500/50 bg-green-500/10 text-green-400"
+                : "border-border bg-card text-muted-foreground hover:bg-secondary",
+            )}
+          >
+            <ArrowDownLeft className="h-4 w-4" />
+            Incoming (credit)
+          </button>
+          <button
+            type="button"
+            onClick={() => setDirection("debit")}
+            className={cn(
+              "flex items-center justify-center gap-2 rounded-lg border p-3 text-sm font-medium transition-colors",
+              !isIncoming
+                ? "border-red-500/50 bg-red-500/10 text-red-400"
+                : "border-border bg-card text-muted-foreground hover:bg-secondary",
+            )}
+          >
+            <ArrowUpRight className="h-4 w-4" />
+            Outgoing (debit)
+          </button>
+        </div>
+
+        {/* Amount + currency */}
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="space-y-2 sm:col-span-2">
+            <Label htmlFor="bm-amount">Amount</Label>
+            <Input
+              id="bm-amount"
+              type="number"
+              min="0"
+              step="0.01"
+              inputMode="decimal"
+              placeholder="0.00"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Currency</Label>
+            <Select value={currency} onValueChange={setCurrency}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SUPPORTED_CURRENCIES.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {/* Status + date */}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label>Status</Label>
+            <Select value={status} onValueChange={(v) => setStatus(v as LedgerStatus)}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="completed">Completed</SelectItem>
+                <SelectItem value="hold">On Hold</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="bm-date">Value date</Label>
+            <Input
+              id="bm-date"
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* Counterparty details */}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="bm-counterparty">{isIncoming ? "Sender name" : "Beneficiary name"}</Label>
+            <Input
+              id="bm-counterparty"
+              placeholder={isIncoming ? "e.g. Luigi Forino" : "e.g. ACME Trading Ltd"}
+              value={counterparty}
+              onChange={(e) => setCounterparty(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="bm-account">{isIncoming ? "Sender IBAN / account" : "Beneficiary IBAN / account"}</Label>
+            <Input
+              id="bm-account"
+              placeholder="e.g. DE77202208000056457149"
+              value={account}
+              onChange={(e) => setAccount(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="bm-bank">Bank (BIC / SWIFT optional)</Label>
+            <Input
+              id="bm-bank"
+              placeholder="e.g. Banking Circle — German Branch (SXPYDEHHXXX)"
+              value={bank}
+              onChange={(e) => setBank(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="bm-reference">Reference / receipt no. (optional)</Label>
+            <Input
+              id="bm-reference"
+              placeholder="Auto-generated if left blank"
+              value={reference}
+              onChange={(e) => setReference(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="bm-description">Description</Label>
+          <Textarea
+            id="bm-description"
+            placeholder="e.g. Investment"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={2}
+          />
+        </div>
+
+        <Button onClick={handleSubmit} disabled={saving || loading} className="w-full sm:w-auto">
+          {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
+          {isIncoming ? "Credit incoming payment" : "Debit outgoing payment"}
+        </Button>
+
+        {/* Recent entries with delete */}
+        <div className="space-y-2 border-t border-border pt-4">
+          <p className="text-sm font-medium text-foreground">
+            Recent transactions — {targetUser.fullName}
+          </p>
+          {entries.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No transactions on record.</p>
+          ) : (
+            <div className="space-y-2">
+              {entries.slice(0, 8).map((e) => (
+                <div
+                  key={e.id}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card p-3"
+                >
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    <div
+                      className={cn(
+                        "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+                        e.direction === "credit"
+                          ? "bg-green-500/10 text-green-400"
+                          : "bg-red-500/10 text-red-400",
+                      )}
+                    >
+                      {e.direction === "credit" ? (
+                        <ArrowDownLeft className="h-4 w-4" />
+                      ) : (
+                        <ArrowUpRight className="h-4 w-4" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {e.counterparty || e.category || e.id}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {e.id} · {fmtDate(e.date)} ·{" "}
+                        {e.status === "completed" ? "Completed" : "On Hold"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "whitespace-nowrap text-sm font-semibold",
+                        e.direction === "credit" ? "text-green-400" : "text-red-400",
+                      )}
+                    >
+                      {e.direction === "credit" ? "+" : "−"}
+                      {fmt(e.amount, e.currency)}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-red-400"
+                      onClick={() => handleDelete(e.id)}
+                      aria-label={`Remove transaction ${e.id}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}

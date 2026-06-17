@@ -1,0 +1,666 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { toast } from "sonner"
+import { useActivityLog } from "@/components/activity-tracker"
+import { useLedger } from "@/lib/ledger-store"
+import {
+  ArrowDownUp,
+  RefreshCw,
+  TrendingUp,
+  TrendingDown,
+  Clock,
+  AlertCircle,
+  CheckCircle2,
+  History,
+  Bell,
+  Settings,
+} from "lucide-react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Area,
+  AreaChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts"
+import { cn } from "@/lib/utils"
+
+const currencies = [
+  { code: "EUR", name: "Euro", symbol: "€", flag: "🇪🇺" },
+  { code: "USD", name: "US Dollar", symbol: "$", flag: "🇺🇸" },
+  { code: "GBP", name: "British Pound", symbol: "£", flag: "🇬🇧" },
+  { code: "CHF", name: "Swiss Franc", symbol: "Fr", flag: "🇨🇭" },
+  { code: "JPY", name: "Japanese Yen", symbol: "¥", flag: "🇯🇵" },
+  { code: "AUD", name: "Australian Dollar", symbol: "A$", flag: "🇦🇺" },
+  { code: "CAD", name: "Canadian Dollar", symbol: "C$", flag: "🇨🇦" },
+  { code: "SGD", name: "Singapore Dollar", symbol: "S$", flag: "🇸🇬" },
+]
+
+// USD value of 1 unit of each currency, used to derive any cross-rate.
+const usdPerUnit: Record<string, number> = {
+  USD: 1,
+  EUR: 1.0892,
+  GBP: 1.2645,
+  CHF: 1.1303, // 1 / 0.8847
+  JPY: 0.006688, // 1 / 149.52
+  AUD: 0.6542,
+  CAD: 0.7416, // 1 / 1.3485
+  SGD: 0.7407,
+}
+
+// Rate to convert 1 unit of `from` into `to`.
+function getRate(from: string, to: string): number {
+  const fromUsd = usdPerUnit[from] ?? 1
+  const toUsd = usdPerUnit[to] ?? 1
+  return fromUsd / toUsd
+}
+
+const liveRates = [
+  { pair: "EUR/USD", rate: 1.0892, change: 0.15, trend: "up" },
+  { pair: "GBP/USD", rate: 1.2645, change: -0.08, trend: "down" },
+  { pair: "USD/CHF", rate: 0.8847, change: 0.22, trend: "up" },
+  { pair: "EUR/GBP", rate: 0.8613, change: 0.05, trend: "up" },
+  { pair: "USD/JPY", rate: 149.52, change: -0.12, trend: "down" },
+  { pair: "AUD/USD", rate: 0.6542, change: 0.18, trend: "up" },
+  { pair: "USD/CAD", rate: 1.3485, change: -0.05, trend: "down" },
+  { pair: "EUR/CHF", rate: 0.9642, change: 0.08, trend: "up" },
+]
+
+const recentExchanges: {
+  id: string
+  fromCurrency: string
+  toCurrency: string
+  fromAmount: number
+  toAmount: number
+  rate: number
+  status: string
+  date: string
+  time: string
+}[] = []
+
+const chartData = [
+  { time: "00:00", rate: 1.0875 },
+  { time: "04:00", rate: 1.0882 },
+  { time: "08:00", rate: 1.0890 },
+  { time: "12:00", rate: 1.0885 },
+  { time: "16:00", rate: 1.0895 },
+  { time: "20:00", rate: 1.0888 },
+  { time: "Now", rate: 1.0892 },
+]
+
+export default function ExchangePage() {
+  const [fromCurrency, setFromCurrency] = useState("EUR")
+  const [toCurrency, setToCurrency] = useState("USD")
+  const [fromAmount, setFromAmount] = useState("1000")
+  const [toAmount, setToAmount] = useState("1089.20")
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [lastUpdate, setLastUpdate] = useState(new Date())
+  const [isExecuting, setIsExecuting] = useState(false)
+  const logActivity = useActivityLog()
+  const { addReceipt, addDebit, balanceFor } = useLedger()
+
+  const currentRate = getRate(fromCurrency, toCurrency)
+  const conversionFee = 0.004 // 0.4%
+
+  const numericFrom = parseFloat(fromAmount.replace(/,/g, "")) || 0
+  const feeAmount = numericFrom * conversionFee
+  const totalDebit = numericFrom + feeAmount
+  const availableBalance = balanceFor(fromCurrency)
+
+  const handleExecuteExchange = () => {
+    if (numericFrom <= 0) {
+      toast.error("Enter an amount to convert")
+      return
+    }
+    if (fromCurrency === toCurrency) {
+      toast.error("Choose two different currencies")
+      return
+    }
+    // The source amount plus the 0.4% fee must be covered by the balance.
+    if (totalDebit > availableBalance) {
+      toast.error("Insufficient funds", {
+        description: `You need ${currencies.find((c) => c.code === fromCurrency)?.symbol}${totalDebit.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (incl. fee) but only have ${currencies.find((c) => c.code === fromCurrency)?.symbol}${availableBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${fromCurrency}.`,
+      })
+      logActivity({
+        action: `FX conversion ${fromCurrency} → ${toCurrency} DECLINED — insufficient funds`,
+        category: "Currency Exchange",
+        details: {
+          summary: `Attempted to convert ${fromCurrency} ${numericFrom.toLocaleString()} to ${toCurrency} but the ${fromCurrency} balance was insufficient (needed ${totalDebit.toFixed(2)}, available ${availableBalance.toFixed(2)}).`,
+          outcome: "DECLINED — Insufficient funds",
+        },
+      })
+      return
+    }
+
+    setIsExecuting(true)
+    const receivedAmount = numericFrom * currentRate
+    const ref = `FX-${Date.now().toString().slice(-8)}`
+    const nowIso = new Date().toISOString()
+
+    // Debit the source currency (amount sold).
+    addDebit({
+      id: ref,
+      amount: numericFrom,
+      currency: fromCurrency,
+      status: "completed",
+      date: nowIso,
+      counterparty: `FX Conversion → ${toCurrency}`,
+      reference: ref,
+      category: "Currency Exchange",
+    })
+    // Debit the 0.4% conversion fee in the source currency.
+    if (feeAmount > 0) {
+      addDebit({
+        id: `${ref}-FEE`,
+        amount: Math.round(feeAmount * 100) / 100,
+        currency: fromCurrency,
+        status: "completed",
+        date: nowIso,
+        counterparty: "MCC FX Fee (0.4%)",
+        reference: `${ref} — fee`,
+        category: "Exchange Fee",
+      })
+    }
+    // Credit the target currency (amount received).
+    addReceipt({
+      id: `${ref}-RCV`,
+      amount: Math.round(receivedAmount * 100) / 100,
+      currency: toCurrency,
+      status: "completed",
+      date: nowIso,
+      counterparty: `FX Conversion ← ${fromCurrency}`,
+      reference: ref,
+      category: "Currency Exchange",
+    })
+
+    logActivity({
+      action: `Executed FX conversion: ${fromCurrency} ${numericFrom.toLocaleString()} → ${toCurrency} ${receivedAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+      category: "Currency Exchange",
+      details: {
+        summary: `Client converted ${fromCurrency} ${numericFrom.toLocaleString()} into ${toCurrency} ${receivedAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} at a rate of 1 ${fromCurrency} = ${currentRate.toFixed(4)} ${toCurrency}, with a 0.4% conversion fee (${fromCurrency} ${feeAmount.toFixed(2)}). Balances updated.`,
+        reference: ref,
+        sellCurrency: fromCurrency,
+        sellAmount: `${fromCurrency} ${numericFrom.toLocaleString()}`,
+        buyCurrency: toCurrency,
+        buyAmount: `${toCurrency} ${receivedAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+        exchangeRate: `1 ${fromCurrency} = ${currentRate.toFixed(4)} ${toCurrency}`,
+        feePercent: "0.4%",
+        fee: `${fromCurrency} ${feeAmount.toFixed(2)}`,
+        executedAt: new Date().toLocaleString("en-GB"),
+      },
+    })
+
+    toast.success("Exchange executed", {
+      description: `Converted ${fromCurrency} ${numericFrom.toLocaleString()} → ${toCurrency} ${receivedAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}. Balances updated.`,
+    })
+    setIsExecuting(false)
+  }
+
+  useEffect(() => {
+    const numericAmount = parseFloat(fromAmount.replace(/,/g, "")) || 0
+    const converted = (numericAmount * getRate(fromCurrency, toCurrency)).toFixed(2)
+    setToAmount(parseFloat(converted).toLocaleString())
+  }, [fromAmount, fromCurrency, toCurrency])
+
+  const handleSwap = () => {
+    setFromCurrency(toCurrency)
+    setToCurrency(fromCurrency)
+    setFromAmount(toAmount.replace(/,/g, ""))
+  }
+
+  const refreshRates = () => {
+    setIsRefreshing(true)
+    setTimeout(() => {
+      setLastUpdate(new Date())
+      setIsRefreshing(false)
+    }, 500)
+  }
+
+  const handleSetAlert = () => {
+    logActivity({
+      action: `Set a rate alert for ${fromCurrency}/${toCurrency}`,
+      category: "Currency Exchange",
+      details: {
+        summary: `Client created a rate alert for the ${fromCurrency}/${toCurrency} pair (current rate ${currentRate.toFixed(4)}).`,
+        pair: `${fromCurrency}/${toCurrency}`,
+        currentRate: currentRate.toFixed(4),
+        createdAt: new Date().toLocaleString("en-GB"),
+      },
+    })
+    toast.success("Rate alert created", {
+      description: `We'll notify you of changes to ${fromCurrency}/${toCurrency}.`,
+    })
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">
+            Currency Exchange
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Trade 330+ forex pairs with live rates
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 rounded-lg bg-secondary px-3 py-1.5">
+            <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+            <span className="text-xs text-muted-foreground">Markets Open</span>
+          </div>
+          <Button variant="outline" size="sm" onClick={refreshRates}>
+            <RefreshCw
+              className={cn("mr-2 h-4 w-4", isRefreshing && "animate-spin")}
+            />
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        {/* Exchange Calculator */}
+        <div className="lg:col-span-2 space-y-6">
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold">
+                Exchange Calculator
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* From Currency */}
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">You Send</Label>
+                <div className="flex gap-2">
+                  <Select value={fromCurrency} onValueChange={setFromCurrency}>
+                    <SelectTrigger className="w-[140px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {currencies.map((currency) => (
+                        <SelectItem key={currency.code} value={currency.code}>
+                          <div className="flex items-center gap-2">
+                            <span>{currency.flag}</span>
+                            <span>{currency.code}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    value={fromAmount}
+                    onChange={(e) => setFromAmount(e.target.value)}
+                    className="flex-1 text-lg font-mono"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
+              {/* Swap Button */}
+              <div className="flex justify-center">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="rounded-full"
+                  onClick={handleSwap}
+                >
+                  <ArrowDownUp className="h-4 w-4" />
+                </Button>
+              </div>
+
+              {/* To Currency */}
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">You Receive</Label>
+                <div className="flex gap-2">
+                  <Select value={toCurrency} onValueChange={setToCurrency}>
+                    <SelectTrigger className="w-[140px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {currencies.map((currency) => (
+                        <SelectItem key={currency.code} value={currency.code}>
+                          <div className="flex items-center gap-2">
+                            <span>{currency.flag}</span>
+                            <span>{currency.code}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    value={toAmount}
+                    readOnly
+                    className="flex-1 text-lg font-mono bg-secondary"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
+              {/* Rate Info */}
+              <div className="rounded-lg bg-secondary/50 p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">
+                    Exchange Rate
+                  </span>
+                  <span className="text-sm font-mono font-semibold text-foreground">
+                    1 {fromCurrency} = {currentRate.toFixed(4)} {toCurrency}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">
+                    Conversion Fee (0.4%)
+                  </span>
+                  <span className="text-sm font-mono text-foreground">
+                    {currencies.find((c) => c.code === fromCurrency)?.symbol}
+                    {(
+                      parseFloat(fromAmount.replace(/,/g, "")) * conversionFee
+                    ).toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between pt-2 border-t border-border">
+                  <span className="text-sm font-medium text-foreground">
+                    You Pay
+                  </span>
+                  <span className="text-lg font-bold text-foreground">
+                    {currencies.find((c) => c.code === fromCurrency)?.symbol}
+                    {totalDebit.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">
+                    Available {fromCurrency}
+                  </span>
+                  <span
+                    className={cn(
+                      "text-sm font-mono",
+                      totalDebit > availableBalance
+                        ? "text-red-500"
+                        : "text-foreground",
+                    )}
+                  >
+                    {currencies.find((c) => c.code === fromCurrency)?.symbol}
+                    {availableBalance.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+              </div>
+
+              <Button
+                className="w-full"
+                size="lg"
+                onClick={handleExecuteExchange}
+                disabled={isExecuting || numericFrom <= 0 || totalDebit > availableBalance}
+              >
+                {totalDebit > availableBalance ? "Insufficient Funds" : "Execute Exchange"}
+              </Button>
+
+              <p className="text-xs text-center text-muted-foreground">
+                Rate guaranteed for 30 seconds • Last updated:{" "}
+                {lastUpdate.toLocaleTimeString()}
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Rate Chart */}
+          <Card className="bg-card border-border">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-lg font-semibold">
+                  {fromCurrency}/{toCurrency} Rate Chart
+                </CardTitle>
+                <p className="text-xs text-muted-foreground mt-1">
+                  24 hour performance
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className="bg-green-500/10 text-green-500 border-green-500/20"
+                >
+                  <TrendingUp className="mr-1 h-3 w-3" />
+                  +0.15%
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[200px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <defs>
+                      <linearGradient
+                        id="colorRate"
+                        x1="0"
+                        y1="0"
+                        x2="0"
+                        y2="1"
+                      >
+                        <stop
+                          offset="5%"
+                          stopColor="hsl(var(--primary))"
+                          stopOpacity={0.3}
+                        />
+                        <stop
+                          offset="95%"
+                          stopColor="hsl(var(--primary))"
+                          stopOpacity={0}
+                        />
+                      </linearGradient>
+                    </defs>
+                    <XAxis
+                      dataKey="time"
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      domain={["dataMin - 0.005", "dataMax + 0.005"]}
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(value) => value.toFixed(4)}
+                    />
+                    <Tooltip
+                      content={({ active, payload }) => {
+                        if (active && payload && payload.length) {
+                          return (
+                            <div className="rounded-lg border border-border bg-card p-2 shadow-lg">
+                              <p className="text-xs text-muted-foreground">
+                                {payload[0].payload.time}
+                              </p>
+                              <p className="text-sm font-bold text-foreground">
+                                {(payload[0].value as number).toFixed(4)}
+                              </p>
+                            </div>
+                          )
+                        }
+                        return null
+                      }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="rate"
+                      stroke="hsl(var(--primary))"
+                      strokeWidth={2}
+                      fillOpacity={1}
+                      fill="url(#colorRate)"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Right Sidebar */}
+        <div className="space-y-6">
+          {/* Live Rates */}
+          <Card className="bg-card border-border">
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-lg font-semibold">Live Rates</CardTitle>
+              <Button variant="ghost" size="icon" onClick={refreshRates}>
+                <RefreshCw
+                  className={cn("h-4 w-4", isRefreshing && "animate-spin")}
+                />
+              </Button>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {liveRates.map((rate) => (
+                  <div
+                    key={rate.pair}
+                    className="flex items-center justify-between py-2 border-b border-border last:border-0"
+                  >
+                    <span className="text-sm font-medium text-foreground">
+                      {rate.pair}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-mono text-foreground">
+                        {rate.rate.toFixed(4)}
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-[10px]",
+                          rate.trend === "up"
+                            ? "bg-green-500/10 text-green-500 border-green-500/20"
+                            : "bg-red-500/10 text-red-500 border-red-500/20"
+                        )}
+                      >
+                        {rate.trend === "up" ? (
+                          <TrendingUp className="mr-1 h-3 w-3" />
+                        ) : (
+                          <TrendingDown className="mr-1 h-3 w-3" />
+                        )}
+                        {Math.abs(rate.change)}%
+                      </Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Recent Exchanges */}
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold flex items-center gap-2">
+                <History className="h-4 w-4" />
+                Recent Exchanges
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {recentExchanges.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary mb-2">
+                    <History className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium text-foreground">No exchanges yet</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Your currency conversions will appear here
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                {recentExchanges.map((exchange) => (
+                  <div
+                    key={exchange.id}
+                    className="rounded-lg border border-border bg-secondary/30 p-3"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <code className="text-xs text-muted-foreground">
+                        {exchange.id}
+                      </code>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-[10px]",
+                          exchange.status === "completed"
+                            ? "bg-green-500/10 text-green-500 border-green-500/20"
+                            : "bg-yellow-500/10 text-yellow-500 border-yellow-500/20"
+                        )}
+                      >
+                        {exchange.status === "completed" ? (
+                          <CheckCircle2 className="mr-1 h-3 w-3" />
+                        ) : (
+                          <Clock className="mr-1 h-3 w-3" />
+                        )}
+                        {exchange.status}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">
+                          {exchange.fromCurrency}{" "}
+                          {exchange.fromAmount.toLocaleString()}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {exchange.date} at {exchange.time}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-semibold text-green-500">
+                          {exchange.toCurrency}{" "}
+                          {exchange.toAmount.toLocaleString()}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          @ {exchange.rate}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Rate Alerts */}
+          <Card className="bg-card border-border">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="rounded-lg bg-primary/10 p-2">
+                    <Bell className="h-4 w-4 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">
+                      Rate Alerts
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Get notified on rate changes
+                    </p>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" onClick={handleSetAlert}>
+                  <Settings className="mr-2 h-3 w-3" />
+                  Set Alert
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  )
+}

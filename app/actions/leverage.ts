@@ -1,0 +1,93 @@
+"use server"
+
+import { cookies } from "next/headers"
+import { pool } from "@/lib/db"
+import { SESSION_COOKIE } from "@/lib/auth"
+import { getUserBySessionToken, type UserProfile } from "@/lib/users"
+import type { LeverageRequest } from "@/lib/leverage-requests-store"
+
+async function getSessionUser(): Promise<UserProfile | undefined> {
+  const cookieStore = await cookies()
+  const token = cookieStore.get(SESSION_COOKIE)?.value
+  return getUserBySessionToken(token)
+}
+
+function rowToRequest(row: Record<string, unknown>): LeverageRequest {
+  // The full request object is stored in the jsonb payload; promoted columns
+  // (status/timestamps) are authoritative and overlaid on read.
+  const payload = (row.payload as LeverageRequest) ?? ({} as LeverageRequest)
+  return {
+    ...payload,
+    id: row.request_id as string,
+    status: (row.status as LeverageRequest["status"]) ?? payload.status,
+  }
+}
+
+async function readRequests(userId: string): Promise<LeverageRequest[]> {
+  const { rows } = await pool.query(
+    `SELECT * FROM leverage_requests WHERE user_id = $1 ORDER BY submitted_at DESC NULLS LAST`,
+    [userId],
+  )
+  return rows.map(rowToRequest)
+}
+
+/** Return the signed-in user's leverage requests. */
+export async function getMyLeverage(): Promise<LeverageRequest[]> {
+  const user = await getSessionUser()
+  if (!user) return []
+  try {
+    return await readRequests(user.id)
+  } catch (err) {
+    console.log("[v0] getMyLeverage query failed:", (err as Error).message)
+    return []
+  }
+}
+
+/** Insert or update a single leverage request for the signed-in user. */
+export async function saveLeverageRequest(request: LeverageRequest): Promise<{ ok: boolean }> {
+  const user = await getSessionUser()
+  if (!user) return { ok: false }
+  try {
+    await pool.query(
+      `INSERT INTO leverage_requests
+         (user_id, request_id, status, submitted_at, decided_at, closed_at, updated_at, payload)
+       VALUES ($1,$2,$3,$4,$5,$6,now(),$7::jsonb)
+       ON CONFLICT (user_id, request_id) DO UPDATE SET
+         status = EXCLUDED.status,
+         submitted_at = EXCLUDED.submitted_at,
+         decided_at = EXCLUDED.decided_at,
+         closed_at = EXCLUDED.closed_at,
+         updated_at = now(),
+         payload = EXCLUDED.payload`,
+      [
+        user.id,
+        request.id,
+        request.status,
+        request.submittedAt ?? null,
+        request.decidedAt ?? null,
+        request.closedAt ?? null,
+        JSON.stringify(request),
+      ],
+    )
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] saveLeverageRequest failed:", (err as Error).message)
+    return { ok: false }
+  }
+}
+
+/** Remove a single leverage request for the signed-in user. */
+export async function removeLeverageRequest(requestId: string): Promise<{ ok: boolean }> {
+  const user = await getSessionUser()
+  if (!user) return { ok: false }
+  try {
+    await pool.query(`DELETE FROM leverage_requests WHERE user_id = $1 AND request_id = $2`, [
+      user.id,
+      requestId,
+    ])
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] removeLeverageRequest failed:", (err as Error).message)
+    return { ok: false }
+  }
+}

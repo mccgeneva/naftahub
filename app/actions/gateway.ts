@@ -1,0 +1,376 @@
+"use server"
+
+import { cookies } from "next/headers"
+import { pool } from "@/lib/db"
+import { SESSION_COOKIE } from "@/lib/auth"
+import { ADMIN_PASSCODE } from "@/lib/admin-config"
+import { getUserBySessionToken, getUserById, type UserProfile } from "@/lib/users"
+import { logActivity } from "@/app/actions/log-activity"
+import type {
+  GatewayAccount,
+  AccountCoordinates,
+  FundingEvent,
+} from "@/lib/gateway-store"
+import type { LedgerEntry } from "@/lib/ledger-store"
+
+async function getSessionUser(): Promise<UserProfile | undefined> {
+  const cookieStore = await cookies()
+  const token = cookieStore.get(SESSION_COOKIE)?.value
+  return getUserBySessionToken(token)
+}
+
+async function requireAdmin(passcode: string): Promise<UserProfile> {
+  const user = await getSessionUser()
+  if (!user) throw new Error("Your session has expired. Please sign in again.")
+  if (String(passcode) !== ADMIN_PASSCODE) throw new Error("Administrator authorization failed.")
+  return user
+}
+
+// The full account-request object lives in a jsonb payload, with a few promoted
+// columns (status / timestamps) used for ordering and authoritative reads. The
+// table is created on first use so no separate migration step is required.
+let ensured = false
+async function ensureTable(): Promise<void> {
+  if (ensured) return
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS gateway_accounts (
+       user_id     text        NOT NULL,
+       request_id  text        NOT NULL,
+       status      text        NOT NULL,
+       submitted_at timestamptz,
+       decided_at  timestamptz,
+       updated_at  timestamptz NOT NULL DEFAULT now(),
+       payload     jsonb       NOT NULL,
+       PRIMARY KEY (user_id, request_id)
+     )`,
+  )
+  ensured = true
+}
+
+function rowToAccount(row: Record<string, unknown>): GatewayAccount {
+  const payload = (row.payload as GatewayAccount) ?? ({} as GatewayAccount)
+  return {
+    ...payload,
+    id: row.request_id as string,
+    status: (row.status as GatewayAccount["status"]) ?? payload.status,
+  }
+}
+
+async function readAccounts(userId: string): Promise<GatewayAccount[]> {
+  await ensureTable()
+  const { rows } = await pool.query(
+    `SELECT * FROM gateway_accounts WHERE user_id = $1 ORDER BY submitted_at DESC NULLS LAST`,
+    [userId],
+  )
+  return rows.map(rowToAccount)
+}
+
+/** Read every user's gateway accounts (admin queue). */
+async function readAllAccounts(): Promise<GatewayAccount[]> {
+  await ensureTable()
+  const { rows } = await pool.query(
+    `SELECT * FROM gateway_accounts ORDER BY submitted_at DESC NULLS LAST`,
+  )
+  return rows.map(rowToAccount)
+}
+
+/** Insert or update a single account row for a given user. */
+async function writeAccount(userId: string, account: GatewayAccount): Promise<void> {
+  await ensureTable()
+  await pool.query(
+    `INSERT INTO gateway_accounts
+       (user_id, request_id, status, submitted_at, decided_at, updated_at, payload)
+     VALUES ($1,$2,$3,$4,$5,now(),$6::jsonb)
+     ON CONFLICT (user_id, request_id) DO UPDATE SET
+       status = EXCLUDED.status,
+       submitted_at = EXCLUDED.submitted_at,
+       decided_at = EXCLUDED.decided_at,
+       updated_at = now(),
+       payload = EXCLUDED.payload`,
+    [
+      userId,
+      account.id,
+      account.status,
+      account.submittedAt ?? null,
+      account.decidedAt ?? null,
+      JSON.stringify(account),
+    ],
+  )
+}
+
+/** Read a single account by user + request id. */
+async function readAccount(userId: string, requestId: string): Promise<GatewayAccount | undefined> {
+  await ensureTable()
+  const { rows } = await pool.query(
+    `SELECT * FROM gateway_accounts WHERE user_id = $1 AND request_id = $2`,
+    [userId, requestId],
+  )
+  return rows[0] ? rowToAccount(rows[0]) : undefined
+}
+
+/** Return the signed-in user's gateway account requests. */
+export async function getMyGatewayAccounts(): Promise<GatewayAccount[]> {
+  const user = await getSessionUser()
+  if (!user) return []
+  try {
+    return await readAccounts(user.id)
+  } catch (err) {
+    console.log("[v0] getMyGatewayAccounts query failed:", (err as Error).message)
+    return []
+  }
+}
+
+/** Insert or update a single gateway account request for the signed-in user. */
+export async function saveGatewayAccount(account: GatewayAccount): Promise<{ ok: boolean }> {
+  const user = await getSessionUser()
+  if (!user) return { ok: false }
+  try {
+    await writeAccount(user.id, account)
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] saveGatewayAccount failed:", (err as Error).message)
+    return { ok: false }
+  }
+}
+
+/** Remove a single gateway account request for the signed-in user. */
+export async function removeGatewayAccount(requestId: string): Promise<{ ok: boolean }> {
+  const user = await getSessionUser()
+  if (!user) return { ok: false }
+  try {
+    await ensureTable()
+    await pool.query(`DELETE FROM gateway_accounts WHERE user_id = $1 AND request_id = $2`, [
+      user.id,
+      requestId,
+    ])
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] removeGatewayAccount failed:", (err as Error).message)
+    return { ok: false }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Admin cross-user actions (passcode verified server-side)
+// ---------------------------------------------------------------------------
+
+export type AdminGatewayResult =
+  | { ok: true; accounts: GatewayAccount[] }
+  | { ok: false; error: string }
+
+/** Admin: read every client's gateway accounts for the review queue. */
+export async function getAllGatewayAccountsAdmin(passcode: string): Promise<AdminGatewayResult> {
+  try {
+    await requireAdmin(passcode)
+    return { ok: true, accounts: await readAllAccounts() }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+}
+
+/** Admin: approve a pending request and assign partner-bank coordinates. */
+export async function approveGatewayAccountAdmin(
+  passcode: string,
+  userId: string,
+  requestId: string,
+  coordinates: AccountCoordinates,
+): Promise<AdminGatewayResult> {
+  let admin: UserProfile
+  try {
+    admin = await requireAdmin(passcode)
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+  try {
+    const account = await readAccount(userId, requestId)
+    if (!account) return { ok: false, error: "Account request not found." }
+    if (account.status !== "pending") return { ok: false, error: "This request has already been decided." }
+
+    const updated: GatewayAccount = {
+      ...account,
+      status: "active",
+      decidedAt: new Date().toISOString(),
+      coordinates,
+    }
+    await writeAccount(userId, updated)
+
+    const target = getUserById(userId)
+    await logActivity({
+      action: `Administrator approved gateway account ${requestId} for ${target.fullName}`,
+      category: "Administration",
+      user: `${admin.fullName} (${admin.company})`,
+      details: {
+        summary: `Administrator approved ${target.fullName}'s ${account.type} request ${requestId} (${account.currency}) and assigned coordinates at ${coordinates.partnerBankName} — IBAN ${coordinates.iban}, BIC ${coordinates.bic}, reference ${coordinates.reference}. Incoming funds quoting this reference will be reconciled into the client's Master Account.`,
+        referenceId: requestId,
+        targetAccount: `${target.fullName} — ${target.email}`,
+        currency: account.currency,
+        partnerBank: coordinates.partnerBankName,
+        iban: coordinates.iban,
+        bic: coordinates.bic,
+        remittanceReference: coordinates.reference,
+        decision: "Approved",
+      },
+    })
+    return { ok: true, accounts: await readAllAccounts() }
+  } catch (err) {
+    console.log("[v0] approveGatewayAccountAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The request could not be approved. Please try again." }
+  }
+}
+
+/** Admin: decline a pending request with an optional reason. */
+export async function rejectGatewayAccountAdmin(
+  passcode: string,
+  userId: string,
+  requestId: string,
+  reason?: string,
+): Promise<AdminGatewayResult> {
+  let admin: UserProfile
+  try {
+    admin = await requireAdmin(passcode)
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+  try {
+    const account = await readAccount(userId, requestId)
+    if (!account) return { ok: false, error: "Account request not found." }
+    if (account.status !== "pending") return { ok: false, error: "This request has already been decided." }
+
+    const updated: GatewayAccount = {
+      ...account,
+      status: "rejected",
+      decidedAt: new Date().toISOString(),
+      rejectionReason: reason,
+    }
+    await writeAccount(userId, updated)
+
+    const target = getUserById(userId)
+    await logActivity({
+      action: `Administrator declined gateway account ${requestId} for ${target.fullName}`,
+      category: "Administration",
+      user: `${admin.fullName} (${admin.company})`,
+      details: {
+        summary: `Administrator declined ${target.fullName}'s ${account.type} request ${requestId} (${account.currency}).${reason?.trim() ? ` Reason: ${reason.trim()}.` : ""}`,
+        referenceId: requestId,
+        decision: "Declined",
+        reason: reason?.trim() || "(none provided)",
+      },
+    })
+    return { ok: true, accounts: await readAllAccounts() }
+  } catch (err) {
+    console.log("[v0] rejectGatewayAccountAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The request could not be declined. Please try again." }
+  }
+}
+
+/**
+ * Admin: record an inbound funding event against an active account and
+ * immediately reconcile it by crediting the *client's* Master Account in the
+ * shared ledger. Both writes happen server-side so the credit lands on the
+ * correct user and the reconciled flag can't be lost to a client race.
+ */
+export async function recordGatewayFundingAdmin(
+  passcode: string,
+  userId: string,
+  requestId: string,
+  funding: { amount: number; payer: string; reference?: string },
+): Promise<AdminGatewayResult> {
+  let admin: UserProfile
+  try {
+    admin = await requireAdmin(passcode)
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+
+  const amount = Number(funding.amount)
+  if (!Number.isFinite(amount) || amount <= 0) return { ok: false, error: "Enter a valid amount." }
+  if (!funding.payer.trim()) return { ok: false, error: "Enter the payer name." }
+
+  try {
+    const account = await readAccount(userId, requestId)
+    if (!account) return { ok: false, error: "Account not found." }
+    if (account.status !== "active") return { ok: false, error: "Funding can only be recorded on active accounts." }
+
+    const reference = funding.reference?.trim() || account.coordinates?.reference || account.id
+    const bankName = account.coordinates?.partnerBankName
+
+    // 1) Credit the client's Master Account in the shared ledger.
+    const receiptRef = `GW-CR-${Date.now().toString().slice(-8)}`
+    const entry: LedgerEntry = {
+      id: receiptRef,
+      direction: "credit",
+      amount,
+      currency: account.currency,
+      status: "completed",
+      date: new Date().toISOString(),
+      counterparty: funding.payer.trim(),
+      bank: bankName,
+      reference: account.id,
+      category: "Gateway Collection",
+      comment: `Inbound collection received via ${account.type} ${account.id}${bankName ? ` at ${bankName}` : ""} (reference ${reference}) and reconciled to the Master Account.`,
+    }
+    await pool.query(
+      `INSERT INTO ledger_entries
+         (user_id, entry_id, direction, amount, currency, status, entry_date,
+          counterparty, account, bank, reference, comment, category)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT (user_id, entry_id) DO UPDATE SET
+         direction = EXCLUDED.direction, amount = EXCLUDED.amount, currency = EXCLUDED.currency,
+         status = EXCLUDED.status, entry_date = EXCLUDED.entry_date, counterparty = EXCLUDED.counterparty,
+         account = EXCLUDED.account, bank = EXCLUDED.bank, reference = EXCLUDED.reference,
+         comment = EXCLUDED.comment, category = EXCLUDED.category`,
+      [
+        userId,
+        entry.id,
+        entry.direction,
+        entry.amount,
+        entry.currency,
+        entry.status,
+        entry.date,
+        entry.counterparty ?? "",
+        entry.account ?? null,
+        entry.bank ?? null,
+        entry.reference ?? null,
+        entry.comment ?? null,
+        entry.category ?? null,
+      ],
+    )
+
+    // 2) Record the funding event on the account, already reconciled.
+    const now = new Date().toISOString()
+    const event: FundingEvent = {
+      id: `FND-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+      amount,
+      currency: account.currency,
+      reference,
+      payer: funding.payer.trim(),
+      recordedAt: now,
+      reconciled: true,
+      reconciledAt: now,
+      ledgerEntryId: receiptRef,
+    }
+    const updated: GatewayAccount = { ...account, funding: [event, ...account.funding] }
+    await writeAccount(userId, updated)
+
+    const target = getUserById(userId)
+    await logActivity({
+      action: `Administrator reconciled ${account.currency} ${amount.toLocaleString("en-US")} into ${target.fullName}'s Master Account via gateway account ${account.id}`,
+      category: "Administration",
+      user: `${admin.fullName} (${admin.company})`,
+      details: {
+        summary: `Administrator recorded and reconciled an inbound collection of ${account.currency} ${amount.toLocaleString("en-US")} from ${funding.payer.trim()} received at ${bankName ?? "the partner bank"} against gateway account ${account.id}. The funds were credited to ${target.fullName}'s Master Account under ledger reference ${receiptRef}.`,
+        referenceId: account.id,
+        targetAccount: `${target.fullName} — ${target.email}`,
+        payer: funding.payer.trim(),
+        amount: `${account.currency} ${amount.toLocaleString("en-US")}`,
+        partnerBank: bankName ?? "—",
+        ledgerReference: receiptRef,
+        decision: "Reconciled",
+      },
+    })
+    return { ok: true, accounts: await readAllAccounts() }
+  } catch (err) {
+    console.log("[v0] recordGatewayFundingAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The funding could not be reconciled. Please try again." }
+  }
+}

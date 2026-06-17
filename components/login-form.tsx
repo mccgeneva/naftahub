@@ -1,0 +1,87 @@
+"use client"
+
+import { useActionState } from "react"
+import { useFormStatus } from "react-dom"
+import { Lock, Mail, ShieldCheck, AlertCircle } from "lucide-react"
+import { login, type LoginState } from "@/app/actions/auth"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+
+function SubmitButton() {
+  const { pending } = useFormStatus()
+  return (
+    <Button type="submit" className="w-full h-11 text-base" disabled={pending}>
+      {pending ? "Verifying..." : "Sign In"}
+    </Button>
+  )
+}
+
+export function LoginForm() {
+  const [state, formAction] = useActionState<LoginState, FormData>(login, {})
+
+  // Mark that authentication originated from this browser tab. The SessionGuard
+  // on the dashboard uses this one-time flag to tell a genuine login apart from
+  // a tab that was closed and later reopened with a still-valid cookie.
+  function handleSubmit() {
+    try {
+      localStorage.setItem("mcc_login_handoff", "1")
+    } catch {
+      // Ignore storage access errors (e.g. privacy mode).
+    }
+  }
+
+  return (
+    <form action={formAction} onSubmit={handleSubmit} className="space-y-5">
+      <div className="space-y-2">
+        <Label htmlFor="email">Email address</Label>
+        <div className="relative">
+          <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            id="email"
+            name="email"
+            type="email"
+            inputMode="email"
+            autoComplete="username"
+            placeholder="you@company.com"
+            required
+            className="pl-10 h-11 text-base"
+          />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="password">Password</Label>
+        <div className="relative">
+          <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            id="password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            placeholder="Enter your password"
+            required
+            className="pl-10 h-11 text-base"
+          />
+        </div>
+      </div>
+
+      {state?.error && (
+        <div
+          role="alert"
+          className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
+        >
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>{state.error}</span>
+        </div>
+      )}
+
+      <SubmitButton />
+
+      <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+        <ShieldCheck className="h-3.5 w-3.5" />
+        Authorized access only. All activity is monitored and logged.
+      </p>
+    </form>
+  )
+}

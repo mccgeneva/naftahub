@@ -1,0 +1,1202 @@
+"use client"
+
+import { useEffect, useMemo, useRef, useState } from "react"
+import {
+  Gauge,
+  Shield,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  TrendingUp,
+  Layers,
+  AlertTriangle,
+  Info,
+  Lock,
+  Banknote,
+  Cpu,
+  Building2,
+  ArrowRight,
+  Activity,
+  Percent,
+  Power,
+  PiggyBank,
+  Hourglass,
+} from "lucide-react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
+import { Slider } from "@/components/ui/slider"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion"
+import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { cn } from "@/lib/utils"
+import { toast } from "sonner"
+import { useActivityLog } from "@/components/activity-tracker"
+import {
+  useLeverageRequests,
+  accruedInterest,
+  LEVERAGE_ACCOUNTS,
+  LEVERAGE_RATIOS,
+  MAX_LEVERAGE,
+  DEBIT_INTEREST_RATE,
+  RISK_THRESHOLDS,
+  type LeverageRequest,
+  type LeverageAccountKey,
+} from "@/lib/leverage-requests-store"
+
+const accountIcons: Record<LeverageAccountKey, typeof Building2> = {
+  master: Building2,
+  instruments: Banknote,
+  naftahub: Cpu,
+}
+
+// The MCC master account is denominated in EUR; USD, GBP and CHF are the
+// additional settlement currencies the client can hold and trade in. EUR is
+// listed first and used as the default so the leverage screen matches the
+// account's base currency instead of defaulting to USD.
+const BASE_CURRENCY = "EUR"
+const SUPPORTED_CURRENCIES = ["EUR", "USD", "GBP", "CHF"]
+
+const instrumentTypes = [
+  "FX / Currencies",
+  "Commodities",
+  "Indices",
+  "Securities / Equities",
+  "Precious Metals",
+  "Crypto Assets",
+]
+
+const statusConfig = {
+  pending: {
+    label: "Pending Approval",
+    icon: Clock,
+    color: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
+  },
+  approved: {
+    label: "Active Line",
+    icon: CheckCircle2,
+    color: "bg-green-500/10 text-green-500 border-green-500/20",
+  },
+  rejected: {
+    label: "Declined",
+    icon: XCircle,
+    color: "bg-red-500/10 text-red-500 border-red-500/20",
+  },
+  switchoff_pending: {
+    label: "Switch-Off Pending",
+    icon: Hourglass,
+    color: "bg-orange-500/10 text-orange-400 border-orange-500/20",
+  },
+  closed: {
+    label: "Closed",
+    icon: Power,
+    color: "bg-secondary text-muted-foreground border-border",
+  },
+} satisfies Record<LeverageRequest["status"], { label: string; icon: typeof Clock; color: string }>
+
+function formatMoney(value: number, currency: string) {
+  return `${currency} ${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`
+}
+
+// Money with cents — used for interest amounts that are small in a live demo.
+function formatMoney2(value: number, currency: string) {
+  return `${currency} ${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function daysBetween(fromIso?: string, to: number = Date.now()) {
+  if (!fromIso) return 0
+  return Math.max(0, (to - new Date(fromIso).getTime()) / (24 * 60 * 60 * 1000))
+}
+
+function formatTimestamp(iso?: string) {
+  if (!iso) return "—"
+  return new Date(iso).toLocaleString("en-GB")
+}
+
+// Derive the live risk state of a position from its margin level.
+function marginState(level: number) {
+  if (!isFinite(level)) {
+    return { key: "flat", label: "No Open Position", color: "text-muted-foreground", bar: "bg-muted-foreground" }
+  }
+  if (level < RISK_THRESHOLDS.stopOut) {
+    return { key: "stopout", label: "Stop-Out / Liquidation", color: "text-red-500", bar: "bg-red-500" }
+  }
+  if (level < RISK_THRESHOLDS.marginCall) {
+    return { key: "call", label: "Margin Call", color: "text-red-400", bar: "bg-red-400" }
+  }
+  if (level < RISK_THRESHOLDS.warning) {
+    return { key: "warning", label: "Margin Warning", color: "text-yellow-500", bar: "bg-yellow-500" }
+  }
+  return { key: "healthy", label: "Healthy", color: "text-green-500", bar: "bg-green-500" }
+}
+
+// Interactive margin monitor for an approved leverage line. Lets the client
+// model an open position and a simulated market move to see how equity, used
+// margin, free margin and margin level react against the platform's
+// margin-call (100%) and stop-out (50%) thresholds.
+function MarginMonitor({ line }: { line: LeverageRequest }) {
+  const [exposurePct, setExposurePct] = useState(40) // % of buying power deployed
+  const [marketMove, setMarketMove] = useState(0) // simulated market move in %
+
+  const positionSize = (line.buyingPower * exposurePct) / 100
+  const usedMargin = positionSize / line.leverageRatio
+  const unrealizedPnL = (positionSize * marketMove) / 100
+  const equityNow = line.equity + unrealizedPnL
+  const freeMargin = equityNow - usedMargin
+  const marginLevel = usedMargin > 0 ? (equityNow / usedMargin) * 100 : Infinity
+  const state = marginState(marginLevel)
+
+  // Cap the displayed gauge at 300% so the bar stays readable.
+  const gaugePct = isFinite(marginLevel) ? Math.min((marginLevel / 300) * 100, 100) : 100
+
+  return (
+    <div className="space-y-5">
+      {/* Controls */}
+      <div className="grid gap-5 sm:grid-cols-2">
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <Label className="text-xs text-muted-foreground">Open Position (exposure)</Label>
+            <span className="text-sm font-semibold text-foreground">
+              {formatMoney(positionSize, line.currency)}
+            </span>
+          </div>
+          <Slider
+            value={[exposurePct]}
+            onValueChange={(v) => setExposurePct(v[0])}
+            min={0}
+            max={100}
+            step={1}
+            aria-label="Position exposure as a percentage of buying power"
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {exposurePct}% of {formatMoney(line.buyingPower, line.currency)} buying power
+          </p>
+        </div>
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <Label className="text-xs text-muted-foreground">Simulated Market Move</Label>
+            <span
+              className={cn(
+                "text-sm font-semibold",
+                marketMove > 0 ? "text-green-500" : marketMove < 0 ? "text-red-500" : "text-foreground",
+              )}
+            >
+              {marketMove > 0 ? "+" : ""}
+              {marketMove}%
+            </span>
+          </div>
+          <Slider
+            value={[marketMove]}
+            onValueChange={(v) => setMarketMove(v[0])}
+            min={-10}
+            max={10}
+            step={0.5}
+            aria-label="Simulated market move percentage"
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Unrealized P&L:{" "}
+            <span className={unrealizedPnL >= 0 ? "text-green-500" : "text-red-500"}>
+              {unrealizedPnL >= 0 ? "+" : ""}
+              {formatMoney(unrealizedPnL, line.currency)}
+            </span>
+          </p>
+        </div>
+      </div>
+
+      {/* Margin level gauge */}
+      <div className="rounded-lg border border-border bg-secondary/30 p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Gauge className={cn("h-4 w-4", state.color)} />
+            <span className="text-sm font-medium text-foreground">Margin Level</span>
+          </div>
+          <div className="text-right">
+            <span className={cn("text-lg font-bold", state.color)}>
+              {isFinite(marginLevel) ? `${marginLevel.toFixed(0)}%` : "∞"}
+            </span>
+            <Badge variant="outline" className={cn("ml-2", statusBadgeForState(state.key))}>
+              {state.label}
+            </Badge>
+          </div>
+        </div>
+        <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+          <div className={cn("h-full transition-all", state.bar)} style={{ width: `${gaugePct}%` }} />
+        </div>
+        <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+          <span>Stop-Out {RISK_THRESHOLDS.stopOut}%</span>
+          <span>Margin Call {RISK_THRESHOLDS.marginCall}%</span>
+          <span>Warning {RISK_THRESHOLDS.warning}%</span>
+        </div>
+      </div>
+
+      {/* Live metrics */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Metric label="Equity" value={formatMoney(equityNow, line.currency)} />
+        <Metric label="Used Margin" value={formatMoney(usedMargin, line.currency)} />
+        <Metric
+          label="Free Margin"
+          value={formatMoney(freeMargin, line.currency)}
+          tone={freeMargin < 0 ? "negative" : "default"}
+        />
+        <Metric label="Buying Power" value={formatMoney(line.buyingPower, line.currency)} />
+      </div>
+
+      {state.key === "call" && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Margin call triggered. Deposit additional funds or reduce exposure to restore your margin
+            level above {RISK_THRESHOLDS.marginCall}%.
+          </span>
+        </div>
+      )}
+      {state.key === "stopout" && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/15 p-3 text-sm text-red-500">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Stop-out level reached. At {RISK_THRESHOLDS.stopOut}% the desk will automatically liquidate
+            open positions to protect your account from a negative balance.
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function statusBadgeForState(key: string) {
+  switch (key) {
+    case "stopout":
+      return "bg-red-500/10 text-red-500 border-red-500/20"
+    case "call":
+      return "bg-red-500/10 text-red-400 border-red-500/20"
+    case "warning":
+      return "bg-yellow-500/10 text-yellow-500 border-yellow-500/20"
+    case "healthy":
+      return "bg-green-500/10 text-green-500 border-green-500/20"
+    default:
+      return "bg-secondary text-muted-foreground border-border"
+  }
+}
+
+function Metric({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string
+  value: string
+  tone?: "default" | "negative"
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-3">
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p
+        className={cn(
+          "mt-1 text-sm font-semibold",
+          tone === "negative" ? "text-red-500" : "text-foreground",
+        )}
+      >
+        {value}
+      </p>
+    </div>
+  )
+}
+
+// Real-money leverage economics for a live line: shows the borrowed funds
+// credited to the balance, the running debit interest accrued at 1.8%/yr, and
+// what it would cost to switch the line off today.
+function LeverageEconomics({ line, now }: { line: LeverageRequest; now: number }) {
+  const accrued = accruedInterest(line, now)
+  const days = daysBetween(line.activatedAt, now)
+  const payoff = line.borrowedAmount + accrued
+  return (
+    <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
+        <Percent className="h-4 w-4 text-orange-400" />
+        Leverage Economics
+        <span className="ml-auto text-[11px] font-normal text-muted-foreground">
+          Active {days < 1 ? "<1" : Math.floor(days)} day{Math.floor(days) === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Metric label="Borrowed Funds" value={formatMoney(line.borrowedAmount, line.currency)} />
+        <Metric label="Interest Rate" value={`${(line.interestRate * 100).toFixed(1)}% / yr`} />
+        <Metric
+          label="Accrued Interest"
+          value={formatMoney2(accrued, line.currency)}
+          tone="negative"
+        />
+        <Metric label="Payoff if Closed Today" value={formatMoney2(payoff, line.currency)} />
+      </div>
+      <p className="mt-3 text-[11px] text-muted-foreground">
+        Debit interest accrues continuously on the borrowed {formatMoney(line.borrowedAmount, line.currency)}{" "}
+        from activation ({formatTimestamp(line.activatedAt)}). When you switch off the line, the Administrator
+        settles the accrued interest and repays the borrowed principal from your balance.
+      </p>
+    </div>
+  )
+}
+
+export default function LeveragePage() {
+  const [activeTab, setActiveTab] = useState("request")
+  const [isRequestOpen, setIsRequestOpen] = useState(false)
+  const [account, setAccount] = useState<LeverageAccountKey | "">("")
+  const [equity, setEquity] = useState("")
+  const [currency, setCurrency] = useState(BASE_CURRENCY)
+  const [ratio, setRatio] = useState(String(LEVERAGE_RATIOS[1])) // default 1:5
+  const [instrumentType, setInstrumentType] = useState("")
+  const [notes, setNotes] = useState("")
+  const [formError, setFormError] = useState<string | null>(null)
+  const [switchOffTarget, setSwitchOffTarget] = useState<LeverageRequest | null>(null)
+  const log = useActivityLog()
+  const { requests, addRequest, requestSwitchOff, hydrated } = useLeverageRequests()
+
+  // Live clock so accrued interest ticks up while the page is open.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000)
+    return () => clearInterval(t)
+  }, [])
+
+  const myRequests = useMemo(
+    () =>
+      [...requests].sort(
+        (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime(),
+      ),
+    [requests],
+  )
+  // Anything still awaiting an Administrator decision (activation or switch-off).
+  const pendingCount = myRequests.filter(
+    (r) => r.status === "pending" || r.status === "switchoff_pending",
+  ).length
+  // Lines that are currently live (active, or active with a switch-off queued).
+  const activeLines = myRequests.filter(
+    (r) => r.status === "approved" || r.status === "switchoff_pending",
+  )
+  // Active lines can be in different currencies (USD, EUR, GBP, CHF). We can't
+  // add across currencies, so totals are grouped per currency and each stat
+  // card lists every currency it holds a balance in.
+  const totalsByCurrency = useMemo(() => {
+    const map = new Map<string, { equity: number; borrowed: number; interest: number }>()
+    for (const r of activeLines) {
+      const cur = map.get(r.currency) ?? { equity: 0, borrowed: 0, interest: 0 }
+      cur.equity += r.equity
+      cur.borrowed += r.borrowedAmount
+      cur.interest += accruedInterest(r, now)
+      map.set(r.currency, cur)
+    }
+    // Keep a stable, readable order for the supported currencies.
+    const order = SUPPORTED_CURRENCIES
+    return [...map.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
+  }, [activeLines, now])
+
+  // If the client already has requests, land on "My Trading Lines" so approval
+  // decisions are visible immediately on arrival.
+  const autoSelectedRef = useRef(false)
+  useEffect(() => {
+    if (!hydrated || autoSelectedRef.current) return
+    autoSelectedRef.current = true
+    if (myRequests.length > 0) setActiveTab("lines")
+  }, [hydrated, myRequests.length])
+
+  const numericEquity = Number(equity.replace(/[^0-9.]/g, "")) || 0
+  const numericRatio = Number(ratio) || LEVERAGE_RATIOS[0]
+  const projectedBuyingPower = numericEquity * numericRatio
+  const projectedBorrowed = numericEquity * (numericRatio - 1)
+  const projectedAnnualInterest = projectedBorrowed * DEBIT_INTEREST_RATE
+
+  const resetForm = () => {
+    setAccount("")
+    setEquity("")
+    setCurrency(BASE_CURRENCY)
+    setRatio(String(LEVERAGE_RATIOS[1]))
+    setInstrumentType("")
+    setNotes("")
+    setFormError(null)
+  }
+
+  const submitRequest = () => {
+    if (!account) {
+      setFormError("Please select a funding account.")
+      return
+    }
+    if (!numericEquity || numericEquity <= 0) {
+      setFormError("Please enter a valid equity allocation.")
+      return
+    }
+    if (!instrumentType) {
+      setFormError("Please select an instrument type to trade.")
+      return
+    }
+
+    const accountOption = LEVERAGE_ACCOUNTS.find((a) => a.key === account)!
+    const request = addRequest({
+      id: `LEV-REQ-${new Date().getTime().toString().slice(-8)}`,
+      account,
+      accountLabel: accountOption.label,
+      equity: numericEquity,
+      currency,
+      leverageRatio: numericRatio,
+      buyingPower: projectedBuyingPower,
+      borrowedAmount: projectedBorrowed,
+      interestRate: DEBIT_INTEREST_RATE,
+      instrumentType,
+      notes: notes.trim() || undefined,
+    })
+
+    log({
+      action: `Submitted a 1:${numericRatio} leverage request on the ${accountOption.label} for Administrator approval`,
+      category: "Leverage & Risk",
+      details: {
+        summary: `Client requested a 1:${numericRatio} leveraged trading line against the ${accountOption.label}, allocating ${formatMoney(numericEquity, currency)} of equity. On approval, ${formatMoney(projectedBorrowed, currency)} of borrowed funds would be credited (buying power ${formatMoney(projectedBuyingPower, currency)}), with debit interest of ${(DEBIT_INTEREST_RATE * 100).toFixed(1)}% per year on the borrowed amount, to trade ${instrumentType}. The line requires Administrator approval before activation.`,
+        referenceId: request.id,
+        fundingAccount: accountOption.label,
+        equityAllocated: formatMoney(numericEquity, currency),
+        leverage: `1:${numericRatio}`,
+        borrowedFunds: formatMoney(projectedBorrowed, currency),
+        buyingPower: formatMoney(projectedBuyingPower, currency),
+        debitInterestRate: `${(DEBIT_INTEREST_RATE * 100).toFixed(1)}% per year`,
+        instrumentType,
+        status: "Pending Administrator Approval",
+        submittedAt: new Date().toLocaleString("en-GB"),
+      },
+    })
+    toast.success("Leverage request submitted", {
+      description: `Your 1:${numericRatio} line on the ${accountOption.label} is pending Administrator approval.`,
+    })
+    resetForm()
+    setIsRequestOpen(false)
+    setActiveTab("lines")
+  }
+
+  // Client-initiated switch-off: routes the active line into the Administrator
+  // queue. No money moves until the Administrator approves the settlement.
+  const confirmSwitchOff = () => {
+    const line = switchOffTarget
+    if (!line) return
+    const interestToDate = accruedInterest(line, Date.now())
+    requestSwitchOff(line.id)
+    log({
+      action: `Requested switch-off of leverage line ${line.id} (${line.accountLabel}, 1:${line.leverageRatio})`,
+      category: "Leverage & Risk",
+      details: {
+        summary: `Client requested to switch off leverage line ${line.id} on the ${line.accountLabel}. On Administrator approval the borrowed ${formatMoney(line.borrowedAmount, line.currency)} will be repaid and the accrued debit interest of ${formatMoney2(interestToDate, line.currency)} settled from the balance. The request is pending Administrator approval.`,
+        referenceId: line.id,
+        fundingAccount: line.accountLabel,
+        leverage: `1:${line.leverageRatio}`,
+        borrowedFunds: formatMoney(line.borrowedAmount, line.currency),
+        accruedInterestToDate: formatMoney2(interestToDate, line.currency),
+        status: "Switch-Off Pending Administrator Approval",
+        requestedAt: new Date().toLocaleString("en-GB"),
+      },
+    })
+    toast.success("Switch-off request submitted", {
+      description: `Line ${line.id} is pending Administrator approval to settle interest and unwind the position.`,
+    })
+    setSwitchOffTarget(null)
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Leverage & Risk</h1>
+          <p className="text-sm text-muted-foreground">
+            Request leveraged trading lines and monitor margin in real time
+          </p>
+        </div>
+        <Badge variant="outline" className="w-fit border-primary/20 bg-primary/10 text-primary">
+          <Gauge className="mr-1 h-3 w-3" />
+          Up to 1:{MAX_LEVERAGE} Leverage
+        </Badge>
+      </div>
+
+      {/* Stats */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="Allocated Equity"
+          value={
+            <CurrencyLines
+              entries={totalsByCurrency}
+              select={(t) => t.equity}
+              format={formatMoney}
+            />
+          }
+          hint={`${activeLines.length} active line${activeLines.length === 1 ? "" : "s"}`}
+          icon={Banknote}
+          tint="bg-primary/10 text-primary"
+        />
+        <StatCard
+          label="Borrowed (Leveraged)"
+          value={
+            <CurrencyLines
+              entries={totalsByCurrency}
+              select={(t) => t.borrowed}
+              format={formatMoney}
+            />
+          }
+          hint="Credited to your balance"
+          icon={PiggyBank}
+          tint="bg-green-500/10 text-green-500"
+        />
+        <StatCard
+          label="Accrued Debit Interest"
+          value={
+            <CurrencyLines
+              entries={totalsByCurrency}
+              select={(t) => t.interest}
+              format={formatMoney2}
+            />
+          }
+          hint={`${(DEBIT_INTEREST_RATE * 100).toFixed(1)}% / yr · settled on switch-off`}
+          icon={Percent}
+          tint="bg-orange-500/10 text-orange-400"
+        />
+        <StatCard
+          label="Pending Requests"
+          value={String(pendingCount)}
+          hint="Awaiting Administrator"
+          icon={Clock}
+          tint="bg-yellow-500/10 text-yellow-500"
+        />
+      </div>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList>
+          <TabsTrigger value="request">Request Leverage</TabsTrigger>
+          <TabsTrigger value="lines">
+            My Trading Lines
+            {myRequests.length > 0 && (
+              <Badge
+                variant="outline"
+                className={cn(
+                  "ml-2",
+                  pendingCount > 0
+                    ? "bg-yellow-500/10 text-yellow-500 border-yellow-500/20"
+                    : "bg-primary/10 text-primary border-primary/20",
+                )}
+              >
+                {myRequests.length}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="risk">Risk Disclosures</TabsTrigger>
+        </TabsList>
+
+        {/* Request tab */}
+        <TabsContent value="request" className="mt-6 space-y-6">
+          <Card className="border-primary/20 bg-gradient-to-r from-primary/10 to-primary/5">
+            <CardContent className="p-4">
+              <div className="flex items-start gap-3">
+                <Info className="mt-0.5 h-5 w-5 text-primary" />
+                <div>
+                  <h3 className="font-semibold text-foreground">How leverage works at MCC</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Allocate your own equity and choose a ratio up to 1:{MAX_LEVERAGE}. On Administrator
+                    approval, the borrowed portion — equity × (ratio − 1) — is credited to your balance, and
+                    debit interest of {(DEBIT_INTEREST_RATE * 100).toFixed(1)}% per year begins accruing on
+                    those borrowed funds. When you switch the line off, the Administrator settles the accrued
+                    interest and repays the borrowed principal from your balance.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            {LEVERAGE_ACCOUNTS.map((acc) => {
+              const Icon = accountIcons[acc.key]
+              return (
+                <Card key={acc.key} className="border-border bg-card">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center gap-2">
+                      <div className="rounded-lg bg-primary/10 p-2">
+                        <Icon className="h-5 w-5 text-primary" />
+                      </div>
+                      <CardTitle className="text-base">{acc.label}</CardTitle>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-muted-foreground">{acc.description}</p>
+                    <p className="mt-3 text-xs font-medium text-primary">
+                      Up to 1:{MAX_LEVERAGE} buying power
+                    </p>
+                  </CardContent>
+                </Card>
+              )
+            })}
+          </div>
+
+          <Dialog
+            open={isRequestOpen}
+            onOpenChange={(open) => {
+              setIsRequestOpen(open)
+              if (!open) resetForm()
+            }}
+          >
+            <DialogTrigger asChild>
+              <Button size="lg" className="w-full sm:w-auto">
+                <Gauge className="mr-2 h-4 w-4" />
+                Request a Leverage Line
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Request Leverage Line</DialogTitle>
+                <DialogDescription>
+                  Submit a leveraged trading line (up to 1:{MAX_LEVERAGE}) for Administrator approval.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4 py-2">
+                <div className="space-y-2">
+                  <Label>Funding Account</Label>
+                  <Select value={account} onValueChange={(v) => setAccount(v as LeverageAccountKey)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select funding account" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LEVERAGE_ACCOUNTS.map((acc) => (
+                        <SelectItem key={acc.key} value={acc.key}>
+                          {acc.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="col-span-2 space-y-2">
+                    <Label>Equity Allocation</Label>
+                    <Input
+                      inputMode="decimal"
+                      placeholder="e.g. 250,000"
+                      value={equity}
+                      onChange={(e) => setEquity(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Currency</Label>
+                    <Select value={currency} onValueChange={setCurrency}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {SUPPORTED_CURRENCIES.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Leverage Ratio</Label>
+                  <Select value={ratio} onValueChange={setRatio}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LEVERAGE_RATIOS.map((r) => (
+                        <SelectItem key={r} value={String(r)}>
+                          1:{r}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Instrument Type</Label>
+                  <Select value={instrumentType} onValueChange={setInstrumentType}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select asset class" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {instrumentTypes.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Notes (optional)</Label>
+                  <Input
+                    placeholder="Strategy or additional context"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                  />
+                </div>
+
+                {/* Buying power preview */}
+                <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Your Equity</span>
+                    <span className="font-medium text-foreground">
+                      {formatMoney(numericEquity, currency)}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Leverage Ratio</span>
+                    <span className="font-medium text-foreground">1:{numericRatio}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Borrowed Funds (credited on approval)</span>
+                    <span className="font-medium text-green-500">
+                      +{formatMoney(projectedBorrowed, currency)}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">
+                      Debit Interest ({(DEBIT_INTEREST_RATE * 100).toFixed(1)}% / yr)
+                    </span>
+                    <span className="font-medium text-orange-400">
+                      {formatMoney2(projectedAnnualInterest, currency)} / yr
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between border-t border-primary/20 pt-2">
+                    <span className="flex items-center gap-1 text-sm font-medium text-foreground">
+                      <TrendingUp className="h-4 w-4 text-primary" />
+                      Buying Power
+                    </span>
+                    <span className="text-lg font-bold text-primary">
+                      {formatMoney(projectedBuyingPower, currency)}
+                    </span>
+                  </div>
+                </div>
+
+                {formError && (
+                  <div className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    {formError}
+                  </div>
+                )}
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setIsRequestOpen(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={submitRequest}>
+                  Submit for Approval
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </TabsContent>
+
+        {/* Trading lines tab */}
+        <TabsContent value="lines" className="mt-6 space-y-4">
+          {myRequests.length === 0 ? (
+            <Card className="border-border bg-card">
+              <CardContent className="flex flex-col items-center justify-center gap-3 p-12 text-center">
+                <div className="rounded-full bg-secondary p-3">
+                  <Layers className="h-6 w-6 text-muted-foreground" />
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  You have no leverage lines yet. Request one to get started.
+                </p>
+                <Button variant="outline" onClick={() => setActiveTab("request")}>
+                  Request Leverage
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            myRequests.map((req) => {
+              const status = statusConfig[req.status]
+              const StatusIcon = status.icon
+              const Icon = accountIcons[req.account]
+              return (
+                <Card key={req.id} className="border-border bg-card">
+                  <CardHeader className="pb-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="rounded-lg bg-primary/10 p-2">
+                          <Icon className="h-5 w-5 text-primary" />
+                        </div>
+                        <div>
+                          <CardTitle className="text-base">
+                            {req.accountLabel} · 1:{req.leverageRatio}
+                          </CardTitle>
+                          <p className="text-xs text-muted-foreground">
+                            {req.instrumentType} · Ref {req.id}
+                          </p>
+                        </div>
+                      </div>
+                      <Badge variant="outline" className={status.color}>
+                        <StatusIcon className="mr-1 h-3 w-3" />
+                        {status.label}
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      <Metric label="Equity" value={formatMoney(req.equity, req.currency)} />
+                      <Metric label="Borrowed" value={formatMoney(req.borrowedAmount, req.currency)} />
+                      <Metric label="Buying Power" value={formatMoney(req.buyingPower, req.currency)} />
+                      <Metric label="Leverage" value={`1:${req.leverageRatio}`} />
+                    </div>
+
+                    {req.status === "pending" && (
+                      <div className="flex items-start gap-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-3 text-sm text-yellow-500">
+                        <Clock className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>
+                          Awaiting Administrator approval. On activation, {formatMoney(req.borrowedAmount, req.currency)}{" "}
+                          of borrowed funds is credited to your balance and {(req.interestRate * 100).toFixed(1)}%
+                          annual debit interest begins.
+                        </span>
+                      </div>
+                    )}
+
+                    {req.status === "rejected" && (
+                      <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400">
+                        <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>
+                          Request declined{req.decisionNote ? `: ${req.decisionNote}` : "."} Decided{" "}
+                          {formatTimestamp(req.decidedAt)}.
+                        </span>
+                      </div>
+                    )}
+
+                    {(req.status === "approved" || req.status === "switchoff_pending") && (
+                      <LeverageEconomics line={req} now={now} />
+                    )}
+
+                    {req.status === "switchoff_pending" && (
+                      <div className="flex items-start gap-2 rounded-lg border border-orange-500/20 bg-orange-500/10 p-3 text-sm text-orange-400">
+                        <Hourglass className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>
+                          Switch-off requested {formatTimestamp(req.switchOffRequestedAt)}. Awaiting Administrator
+                          approval to settle the accrued interest and repay the borrowed funds.
+                        </span>
+                      </div>
+                    )}
+
+                    {req.status === "approved" && (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                            <Activity className="h-4 w-4 text-primary" />
+                            Live Margin Monitor
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-400"
+                            onClick={() => setSwitchOffTarget(req)}
+                          >
+                            <Power className="mr-2 h-4 w-4" />
+                            Switch Off Leverage
+                          </Button>
+                        </div>
+                        <MarginMonitor line={req} />
+                      </div>
+                    )}
+
+                    {req.status === "closed" && (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                          <Metric
+                            label="Interest Settled"
+                            value={formatMoney2(req.settledInterest ?? 0, req.currency)}
+                            tone="negative"
+                          />
+                          <Metric
+                            label="Principal Repaid"
+                            value={formatMoney(req.borrowedAmount, req.currency)}
+                          />
+                          <Metric label="Closed" value={formatTimestamp(req.closedAt)} />
+                        </div>
+                        <div className="flex items-start gap-2 rounded-lg border border-border bg-secondary/30 p-3 text-sm text-muted-foreground">
+                          <Power className="mt-0.5 h-4 w-4 shrink-0" />
+                          <span>
+                            Leverage switched off. The {formatMoney(req.borrowedAmount, req.currency)} of borrowed
+                            funds was repaid and {formatMoney2(req.settledInterest ?? 0, req.currency)} of accrued
+                            debit interest was settled from your balance. See the Transactions section for the full
+                            breakdown.
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )
+            })
+          )}
+        </TabsContent>
+
+        {/* Risk disclosures tab */}
+        <TabsContent value="risk" className="mt-6 space-y-6">
+          <Card className="border-border bg-card">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <Shield className="h-5 w-5 text-primary" />
+                Risk Management Policy
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <RiskThreshold
+                  label="Margin Warning"
+                  value={`${RISK_THRESHOLDS.warning}%`}
+                  tone="text-yellow-500"
+                  desc="First alert to manage exposure."
+                />
+                <RiskThreshold
+                  label="Margin Call"
+                  value={`${RISK_THRESHOLDS.marginCall}%`}
+                  tone="text-red-400"
+                  desc="Add funds or reduce positions."
+                />
+                <RiskThreshold
+                  label="Stop-Out"
+                  value={`${RISK_THRESHOLDS.stopOut}%`}
+                  tone="text-red-500"
+                  desc="Automatic liquidation begins."
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Accordion type="single" collapsible className="w-full">
+            <AccordionItem value="leverage">
+              <AccordionTrigger>Leverage up to 1:{MAX_LEVERAGE}</AccordionTrigger>
+              <AccordionContent className="text-sm text-muted-foreground">
+                Leverage lets you control a position larger than your allocated equity. At 1:{MAX_LEVERAGE},
+                every {formatMoney(1, BASE_CURRENCY)} of equity controls {formatMoney(MAX_LEVERAGE, BASE_CURRENCY)} of market
+                exposure. Leverage amplifies both gains and losses — a small adverse move can represent a large
+                percentage of your margin.
+              </AccordionContent>
+            </AccordionItem>
+            <AccordionItem value="margin-level">
+              <AccordionTrigger>Margin level &amp; used margin</AccordionTrigger>
+              <AccordionContent className="text-sm text-muted-foreground">
+                Margin level is calculated as Equity ÷ Used Margin × 100%. Used margin is the portion of your
+                equity reserved to keep positions open (position size ÷ leverage). As unrealized losses reduce
+                equity, your margin level falls toward the margin-call and stop-out thresholds.
+              </AccordionContent>
+            </AccordionItem>
+            <AccordionItem value="margin-call">
+              <AccordionTrigger>Margin call at {RISK_THRESHOLDS.marginCall}%</AccordionTrigger>
+              <AccordionContent className="text-sm text-muted-foreground">
+                If your margin level falls to {RISK_THRESHOLDS.marginCall}%, a margin call is issued. You must
+                deposit additional funds or close positions to restore your margin level. No new positions can
+                be opened while in a margin-call state.
+              </AccordionContent>
+            </AccordionItem>
+            <AccordionItem value="stop-out">
+              <AccordionTrigger>Stop-out &amp; liquidation at {RISK_THRESHOLDS.stopOut}%</AccordionTrigger>
+              <AccordionContent className="text-sm text-muted-foreground">
+                If the margin level reaches the {RISK_THRESHOLDS.stopOut}% stop-out level, the trading desk
+                automatically closes open positions — starting with the largest loss — until the margin level
+                is restored. This protects the account from running into a negative balance.
+              </AccordionContent>
+            </AccordionItem>
+            <AccordionItem value="interest">
+              <AccordionTrigger>
+                Debit interest of {(DEBIT_INTEREST_RATE * 100).toFixed(1)}% per year
+              </AccordionTrigger>
+              <AccordionContent className="text-sm text-muted-foreground">
+                When a line is activated, the borrowed portion — equity × (ratio − 1) — is credited to your
+                balance. Debit interest of {(DEBIT_INTEREST_RATE * 100).toFixed(1)}% per year accrues on those
+                borrowed funds every day the line remains open. The accrued interest is shown live on each active
+                line and is settled in full when you switch the line off.
+              </AccordionContent>
+            </AccordionItem>
+            <AccordionItem value="switchoff">
+              <AccordionTrigger>Switching off leverage</AccordionTrigger>
+              <AccordionContent className="text-sm text-muted-foreground">
+                You can request to switch off a line at any time. The request is sent to the Administrator for
+                approval. On approval, all accrued debit interest is calculated up to that moment and deducted
+                from your balance, and the borrowed principal is repaid — removing the leverage multiplier and
+                clearing the interest. Every movement is recorded in the Transactions section.
+              </AccordionContent>
+            </AccordionItem>
+            <AccordionItem value="approval">
+              <AccordionTrigger>Administrator approval required</AccordionTrigger>
+              <AccordionContent className="text-sm text-muted-foreground">
+                Every activation and switch-off is reviewed by the MCC Administrator before it takes effect.
+                Customers cannot activate or deactivate leverage on their own. The relationship desk may contact
+                you to confirm strategy and suitability.
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
+
+          <Card className="border-border bg-card">
+            <CardContent className="flex items-start gap-3 p-4">
+              <Lock className="mt-0.5 h-5 w-5 text-primary" />
+              <p className="text-sm text-muted-foreground">
+                Trading on leverage carries a high level of risk and may not be suitable for all investors.
+                You could sustain losses in excess of your allocated equity. Ensure you fully understand the
+                risks and seek independent advice if necessary.
+              </p>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* Switch-off confirmation */}
+      <Dialog open={!!switchOffTarget} onOpenChange={(open) => !open && setSwitchOffTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          {switchOffTarget && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Switch Off Leverage</DialogTitle>
+                <DialogDescription>
+                  Submit a request to close line {switchOffTarget.id} for Administrator approval.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3 py-2">
+                <div className="rounded-lg border border-border bg-secondary/30 p-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Borrowed funds to repay</span>
+                    <span className="font-medium text-foreground">
+                      {formatMoney(switchOffTarget.borrowedAmount, switchOffTarget.currency)}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between">
+                    <span className="text-muted-foreground">Accrued interest to settle</span>
+                    <span className="font-medium text-orange-400">
+                      {formatMoney2(accruedInterest(switchOffTarget, now), switchOffTarget.currency)}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
+                    <span className="font-medium text-foreground">Total deducted on close</span>
+                    <span className="font-bold text-foreground">
+                      {formatMoney2(
+                        switchOffTarget.borrowedAmount + accruedInterest(switchOffTarget, now),
+                        switchOffTarget.currency,
+                      )}
+                    </span>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Final interest is recalculated at the moment the Administrator approves. The borrowed principal
+                  is repaid and the leverage multiplier removed from your balance.
+                </p>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setSwitchOffTarget(null)}>
+                  Cancel
+                </Button>
+                <Button onClick={confirmSwitchOff}>
+                  <Power className="mr-2 h-4 w-4" />
+                  Request Switch-Off
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+// Renders a per-currency breakdown inside a stat card. With a single currency
+// it shows one large figure; with several it stacks each currency compactly so
+// USD, EUR, GBP and CHF balances are all visible without being summed together.
+function CurrencyLines({
+  entries,
+  select,
+  format,
+}: {
+  entries: [string, { equity: number; borrowed: number; interest: number }][]
+  select: (t: { equity: number; borrowed: number; interest: number }) => number
+  format: (value: number, currency: string) => string
+}) {
+  if (entries.length === 0) {
+    return <span className="text-muted-foreground">{format(0, BASE_CURRENCY)}</span>
+  }
+  if (entries.length === 1) {
+    const [cur, totals] = entries[0]
+    return <>{format(select(totals), cur)}</>
+  }
+  return (
+    <span className="flex flex-col gap-0.5 text-lg">
+      {entries.map(([cur, totals]) => (
+        <span key={cur}>{format(select(totals), cur)}</span>
+      ))}
+    </span>
+  )
+}
+
+function StatCard({
+  label,
+  value,
+  hint,
+  icon: Icon,
+  tint,
+}: {
+  label: string
+  value: React.ReactNode
+  hint: string
+  icon: typeof Banknote
+  tint: string
+  }) {
+  return (
+    <Card className="border-border bg-card py-0">
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">{label}</p>
+            <div className="mt-1 text-2xl font-bold text-foreground">{value}</div>
+            <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
+          </div>
+          <div className={cn("shrink-0 rounded-lg p-3", tint)}>
+            <Icon className="h-5 w-5" />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function RiskThreshold({
+  label,
+  value,
+  tone,
+  desc,
+}: {
+  label: string
+  value: string
+  tone: string
+  desc: string
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-secondary/30 p-4 text-center">
+      <p className={cn("text-2xl font-bold", tone)}>{value}</p>
+      <p className="mt-1 text-sm font-medium text-foreground">{label}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{desc}</p>
+    </div>
+  )
+}

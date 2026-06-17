@@ -1,0 +1,194 @@
+"use client"
+
+import { useState } from "react"
+import Link from "next/link"
+import { usePathname } from "next/navigation"
+import { cn } from "@/lib/utils"
+import {
+  LayoutDashboard,
+  ArrowLeftRight,
+  CreditCard,
+  FileText,
+  TrendingUp,
+  DollarSign,
+  Building2,
+  Shield,
+  Settings,
+  HelpCircle,
+  ChevronDown,
+  Landmark,
+  Globe,
+  Users,
+  Cpu,
+  BookOpen,
+  ShieldCheck,
+  Banknote,
+  Layers,
+  Ship,
+  Gauge,
+  type LucideIcon,
+} from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+
+type NavItem = {
+  title: string
+  href: string
+  icon: LucideIcon
+  badge?: string
+}
+
+type NavGroup = {
+  label: string
+  items: NavItem[]
+}
+
+const navGroups: NavGroup[] = [
+  {
+    label: "Banking",
+    items: [
+      { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
+      { title: "Payments & Payees", href: "/dashboard/payments", icon: ArrowLeftRight },
+      { title: "Beneficiaries", href: "/dashboard/beneficiaries", icon: Users },
+      { title: "Transactions", href: "/dashboard/transactions", icon: CreditCard },
+      { title: "Live FX Rates", href: "/dashboard/exchange", icon: DollarSign },
+      { title: "Bank Accounts", href: "/dashboard/accounts", icon: Building2 },
+      { title: "Cards", href: "/dashboard/cards", icon: CreditCard },
+    ],
+  },
+  {
+    label: "Trading & Instruments",
+    items: [
+      { title: "NAFTAhub Trading", href: "/dashboard/trading", icon: Cpu, badge: "NQAi" },
+      { title: "SWIFT Services", href: "/dashboard/swift", icon: Globe },
+      { title: "Bank Instruments", href: "/dashboard/instruments", icon: FileText, badge: "New" },
+      { title: "Institutional Desk", href: "/dashboard/institutional", icon: Banknote, badge: "DOF" },
+      { title: "Securities Settlement", href: "/dashboard/dtc", icon: Layers, badge: "DTC" },
+      { title: "Commodity Trading", href: "/dashboard/commodity", icon: Ship, badge: "POP/POF" },
+      { title: "Leverage & Risk", href: "/dashboard/leverage", icon: Gauge, badge: "1:30" },
+      { title: "Yield / PPP", href: "/dashboard/ppp", icon: TrendingUp },
+      { title: "Fiduciary & Assets", href: "/dashboard/fiduciary", icon: Landmark },
+    ],
+  },
+  {
+    label: "Platform",
+    items: [
+      { title: "Plans & Pricing", href: "/dashboard/plans", icon: DollarSign },
+      { title: "Services & Compliance", href: "/dashboard/services", icon: Shield },
+      { title: "Client Handbook", href: "/dashboard/handbook", icon: BookOpen },
+      { title: "Administrator", href: "/dashboard/admin", icon: ShieldCheck },
+      { title: "Settings", href: "/dashboard/settings", icon: Settings },
+      { title: "Support", href: "/dashboard/support", icon: HelpCircle },
+    ],
+  },
+]
+
+export function MobileSidebar() {
+  const pathname = usePathname()
+
+  // Open the group that contains the active route by default.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    const state: Record<string, boolean> = {}
+    for (const group of navGroups) {
+      state[group.label] = group.items.some((item) => item.href === pathname)
+    }
+    // Ensure at least the first group is open on initial load.
+    if (!Object.values(state).some(Boolean)) {
+      state[navGroups[0].label] = true
+    }
+    return state
+  })
+
+  const toggleGroup = (label: string) =>
+    setOpenGroups((prev) => ({ ...prev, [label]: !prev[label] }))
+
+  return (
+    <div className="flex h-full flex-col bg-sidebar">
+      {/* Logo */}
+      <div className="flex h-16 shrink-0 items-center border-b border-sidebar-border px-4">
+        <Link href="/dashboard" className="flex items-center gap-2">
+          <img
+            src="/images/mcc-logo.png"
+            alt="MCC Capital logo"
+            className="h-9 w-9 rounded-full object-cover"
+          />
+          <div className="flex flex-col">
+            <span className="text-sm font-semibold text-sidebar-foreground">MCC Capital</span>
+            <span className="text-[10px] text-muted-foreground">Swiss Banking</span>
+          </div>
+        </Link>
+      </div>
+
+      {/* Scrollable dropdown navigation */}
+      <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4 [scrollbar-width:thin]">
+        <div className="space-y-1">
+          {navGroups.map((group) => {
+            const isOpen = openGroups[group.label] ?? false
+            const hasActive = group.items.some((item) => item.href === pathname)
+            return (
+              <Collapsible
+                key={group.label}
+                open={isOpen}
+                onOpenChange={() => toggleGroup(group.label)}
+                className="pb-1"
+              >
+                <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground">
+                  <span className="flex items-center gap-2">
+                    {group.label}
+                    {!isOpen && hasActive && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-hidden="true" />
+                    )}
+                  </span>
+                  <ChevronDown
+                    className={cn(
+                      "h-4 w-4 shrink-0 transition-transform duration-200",
+                      isOpen && "rotate-180",
+                    )}
+                  />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+                  <div className="space-y-1 pt-1">
+                    {group.items.map((item) => (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        className={cn(
+                          "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
+                          pathname === item.href
+                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                            : "text-sidebar-foreground hover:bg-sidebar-accent/50",
+                        )}
+                      >
+                        <item.icon className="h-4 w-4 shrink-0" />
+                        <span className="flex-1">{item.title}</span>
+                        {item.badge && (
+                          <Badge
+                            variant="secondary"
+                            className="h-5 px-1.5 text-[10px] bg-primary/20 text-primary"
+                          >
+                            {item.badge}
+                          </Badge>
+                        )}
+                      </Link>
+                    ))}
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            )
+          })}
+        </div>
+      </nav>
+
+      {/* Account Tier */}
+      <div className="shrink-0 border-t border-sidebar-border p-4">
+        <div className="rounded-lg bg-gradient-to-r from-primary/20 to-primary/5 p-3">
+          <div className="flex items-center gap-2">
+            <Badge className="bg-primary text-primary-foreground text-[10px]">PRO</Badge>
+            <span className="text-xs text-sidebar-foreground">Active Plan</span>
+          </div>
+          <p className="mt-1 text-[10px] text-muted-foreground">Unlimited trading volume</p>
+        </div>
+      </div>
+    </div>
+  )
+}

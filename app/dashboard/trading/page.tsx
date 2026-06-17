@@ -1,0 +1,1012 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import {
+  Activity,
+  TrendingUp,
+  TrendingDown,
+  Zap,
+  Shield,
+  RefreshCw,
+  ArrowRight,
+  Crown,
+  Sparkles,
+  Bot,
+  LineChart,
+  Gauge,
+  Landmark,
+  Coins,
+  Check,
+  Lock,
+  Minus,
+  Plus,
+  BadgeCheck,
+} from "lucide-react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
+import { Switch } from "@/components/ui/switch"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
+import { cn } from "@/lib/utils"
+import { toast } from "sonner"
+import { useActivityLog } from "@/components/activity-tracker"
+import { useCurrentUser } from "@/lib/use-current-user"
+import { useLedger } from "@/lib/ledger-store"
+
+type Signal = "BUY" | "SELL" | "HOLD"
+
+type Instrument = {
+  symbol: string
+  name: string
+  category: "Commodities" | "Forex" | "Equities" | "Crypto" | "Indices"
+  price: number
+  decimals: number
+  change: number
+  signal: Signal
+  confidence: number
+}
+
+const INSTRUMENTS: Instrument[] = [
+  { symbol: "XAU/USD", name: "Gold Spot", category: "Commodities", price: 2331.4, decimals: 2, change: 0.62, signal: "BUY", confidence: 91 },
+  { symbol: "WTI", name: "Crude Oil", category: "Commodities", price: 78.34, decimals: 2, change: -0.41, signal: "HOLD", confidence: 64 },
+  { symbol: "NG", name: "Natural Gas", category: "Commodities", price: 2.61, decimals: 3, change: 1.27, signal: "BUY", confidence: 78 },
+  { symbol: "EUR/USD", name: "Euro / Dollar", category: "Forex", price: 1.0892, decimals: 4, change: 0.15, signal: "BUY", confidence: 73 },
+  { symbol: "USD/JPY", name: "Dollar / Yen", category: "Forex", price: 149.52, decimals: 2, change: -0.12, signal: "SELL", confidence: 69 },
+  { symbol: "AAPL", name: "Apple Inc.", category: "Equities", price: 187.52, decimals: 2, change: 0.83, signal: "BUY", confidence: 84 },
+  { symbol: "TSLA", name: "Tesla Inc.", category: "Equities", price: 241.18, decimals: 2, change: -1.04, signal: "SELL", confidence: 71 },
+  { symbol: "NVDA", name: "Nvidia Corp.", category: "Equities", price: 122.76, decimals: 2, change: 2.31, signal: "BUY", confidence: 93 },
+  { symbol: "BTC/USD", name: "Bitcoin", category: "Crypto", price: 64210, decimals: 0, change: 1.92, signal: "BUY", confidence: 88 },
+  { symbol: "ETH/USD", name: "Ethereum", category: "Crypto", price: 3412, decimals: 0, change: 0.74, signal: "HOLD", confidence: 61 },
+  { symbol: "NDX", name: "NASDAQ 100", category: "Indices", price: 19743, decimals: 0, change: 0.46, signal: "BUY", confidence: 80 },
+  { symbol: "SPX", name: "S&P 500", category: "Indices", price: 5471, decimals: 0, change: 0.31, signal: "HOLD", confidence: 66 },
+]
+
+type Position = {
+  id: string
+  symbol: string
+  side: "LONG" | "SHORT"
+  lots: number
+  entry: number
+  current: number
+  pnl: number
+}
+
+// No capital is allocated to NQAi until the client funds and deploys positions.
+// Figures below derive from the real account ledger, never placeholder amounts.
+const POSITIONS: Position[] = []
+
+const TIERS = [
+  {
+    id: "pro",
+    name: "PRO",
+    icon: Sparkles,
+    roi: "6.8% – 11.4%",
+    features: ["Enhanced algorithms", "Cross-asset arbitrage", "Multi-asset execution"],
+    active: true,
+  },
+  {
+    id: "avantgarde",
+    name: "Avant-Garde",
+    icon: Crown,
+    roi: "9.3% – 16.7%",
+    features: ["Full NQAi engine", "Institutional tooling", "Maximum AI access"],
+    active: false,
+  },
+]
+
+const signalStyles: Record<Signal, string> = {
+  BUY: "bg-green-500/10 text-green-500 border-green-500/20",
+  SELL: "bg-red-500/10 text-red-500 border-red-500/20",
+  HOLD: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
+}
+
+// Treuhand AG Limited Hedge Fund — parameters from the NAFTAhub Investor Prospectus 2026.
+const TOKEN_VALUE = 10000
+const MIN_TOKENS = 3
+const MONTHLY_ROI = 0.25
+
+const FUND_HIGHLIGHTS = [
+  { label: "Fixed Monthly ROI", value: "25%", note: "Secured, per active token" },
+  { label: "Capital Guaranteed", value: "100%", note: "Swiss fiduciary law" },
+  { label: "Token Unit Value", value: "€10,000", note: "Fixed denomination" },
+  { label: "Minimum Entry", value: "3 Tokens", note: "€30,000 position" },
+  { label: "Entry & Mgmt Fees", value: "0%", note: "Zero cost of entry" },
+  { label: "Max Trading Days", value: "20 / mo", note: "Market dependent" },
+]
+
+const PROTECTION_LAYERS = [
+  {
+    icon: Bot,
+    title: "Automated Trading Suspension",
+    text: "NQAi monitors geopolitical risk and volatility, halting all trading automatically in abnormal conditions and resuming once stability is restored.",
+  },
+  {
+    icon: Shield,
+    title: "P&L Floor Absorption",
+    text: "At withdrawal, any net trading loss below €2,500 is fully absorbed by the Treuhand AG fund — at zero cost to the investor.",
+  },
+  {
+    icon: Lock,
+    title: "Swiss Fiduciary Guarantee",
+    text: "All positions are held under Swiss fiduciary law via Treuhand AG Limited. Capital is contractually guaranteed and ring-fenced.",
+  },
+  {
+    icon: BadgeCheck,
+    title: "AML / KYC Compliance Gate",
+    text: "Full AML/KYC/FATCA/CRS due diligence prior to admission, monitored quarterly by Bildenberg Limited (Hong Kong SAR).",
+  },
+]
+
+const GOVERNANCE = [
+  { entity: "MCC Capital", role: "Strategic Command — Office of the President, Geneva." },
+  { entity: "Bildenberg Limited", role: "Regulatory Compliance — AML/KYC oversight, Hong Kong SAR." },
+  { entity: "Treuhand AG Limited", role: "Fiduciary & Trust administration, escrow and capital protection." },
+  { entity: "NQAi Engine", role: "Autonomous multi-asset AI execution intelligence." },
+]
+
+const ONBOARDING_STEPS = [
+  "Inquiry & investor profile review",
+  "KYC / AML due diligence",
+  "Treuhand AG investment agreement & token allocation",
+  "Capital transfer to fiduciary account",
+  "Dedicated IBAN issued — NQAi trading commences",
+  "Monthly ROI settlement & P&L statement",
+]
+
+function formatPrice(value: number, decimals: number) {
+  return value.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+}
+
+export default function TradingPage() {
+  const log = useActivityLog()
+  const user = useCurrentUser()
+  const { totalIn } = useLedger()
+  // Real funds available to the client, aggregated from the ledger (EUR equiv.).
+  const availableCapital = totalIn("EUR")
+  const [instruments, setInstruments] = useState<Instrument[]>(INSTRUMENTS)
+  const [autoExecute, setAutoExecute] = useState(true)
+  const [lastTick, setLastTick] = useState(new Date())
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [tradeTarget, setTradeTarget] = useState<Instrument | null>(null)
+  const [tradeSide, setTradeSide] = useState<"LONG" | "SHORT">("LONG")
+  const [lots, setLots] = useState("0.10")
+  const [activeTab, setActiveTab] = useState("markets")
+  const [tokens, setTokens] = useState(MIN_TOKENS)
+  const [applyOpen, setApplyOpen] = useState(false)
+  const [applicantName, setApplicantName] = useState("")
+  const [applicantEmail, setApplicantEmail] = useState("")
+
+  const capital = tokens * TOKEN_VALUE
+  const monthlyReturn = capital * MONTHLY_ROI
+
+  const formatEur = (n: number) =>
+    `€${n.toLocaleString("en-US", { maximumFractionDigits: 0 })}`
+
+  const openFund = () => setActiveTab("fund")
+
+  const submitApplication = () => {
+    log({
+      action: `Applied to Treuhand AG Limited Hedge Fund — ${tokens} tokens (${formatEur(capital)})`,
+      category: "NAFTAhub Trading",
+      details: {
+        summary: `Client submitted an application to the Treuhand AG Limited Hedge Fund for ${tokens} tokens (${formatEur(capital)} capital) at 25% fixed monthly ROI (${formatEur(monthlyReturn)}/mo projected).`,
+        fund: "Treuhand AG Limited Hedge Fund",
+        tokens: String(tokens),
+        capitalDeployed: formatEur(capital),
+        monthlyRoi: formatEur(monthlyReturn),
+        applicant: applicantName || "—",
+        email: applicantEmail || "—",
+        submittedAt: new Date().toLocaleString("en-GB"),
+      },
+    })
+    toast.success("Application submitted", {
+      description: `Your ${tokens}-token application (${formatEur(capital)}) has been sent to the Treuhand AG onboarding desk. KYC review to follow.`,
+    })
+    setApplyOpen(false)
+    setApplicantName("")
+    setApplicantEmail("")
+  }
+
+  // Simulate live price ticks from the NQAi feed.
+  const tick = () => {
+    setInstruments((prev) =>
+      prev.map((it) => {
+        const drift = (Math.random() - 0.5) * (it.price * 0.0006)
+        const nextPrice = Math.max(0.0001, it.price + drift)
+        const nextChange = parseFloat((it.change + (Math.random() - 0.5) * 0.08).toFixed(2))
+        return { ...it, price: nextPrice, change: nextChange }
+      }),
+    )
+    setLastTick(new Date())
+  }
+
+  useEffect(() => {
+    const interval = setInterval(tick, 4000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const refresh = () => {
+    setIsRefreshing(true)
+    setTimeout(() => {
+      tick()
+      setIsRefreshing(false)
+    }, 500)
+  }
+
+  const toggleAutoExecute = (next: boolean) => {
+    setAutoExecute(next)
+    log({
+      action: `NQAi auto-execution ${next ? "enabled" : "disabled"}`,
+      category: "NAFTAhub Trading",
+      details: {
+        summary: `Client ${next ? "enabled" : "disabled"} the NQAi automated execution engine.`,
+        engine: "NQAi",
+        autoExecution: next ? "ON" : "OFF",
+        toggledAt: new Date().toLocaleString("en-GB"),
+      },
+    })
+    toast[next ? "success" : "info"](`NQAi auto-execution ${next ? "enabled" : "paused"}`, {
+      description: next
+        ? "The engine will now execute micro-positions automatically."
+        : "Automated execution paused. Signals remain live for manual trading.",
+    })
+  }
+
+  const openTrade = (instrument: Instrument, side: "LONG" | "SHORT") => {
+    setTradeTarget(instrument)
+    setTradeSide(side)
+    setLots("0.10")
+  }
+
+  const confirmTrade = () => {
+    if (!tradeTarget) return
+    const volume = parseFloat(lots) || 0
+    log({
+      action: `Deployed NQAi ${tradeSide} micro-position on ${tradeTarget.symbol}`,
+      category: "NAFTAhub Trading",
+      details: {
+        summary: `Client opened a ${tradeSide} position of ${volume.toFixed(2)} lots on ${tradeTarget.symbol} (${tradeTarget.name}) at ${formatPrice(tradeTarget.price, tradeTarget.decimals)} via the NQAi engine.`,
+        instrument: tradeTarget.symbol,
+        side: tradeSide,
+        lots: volume.toFixed(2),
+        entryPrice: formatPrice(tradeTarget.price, tradeTarget.decimals),
+        aiSignal: tradeTarget.signal,
+        confidence: `${tradeTarget.confidence}%`,
+        openedAt: new Date().toLocaleString("en-GB"),
+      },
+    })
+    toast.success("Position deployed", {
+      description: `${tradeSide} ${volume.toFixed(2)} lots ${tradeTarget.symbol} routed to the NQAi engine.`,
+    })
+    setTradeTarget(null)
+  }
+
+  const openPnl = POSITIONS.reduce((sum, p) => sum + p.pnl, 0)
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="flex shrink-0 items-center rounded-lg bg-white px-2 py-1.5">
+            <img
+              src="/images/naftahub-logo.png"
+              alt="NAFTAhub logo"
+              className="h-7 w-auto object-contain sm:h-8"
+            />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-bold text-foreground">NAFTAhub</h1>
+              <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary text-[10px]">
+                NQAi Engine
+              </Badge>
+            </div>
+            <p className="text-sm text-muted-foreground text-pretty">
+              Neural Quantum AI trading across commodities, FX, equities, crypto &amp; indices.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={openFund}
+          className="group flex w-fit max-w-md items-start gap-2 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-left leading-snug text-primary transition-colors hover:bg-primary/20"
+        >
+          <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span className="text-xs font-medium">
+            Apply to the Treuhand AG Limited hedge fund and benefit from 25% monthly ROI — secured &amp; automated by NQAi
+          </span>
+          <ArrowRight className="mt-0.5 h-3.5 w-3.5 shrink-0 transition-transform group-hover:translate-x-0.5" />
+        </button>
+      </div>
+
+      {/* NQAi engine status */}
+      <Card className="border-primary/20 bg-gradient-to-r from-primary/10 to-primary/5">
+        <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="relative mt-0.5">
+              <span className="absolute inline-flex h-3 w-3 animate-ping rounded-full bg-green-500/60" />
+              <span className="relative inline-flex h-3 w-3 rounded-full bg-green-500" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <Bot className="h-4 w-4 text-primary" />
+                <h2 className="font-semibold text-foreground">NQAi Engine — Operational</h2>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground text-pretty">
+                Neural Quantum Scalping Dynamics running. Midpoint deviation, RSI/EMA/ATR
+                overlays and fractional foresight active across {instruments.length} instruments.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 rounded-lg border border-border bg-background/40 px-4 py-2">
+            <div>
+              <p className="text-xs font-medium text-foreground">Auto-Execution</p>
+              <p className="text-[10px] text-muted-foreground">{autoExecute ? "Engine trading live" : "Manual mode"}</p>
+            </div>
+            <Switch checked={autoExecute} onCheckedChange={toggleAutoExecute} aria-label="Toggle NQAi auto-execution" />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Stats */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Card className="bg-card border-border">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-muted-foreground">Available Capital</p>
+                <p className="mt-1 text-2xl font-bold text-foreground">{formatEur(availableCapital)}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {POSITIONS.length > 0 ? `Across ${POSITIONS.length} positions` : "Ready to allocate"}
+                </p>
+              </div>
+              <div className="rounded-lg bg-primary/10 p-3">
+                <LineChart className="h-5 w-5 text-primary" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="bg-card border-border">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-muted-foreground">Today&apos;s P&amp;L</p>
+                <p className={cn("mt-1 text-2xl font-bold", openPnl > 0 ? "text-green-500" : "text-foreground")}>
+                  {openPnl > 0 ? `+${formatEur(openPnl)}` : formatEur(0)}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {POSITIONS.length > 0 ? "Live session" : "No active positions"}
+                </p>
+              </div>
+              <div className={cn("rounded-lg p-3", openPnl > 0 ? "bg-green-500/10" : "bg-secondary")}>
+                <TrendingUp className={cn("h-5 w-5", openPnl > 0 ? "text-green-500" : "text-muted-foreground")} />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="bg-card border-border">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-muted-foreground">NQAi Win Rate</p>
+                <p className="mt-1 text-2xl font-bold text-foreground">87.2%</p>
+                <p className="mt-1 text-xs text-muted-foreground">Engine benchmark</p>
+              </div>
+              <div className="rounded-lg bg-blue-500/10 p-3">
+                <Gauge className="h-5 w-5 text-blue-400" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="bg-card border-border">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-muted-foreground">Open Positions</p>
+                <p className="mt-1 text-2xl font-bold text-foreground">{POSITIONS.length}</p>
+                <p className="mt-1 text-xs text-muted-foreground">Micro-position layering</p>
+              </div>
+              <div className="rounded-lg bg-orange-500/10 p-3">
+                <Activity className="h-5 w-5 text-orange-400" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList className="flex-wrap">
+          <TabsTrigger value="markets">Markets</TabsTrigger>
+          <TabsTrigger value="signals">AI Signals</TabsTrigger>
+          <TabsTrigger value="positions">Positions</TabsTrigger>
+          <TabsTrigger value="tiers">ROI Tiers</TabsTrigger>
+          <TabsTrigger value="fund">Treuhand Fund</TabsTrigger>
+        </TabsList>
+
+        {/* Markets */}
+        <TabsContent value="markets" className="mt-6">
+          <Card className="bg-card border-border">
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <div>
+                <CardTitle className="text-lg font-semibold">Live Markets</CardTitle>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  NQAi feed · updated {lastTick.toLocaleTimeString()}
+                </p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={refresh} disabled={isRefreshing}>
+                <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {instruments.map((it) => (
+                <div
+                  key={it.symbol}
+                  className="flex flex-col gap-3 rounded-lg border border-border bg-secondary/30 p-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary">
+                      <span className="text-[10px] font-semibold text-foreground">
+                        {it.symbol.split("/")[0].slice(0, 4)}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{it.symbol}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {it.name} · {it.category}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-4 sm:justify-end">
+                    <div className="text-right">
+                      <p className="font-mono text-sm font-semibold text-foreground">
+                        {formatPrice(it.price, it.decimals)}
+                      </p>
+                      <p
+                        className={cn(
+                          "flex items-center justify-end text-xs font-medium",
+                          it.change >= 0 ? "text-green-500" : "text-red-500",
+                        )}
+                      >
+                        {it.change >= 0 ? (
+                          <TrendingUp className="mr-0.5 h-3 w-3" />
+                        ) : (
+                          <TrendingDown className="mr-0.5 h-3 w-3" />
+                        )}
+                        {Math.abs(it.change).toFixed(2)}%
+                      </p>
+                    </div>
+                    <Badge variant="outline" className={cn("w-14 justify-center text-[10px]", signalStyles[it.signal])}>
+                      {it.signal}
+                    </Badge>
+                    <Button size="sm" className="h-8" onClick={() => openTrade(it, it.signal === "SELL" ? "SHORT" : "LONG")}>
+                      Trade
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* AI Signals */}
+        <TabsContent value="signals" className="mt-6">
+          <div className="grid gap-4 md:grid-cols-2">
+            {instruments
+              .filter((it) => it.signal !== "HOLD")
+              .map((it) => (
+                <Card key={it.symbol} className="bg-card border-border">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <CardTitle className="text-base font-semibold">{it.symbol}</CardTitle>
+                        <p className="text-xs text-muted-foreground">{it.name}</p>
+                      </div>
+                      <Badge variant="outline" className={cn("text-[10px]", signalStyles[it.signal])}>
+                        <Zap className="mr-1 h-3 w-3" />
+                        {it.signal}
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div>
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">NQAi Confidence</span>
+                        <span className="text-xs font-semibold text-foreground">{it.confidence}%</span>
+                      </div>
+                      <Progress value={it.confidence} className="h-1.5" />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="rounded-md bg-secondary/40 p-2 text-center">
+                        <p className="text-[10px] text-muted-foreground">RSI(7)</p>
+                        <p className="text-xs font-semibold text-foreground">
+                          {it.signal === "BUY" ? "31" : "69"}
+                        </p>
+                      </div>
+                      <div className="rounded-md bg-secondary/40 p-2 text-center">
+                        <p className="text-[10px] text-muted-foreground">EMA(40)</p>
+                        <p className="text-xs font-semibold text-foreground">
+                          {it.signal === "BUY" ? "↑" : "↓"}
+                        </p>
+                      </div>
+                      <div className="rounded-md bg-secondary/40 p-2 text-center">
+                        <p className="text-[10px] text-muted-foreground">ATR×</p>
+                        <p className="text-xs font-semibold text-foreground">1.5</p>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => openTrade(it, it.signal === "SELL" ? "SHORT" : "LONG")}
+                    >
+                      Execute Signal
+                      <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
+          </div>
+        </TabsContent>
+
+        {/* Positions */}
+        <TabsContent value="positions" className="mt-6">
+          <Card className="bg-card border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg font-semibold">Open Micro-Positions</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Capital-segmented layering managed by the NQAi risk controller
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {POSITIONS.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
+                    <Activity className="h-6 w-6 text-muted-foreground" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">No open positions</p>
+                    <p className="mt-1 text-xs text-muted-foreground text-pretty">
+                      You have no capital allocated to NQAi yet. Deploy a position from the Markets
+                      tab or apply to the Treuhand AG fund to begin.
+                    </p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => setActiveTab("markets")}>
+                    Browse Markets
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </div>
+              ) : (
+                POSITIONS.map((p) => (
+                  <div
+                    key={p.id}
+                    className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-3"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-[10px]",
+                          p.side === "LONG"
+                            ? "bg-green-500/10 text-green-500 border-green-500/20"
+                            : "bg-red-500/10 text-red-500 border-red-500/20",
+                        )}
+                      >
+                        {p.side}
+                      </Badge>
+                      <div>
+                        <p className="text-sm font-medium text-foreground">{p.symbol}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {p.lots.toFixed(2)} lots · {p.id}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-green-500">+{formatEur(p.pnl)}</p>
+                      <p className="font-mono text-xs text-muted-foreground">
+                        {p.entry} → {p.current}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ROI Tiers */}
+        <TabsContent value="tiers" className="mt-6">
+          <div className="grid gap-6 md:grid-cols-3">
+            {TIERS.map((tier) => (
+              <Card
+                key={tier.id}
+                className={cn("relative border-border bg-card", tier.active && "border-primary shadow-lg shadow-primary/10")}
+              >
+                {tier.active && (
+                  <Badge className="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground">
+                    Your Tier
+                  </Badge>
+                )}
+                <CardHeader className="space-y-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10">
+                    <tier.icon className="h-6 w-6 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-foreground">{tier.name}</h3>
+                    <p className="text-xs text-muted-foreground">Daily ROI</p>
+                    <p className="text-2xl font-bold text-primary">{tier.roi}</p>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <ul className="space-y-2">
+                    {tier.features.map((f) => (
+                      <li key={f} className="flex items-start gap-2">
+                        <Shield className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                        <span className="text-sm text-foreground">{f}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <Button
+                    className="w-full"
+                    variant={tier.active ? "outline" : "default"}
+                    disabled={tier.active}
+                    onClick={() =>
+                      log({
+                        action: `Requested upgrade to ${tier.name} tier`,
+                        category: "NAFTAhub Trading",
+                        details: {
+                          summary: `Client requested to upgrade their NAFTAhub tier to ${tier.name} (daily ROI ${tier.roi}).`,
+                          tier: tier.name,
+                          roi: tier.roi,
+                          requestedAt: new Date().toLocaleString("en-GB"),
+                        },
+                      })
+                    }
+                  >
+                    {tier.active ? "Current Tier" : `Upgrade to ${tier.name}`}
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+          <p className="mt-4 text-center text-xs text-muted-foreground text-pretty">
+            ROI tiers are backed by Swiss fiduciary law and treasury deposits with partner
+            institutions including UBS, Barclays &amp; HSBC. Past performance does not guarantee
+            future results.
+          </p>
+        </TabsContent>
+
+        {/* Treuhand AG Limited Hedge Fund */}
+        <TabsContent value="fund" className="mt-6 space-y-6">
+          {/* Hero */}
+          <Card className="border-primary/20 bg-gradient-to-br from-primary/10 to-primary/5">
+            <CardContent className="p-5 sm:p-6">
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/15">
+                  <Landmark className="h-6 w-6 text-primary" />
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-xl font-bold text-foreground">Treuhand AG Limited Hedge Fund</h2>
+                    <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary text-[10px]">
+                      Prospectus 2026
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground text-pretty">
+                    A fully automated, capital-guaranteed investment vehicle governed under Swiss
+                    fiduciary law and powered by the NQAi engine. Structured returns for qualified
+                    investors — 25% fixed monthly ROI on active trading days.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Highlights */}
+          <div className="grid gap-3 grid-cols-2 lg:grid-cols-3">
+            {FUND_HIGHLIGHTS.map((h) => (
+              <Card key={h.label} className="bg-card border-border">
+                <CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground">{h.label}</p>
+                  <p className="mt-1 text-2xl font-bold text-primary">{h.value}</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">{h.note}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          {/* Calculator */}
+          <Card className="bg-card border-border">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+                <Coins className="h-5 w-5 text-primary" />
+                Token & ROI Calculator
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Each token is a fixed €10,000 unit · minimum entry 3 tokens (€30,000) · no upper limit.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Tokens</p>
+                  <p className="text-xs text-muted-foreground">Adjust your position</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={() => setTokens((t) => Math.max(MIN_TOKENS, t - 1))}
+                    disabled={tokens <= MIN_TOKENS}
+                    aria-label="Decrease tokens"
+                  >
+                    <Minus className="h-4 w-4" />
+                  </Button>
+                  <span className="w-10 text-center text-xl font-bold text-foreground">{tokens}</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={() => setTokens((t) => t + 1)}
+                    aria-label="Increase tokens"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {[3, 5, 10, 20, 50, 100].map((q) => (
+                  <Button
+                    key={q}
+                    type="button"
+                    variant={tokens === q ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setTokens(q)}
+                  >
+                    {q}
+                  </Button>
+                ))}
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-lg border border-border bg-secondary/30 p-4">
+                  <p className="text-xs text-muted-foreground">Capital Deployed</p>
+                  <p className="mt-1 text-xl font-bold text-foreground">{formatEur(capital)}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-secondary/30 p-4">
+                  <p className="text-xs text-muted-foreground">Monthly ROI @ 25%</p>
+                  <p className="mt-1 text-xl font-bold text-primary">{formatEur(monthlyReturn)}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-secondary/30 p-4">
+                  <p className="text-xs text-muted-foreground">12-Month Cumulative</p>
+                  <p className="mt-1 text-xl font-bold text-green-500">{formatEur(monthlyReturn * 12)}</p>
+                </div>
+              </div>
+
+              <Button className="w-full" size="lg" onClick={() => setApplyOpen(true)}>
+                Apply with {tokens} Tokens · {formatEur(capital)}
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+              <p className="text-center text-[11px] text-muted-foreground text-pretty">
+                Projections are illustrative, based on 25% fixed monthly ROI over up to 20 active
+                trading days. Capital is fully guaranteed under Swiss fiduciary law.
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Capital protection */}
+          <Card className="bg-card border-border">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+                <Shield className="h-5 w-5 text-primary" />
+                Capital Protection &amp; Risk Management
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4 sm:grid-cols-2">
+              {PROTECTION_LAYERS.map((layer) => (
+                <div key={layer.title} className="flex items-start gap-3 rounded-lg border border-border bg-secondary/30 p-4">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                    <layer.icon className="h-4 w-4 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">{layer.title}</p>
+                    <p className="mt-1 text-xs text-muted-foreground text-pretty">{layer.text}</p>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Governance + Onboarding */}
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Card className="bg-card border-border">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+                  <Landmark className="h-5 w-5 text-primary" />
+                  Governance Structure
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {GOVERNANCE.map((g) => (
+                  <div key={g.entity} className="rounded-lg border border-border bg-secondary/30 p-3">
+                    <p className="text-sm font-semibold text-foreground">{g.entity}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground text-pretty">{g.role}</p>
+                  </div>
+                ))}
+                <p className="text-[11px] text-muted-foreground text-pretty">
+                  MCC Holding SA · Rue du Rhone 14, 1204 Geneva · CHE-110.027.662 · AML/KYC/FATCA/CRS compliant.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-card border-border">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+                  <BadgeCheck className="h-5 w-5 text-primary" />
+                  Onboarding Process
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ol className="space-y-3">
+                  {ONBOARDING_STEPS.map((step, i) => (
+                    <li key={step} className="flex items-start gap-3">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-bold text-primary">
+                        {i + 1}
+                      </span>
+                      <span className="text-sm text-foreground text-pretty">{step}</span>
+                    </li>
+                  ))}
+                </ol>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+      </Tabs>
+
+      {/* Trade dialog */}
+      <Dialog open={!!tradeTarget} onOpenChange={(open) => !open && setTradeTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Deploy NQAi Position</DialogTitle>
+            <DialogDescription>
+              {tradeTarget ? `${tradeTarget.name} (${tradeTarget.symbol})` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          {tradeTarget && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">Live Price</p>
+                  <p className="font-mono text-lg font-bold text-foreground">
+                    {formatPrice(tradeTarget.price, tradeTarget.decimals)}
+                  </p>
+                </div>
+                <Badge variant="outline" className={cn("text-[10px]", signalStyles[tradeTarget.signal])}>
+                  AI: {tradeTarget.signal} · {tradeTarget.confidence}%
+                </Badge>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant={tradeSide === "LONG" ? "default" : "outline"}
+                  onClick={() => setTradeSide("LONG")}
+                  className={cn(tradeSide === "LONG" && "bg-green-600 hover:bg-green-600/90")}
+                >
+                  <TrendingUp className="mr-2 h-4 w-4" />
+                  Long
+                </Button>
+                <Button
+                  type="button"
+                  variant={tradeSide === "SHORT" ? "default" : "outline"}
+                  onClick={() => setTradeSide("SHORT")}
+                  className={cn(tradeSide === "SHORT" && "bg-red-600 hover:bg-red-600/90")}
+                >
+                  <TrendingDown className="mr-2 h-4 w-4" />
+                  Short
+                </Button>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="lots">Volume (lots)</Label>
+                <Input
+                  id="lots"
+                  inputMode="decimal"
+                  value={lots}
+                  onChange={(e) => setLots(e.target.value)}
+                  placeholder="0.10"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Micro-position range 0.01–0.12 lots recommended by the NQAi risk controller.
+                </p>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTradeTarget(null)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmTrade}>Deploy Position</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Treuhand AG fund application dialog */}
+      <Dialog open={applyOpen} onOpenChange={setApplyOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Apply — Treuhand AG Limited Hedge Fund</DialogTitle>
+            <DialogDescription>
+              Submit your interest. A compliance officer will follow up with KYC onboarding.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-3 rounded-lg border border-border bg-secondary/30 p-3 text-center">
+              <div>
+                <p className="text-[11px] text-muted-foreground">Tokens</p>
+                <p className="text-base font-bold text-foreground">{tokens}</p>
+              </div>
+              <div>
+                <p className="text-[11px] text-muted-foreground">Capital</p>
+                <p className="text-base font-bold text-foreground">{formatEur(capital)}</p>
+              </div>
+              <div>
+                <p className="text-[11px] text-muted-foreground">Monthly ROI</p>
+                <p className="text-base font-bold text-primary">{formatEur(monthlyReturn)}</p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="applicant-name">Full name / Entity</Label>
+              <Input
+                id="applicant-name"
+                value={applicantName}
+                onChange={(e) => setApplicantName(e.target.value)}
+                placeholder={`${user.fullName} — ${user.company}`}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="applicant-email">Contact email</Label>
+              <Input
+                id="applicant-email"
+                type="email"
+                inputMode="email"
+                value={applicantEmail}
+                onChange={(e) => setApplicantEmail(e.target.value)}
+                placeholder="you@company.com"
+              />
+            </div>
+            <div className="flex items-start gap-2 rounded-lg border border-border bg-secondary/20 p-3">
+              <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <p className="text-[11px] text-muted-foreground text-pretty">
+                100% capital guaranteed under Swiss fiduciary law · 0% entry &amp; management fees ·
+                AML/KYC/FATCA/CRS due diligence applies.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApplyOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={submitApplication}>Submit Application</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
