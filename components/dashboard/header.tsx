@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetDescription } from "@/components/ui/sheet"
 import { MobileSidebar } from "./mobile-sidebar"
 import { logout } from "@/app/actions/auth"
@@ -126,7 +126,6 @@ export function DashboardHeader() {
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="gap-2 px-2">
               <Avatar className="h-8 w-8">
-                <AvatarImage src="/avatar.png" alt={user.fullName} />
                 <AvatarFallback className="bg-primary text-primary-foreground text-xs">
                   {user.initials}
                 </AvatarFallback>
