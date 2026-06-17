@@ -38,6 +38,7 @@ import {
 import { generateIban, formatIban, countrySupportsIban } from "@/lib/iban"
 import { useLedger } from "@/lib/ledger-store"
 import { useActivityLog } from "@/components/activity-tracker"
+import { BankInventoryManager } from "@/components/admin/bank-inventory-manager"
 import { toast } from "sonner"
 
 const formatCurrency = (value: number, currency: string) =>
@@ -95,6 +96,12 @@ export function AdminGatewaySection() {
   // Approve dialog state
   const [approveTarget, setApproveTarget] = useState<GatewayAccount | null>(null)
   const [bankKey, setBankKey] = useState<string>("")
+  const [approving, setApproving] = useState(false)
+  // Live availability for the approve dialog's currency, keyed by bank key.
+  const [approveAvailability, setApproveAvailability] = useState<Map<string, BankAvailability>>(
+    new Map(),
+  )
+  const [loadingAvailability, setLoadingAvailability] = useState(false)
 
   // Reject dialog state
   const [rejectTarget, setRejectTarget] = useState<GatewayAccount | null>(null)
@@ -124,13 +131,26 @@ export function AdminGatewaySection() {
     setBankKey(usable)
   }
 
-  const confirmApprove = () => {
+  const confirmApprove = async () => {
     if (!approveTarget || !bankKey) return
+    // Reserve one account slot from the chosen bank's currency pool BEFORE we
+    // issue any coordinates. This is the authoritative availability gate: a
+    // disabled or exhausted pool returns an error and nothing is issued.
+    setApproving(true)
+    const allocation = await allocateBankSlotAdmin(ADMIN_PASSCODE, bankKey, approveTarget.currency)
+    if (!allocation.ok) {
+      setApproving(false)
+      toast.error(allocation.error)
+      // Refresh availability so the picker reflects the now-exhausted pool.
+      void refreshApproveAvailability(approveTarget.currency)
+      return
+    }
     const coordinates = buildCoordinates(bankKey)
     const updated = approveAccount(approveTarget.id, coordinates)
+    setApproving(false)
     if (updated) {
       toast.success(`Account ${approveTarget.id} approved`, {
-        description: `${partnerBankByKey(bankKey)?.name} coordinates assigned.`,
+        description: `${partnerBankByKey(bankKey)?.name} coordinates assigned · ${allocation.remaining} ${approveTarget.currency} slot${allocation.remaining === 1 ? "" : "s"} left.`,
       })
       log({
         action: `Approved gateway account ${approveTarget.id}`,
@@ -220,6 +240,9 @@ export function AdminGatewaySection() {
 
   return (
     <>
+      {/* Partner Bank Availability & Capacity */}
+      <BankInventoryManager />
+
       {/* Pending Account Requests */}
       <Card className="bg-card border-border">
         <CardHeader>

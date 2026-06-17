@@ -76,6 +76,9 @@ type Payment = {
   time: string
   fee: string
   swiftCode: string
+  // Principal partner bank the payment was routed through (outgoing, once approved).
+  routedBankName?: string
+  routedBankBic?: string
   // ISO timestamp the gpi journey is anchored to (submission / value date).
   baseDate: string
 }
@@ -163,6 +166,8 @@ export default function PaymentsPage() {
         }),
         fee: formatCurrency(r.fee, r.currency),
         swiftCode: r.swiftCode,
+        routedBankName: r.routedBankName,
+        routedBankBic: r.routedBankBic,
         baseDate: r.submittedAt,
       } as Payment,
     }))
@@ -1020,6 +1025,12 @@ export default function PaymentsPage() {
                   ["Reference", viewPaymentTarget.reference],
                   ["IBAN / Account", viewPaymentTarget.iban],
                   ["SWIFT / BIC", viewPaymentTarget.swiftCode],
+                  [
+                    "Routed Via",
+                    viewPaymentTarget.routedBankName
+                      ? `${viewPaymentTarget.routedBankName}${viewPaymentTarget.routedBankBic ? ` (${viewPaymentTarget.routedBankBic})` : ""}`
+                      : "",
+                  ],
                   ["Fee", viewPaymentTarget.fee],
                   ["Status", viewPaymentTarget.status],
                   ["Date", viewPaymentTarget.time ? `${viewPaymentTarget.date} ${viewPaymentTarget.time}` : viewPaymentTarget.date],
