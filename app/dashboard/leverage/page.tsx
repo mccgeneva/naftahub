@@ -69,6 +69,7 @@ import {
   type LeverageRequest,
   type LeverageAccountKey,
 } from "@/lib/leverage-requests-store"
+import { useInstrumentRequests } from "@/lib/instrument-requests-store"
 
 const accountIcons: Record<LeverageAccountKey, typeof Building2> = {
   treasury: ShieldCheck,
@@ -372,11 +373,39 @@ export default function LeveragePage() {
   const [currency, setCurrency] = useState(BASE_CURRENCY)
   const [ratio, setRatio] = useState(String(LEVERAGE_RATIOS[1])) // default 1:5
   const [instrumentType, setInstrumentType] = useState("")
+  const [pledgedInstrumentId, setPledgedInstrumentId] = useState("")
   const [notes, setNotes] = useState("")
   const [formError, setFormError] = useState<string | null>(null)
   const [switchOffTarget, setSwitchOffTarget] = useState<LeverageRequest | null>(null)
   const log = useActivityLog()
   const { requests, addRequest, requestSwitchOff, hydrated } = useLeverageRequests()
+  const { instruments } = useInstrumentRequests()
+
+  // Active bank instruments the client can pledge as collateral when funding a
+  // leverage line from "Bank Instruments". Only approved/active instruments
+  // qualify; pending or rejected ones cannot back a line.
+  const activeInstruments = useMemo(
+    () => instruments.filter((i) => i.status === "active"),
+    [instruments],
+  )
+  const selectedInstrument = useMemo(
+    () => activeInstruments.find((i) => i.id === pledgedInstrumentId),
+    [activeInstruments, pledgedInstrumentId],
+  )
+  // Instruments currently pledged to a live or in-flight leverage line, so the
+  // collateral list can flag which ones are already committed vs. available.
+  const pledgedInstrumentIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const r of requests) {
+      if (
+        r.pledgedInstrumentId &&
+        (r.status === "approved" || r.status === "switchoff_pending" || r.status === "pending")
+      ) {
+        ids.add(r.pledgedInstrumentId)
+      }
+    }
+    return ids
+  }, [requests])
 
   // Live clock so accrued interest ticks up while the page is open.
   const [now, setNow] = useState(() => Date.now())
@@ -405,6 +434,11 @@ export default function LeveragePage() {
   // card lists every currency it holds a balance in.
   const totalsByCurrency = useMemo(() => {
     const map = new Map<string, { equity: number; borrowed: number; interest: number }>()
+    // Always surface every supported currency (EUR, USD, GBP, CHF), even with no
+    // active line in it, so the stats show all four rather than EUR alone.
+    for (const cur of SUPPORTED_CURRENCIES) {
+      map.set(cur, { equity: 0, borrowed: 0, interest: 0 })
+    }
     for (const r of activeLines) {
       const cur = map.get(r.currency) ?? { equity: 0, borrowed: 0, interest: 0 }
       cur.equity += r.equity
@@ -474,6 +508,22 @@ export default function LeveragePage() {
       const allowed = leverageRatiosFor(next)
       setRatio(String(allowed[allowed.length - 1] ?? cap))
     }
+    // Leaving the Bank Instruments funding source clears any pledged collateral.
+    if (next !== "instruments") {
+      setPledgedInstrumentId("")
+    }
+  }
+
+  // Pledging an instrument fixes the line's collateral: the equity allocation
+  // defaults to the instrument's face value and the currency is locked to the
+  // instrument's currency, since the line is backed by that specific asset.
+  const handlePledgeInstrument = (id: string) => {
+    setPledgedInstrumentId(id)
+    const inst = activeInstruments.find((i) => i.id === id)
+    if (inst) {
+      setEquity(String(inst.faceValue))
+      setCurrency(inst.currency)
+    }
   }
 
   const resetForm = () => {
@@ -482,6 +532,7 @@ export default function LeveragePage() {
     setCurrency(BASE_CURRENCY)
     setRatio(String(LEVERAGE_RATIOS[1]))
     setInstrumentType("")
+    setPledgedInstrumentId("")
     setNotes("")
     setFormError(null)
   }
@@ -499,6 +550,20 @@ export default function LeveragePage() {
       setFormError("Please select an instrument type to trade.")
       return
     }
+    // Bank Instruments funding must be backed by a specific active instrument,
+    // and the pledged equity can't exceed that instrument's face value.
+    if (account === "instruments") {
+      if (!selectedInstrument) {
+        setFormError("Please select an active bank instrument to pledge as collateral.")
+        return
+      }
+      if (numericEquity > selectedInstrument.faceValue) {
+        setFormError(
+          `Pledged equity cannot exceed the instrument's face value of ${formatMoney(selectedInstrument.faceValue, selectedInstrument.currency)}.`,
+        )
+        return
+      }
+    }
 
     const cap = maxLeverageFor(account)
     if (numericRatio > cap) {
@@ -508,6 +573,9 @@ export default function LeveragePage() {
     }
 
     const accountOption = LEVERAGE_ACCOUNTS.find((a) => a.key === account)!
+    const pledgedLabel = selectedInstrument
+      ? `${selectedInstrument.type} ${selectedInstrument.id} · ${selectedInstrument.issuer}`
+      : undefined
     const request = addRequest({
       id: `LEV-REQ-${new Date().getTime().toString().slice(-8)}`,
       account,
@@ -519,6 +587,8 @@ export default function LeveragePage() {
       borrowedAmount: projectedBorrowed,
       interestRate: DEBIT_INTEREST_RATE,
       instrumentType,
+      pledgedInstrumentId: account === "instruments" ? selectedInstrument?.id : undefined,
+      pledgedInstrumentLabel: account === "instruments" ? pledgedLabel : undefined,
       notes: notes.trim() || undefined,
     })
 
@@ -747,6 +817,52 @@ export default function LeveragePage() {
                   </Select>
                 </div>
 
+                {/* Bank Instruments funding: pledge a specific active instrument
+                    as collateral. The equity and currency are taken from it. */}
+                {account === "instruments" && (
+                  <div className="space-y-2">
+                    <Label>Pledged Bank Instrument</Label>
+                    {activeInstruments.length === 0 ? (
+                      <div className="flex items-start gap-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-3 text-sm text-yellow-500">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>
+                          You have no active bank instruments to pledge. Submit an instrument on the
+                          Bank Instruments page and have it approved before leveraging against it.
+                        </span>
+                      </div>
+                    ) : (
+                      <>
+                        <Select value={pledgedInstrumentId} onValueChange={handlePledgeInstrument}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select an active instrument" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {activeInstruments.map((inst) => (
+                              <SelectItem key={inst.id} value={inst.id}>
+                                <span className="flex w-full items-center justify-between gap-3">
+                                  <span>
+                                    {inst.type} · {inst.issuer}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground">
+                                    {formatMoney(inst.faceValue, inst.currency)}
+                                  </span>
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {selectedInstrument && (
+                          <p className="text-xs text-muted-foreground">
+                            {selectedInstrument.typeFull} · {selectedInstrument.id} · face value{" "}
+                            {formatMoney(selectedInstrument.faceValue, selectedInstrument.currency)} ·
+                            collateral currency {selectedInstrument.currency}
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+
                 <div className="grid grid-cols-3 gap-3">
                   <div className="col-span-2 space-y-2">
                     <Label>Equity Allocation</Label>
@@ -759,7 +875,11 @@ export default function LeveragePage() {
                   </div>
                   <div className="space-y-2">
                     <Label>Currency</Label>
-                    <Select value={currency} onValueChange={setCurrency}>
+                    <Select
+                      value={currency}
+                      onValueChange={setCurrency}
+                      disabled={!!selectedInstrument}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -934,6 +1054,65 @@ export default function LeveragePage() {
             </Card>
           ) : null}
 
+          {/* Bank instrument collateral — approved/active instruments (any of
+              EUR/USD/GBP/CHF) that can back a leverage line. Surfaced here so
+              the client can see, per currency, what collateral is available and
+              what is already pledged to a line. */}
+          {activeInstruments.length > 0 ? (
+            <Card className="border-border bg-card">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Banknote className="h-4 w-4 text-primary" />
+                  Bank Instrument Collateral
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Your active bank instruments eligible to fund a leverage line. Pledge one from the
+                  Request Leverage tab using its face value as equity.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {activeInstruments.map((inst) => {
+                  const pledged = pledgedInstrumentIds.has(inst.id)
+                  return (
+                    <div
+                      key={inst.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-secondary/40 p-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-foreground">
+                          {inst.type} · {inst.id}
+                        </p>
+                        <p className="truncate text-[11px] text-muted-foreground">
+                          {inst.issuer} · {inst.typeFull}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-foreground">
+                            {formatMoney(inst.faceValue, inst.currency)}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            Face value · {inst.currency}
+                          </p>
+                        </div>
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            pledged
+                              ? "border-primary/30 text-primary"
+                              : "border-green-500/30 text-green-500",
+                          )}
+                        >
+                          {pledged ? "Pledged" : "Available"}
+                        </Badge>
+                      </div>
+                    </div>
+                  )
+                })}
+              </CardContent>
+            </Card>
+          ) : null}
+
           {myRequests.length === 0 ? (
             <Card className="border-border bg-card">
               <CardContent className="flex flex-col items-center justify-center gap-3 p-12 text-center">
@@ -968,6 +1147,11 @@ export default function LeveragePage() {
                           <p className="text-xs text-muted-foreground">
                             {req.instrumentType} · Ref {req.id}
                           </p>
+                          {req.pledgedInstrumentLabel && (
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              Collateral: {req.pledgedInstrumentLabel}
+                            </p>
+                          )}
                         </div>
                       </div>
                       <Badge variant="outline" className={status.color}>
