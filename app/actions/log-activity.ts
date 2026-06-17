@@ -29,7 +29,7 @@ export type ActivityLog = {
 // Pure navigation and read-only/UI noise (viewing, exporting, copying, toggling
 // settings, refreshing, draft saving) are intentionally NOT emailed.
 
-// Events that must ALWAYS be emailed, regardless of any noise rule below.
+// Security / failure / error events ALWAYS notify, regardless of anything else.
 const ALWAYS_EMAIL_PATTERNS: RegExp[] = [
   /security/i,
   /\bdeclined\b/i,
@@ -40,23 +40,63 @@ const ALWAYS_EMAIL_PATTERNS: RegExp[] = [
   /\bsession terminated\b/i,
 ]
 
-// Categories that are pure UI noise and never warrant an email.
-const NON_EMAIL_CATEGORIES = new Set(["Navigation"])
+// We use a default-DENY allow-list so that only meaningful, successfully
+// executed (or critical) business actions ever generate an email. Anything not
+// matched here — navigation, viewing, opening, copying, downloading, exporting,
+// refreshing, toggling settings, saving drafts, rate alerts, payment *intents*
+// ("Started a payment"), read-only tracking, etc. — is intentionally NOT
+// emailed. This prevents spam from low-value or non-executed operations.
+//
+// Categories this covers:
+//   • Login / Logout
+//   • Security issues + system errors (handled by ALWAYS_EMAIL_PATTERNS above)
+//   • Successful bank operations (payments, transfers, FX, beneficiaries,
+//     instruments, cards, gateway funding, etc.)
+//   • Critical business requests & submissions awaiting administrator action
+//   • All administrator decisions (approvals, rejections, postings, etc.)
+const MEANINGFUL_ACTION_PATTERNS: RegExp[] = [
+  // Authentication
+  /^Login successful/i,
+  /^Logout\b/i,
 
-// Action patterns that represent trivial, read-only, or UI-only operations.
-const TRIVIAL_ACTION_PATTERNS: RegExp[] = [
-  /^Navigated\b/i,
-  /^Viewed\b/i,
-  /^Opened\b/i,
-  /^Copied\b/i,
-  /^(Revealed|Hid)\b/i,
-  /^Refreshed\b/i,
-  /^Downloaded\b/i,
-  /^Exported\b/i,
-  /\bas draft$/i,
-  /^(Enabled|Disabled) setting/i,
-  /^Set a rate alert/i,
-  /^Permanently removed from list/i,
+  // Executed money movement
+  /^Quick transfer/i,
+  /^Sent\b/i, // internal transfer / P2P / SWIFT message sent
+  /transfer sent/i, // "P2P transfer sent"
+  /^Executed\b/i, // FX conversion executed
+  /^Received payment/i,
+  /\bpayment request\b/i, // generated incoming payment request
+
+  // Beneficiary additions / changes
+  /^Added\b/i,
+  /^Imported\b/i, // bulk beneficiary additions
+  /^Deleted\b/i,
+
+  // Critical business requests & submissions for administrator approval
+  /^Submitted\b/i,
+  /^Requested\b/i,
+  /^Applied\b/i,
+
+  // Instruments, trading & deal lifecycle
+  /^Deployed\b/i, // NQAi position deployed
+  /^Cancelled\b/i,
+  /^Assign\/Transfer/i,
+  /^Client (submitted|advanced|uploaded)/i,
+
+  // Card security actions
+  /^(Froze|Unfroze)\b/i,
+
+  // Support, contact & issue reporting
+  /^Contacted MCC/i,
+  /^Reported an issue/i,
+
+  // Gateway funding / reconciliation & approval decisions
+  /^Reconciled\b/i,
+  /^Approved\b/i,
+  /^Rejected\b/i,
+
+  // Every administrator action is business-critical
+  /^Administrator\b/i,
 ]
 
 // Decides whether an activity is important enough to email.
@@ -69,15 +109,10 @@ function shouldEmail(activity: ActivityLog): boolean {
     return true
   }
 
-  // Drop pure-navigation / noise categories.
-  if (NON_EMAIL_CATEGORIES.has(category)) return false
-
-  // Drop trivial read-only / UI-only actions.
-  if (TRIVIAL_ACTION_PATTERNS.some((re) => re.test(action))) return false
-
-  // Everything else is a meaningful business action (login/logout, payments,
-  // beneficiary changes, instrument orders, FX, critical requests, etc.).
-  return true
+  // Default-deny: only email when the action matches a meaningful business
+  // pattern. Everything else (navigation, read-only, UI toggles, intents) is
+  // treated as noise and skipped.
+  return MEANINGFUL_ACTION_PATTERNS.some((re) => re.test(action))
 }
 
 function escapeHtml(value: string) {
