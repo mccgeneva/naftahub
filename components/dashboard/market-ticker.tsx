@@ -56,22 +56,24 @@ export function MarketTicker() {
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary-foreground" />
         Markets
       </span>
-      <div className="ticker-track flex animate-ticker whitespace-nowrap will-change-transform">
-        {loop.map((t, i) => {
-          const up = t.change >= 0
-          return (
-            <span
-              key={`${t.symbol}-${i}`}
-              className="flex items-center gap-1.5 px-4 font-mono text-[11px] tabular-nums"
-            >
-              <span className="font-semibold text-muted-foreground">{t.symbol}</span>
-              <span className="text-foreground">{fmt(t.last, t.decimals)}</span>
-              <span className={cn("font-medium", up ? "text-success" : "text-destructive")}>
-                {up ? "▲" : "▼"} {Math.abs(t.change).toFixed(2)}%
+      <div className="flex-1 overflow-hidden">
+        <div className="ticker-track flex animate-ticker whitespace-nowrap will-change-transform">
+          {loop.map((t, i) => {
+            const up = t.change >= 0
+            return (
+              <span
+                key={`${t.symbol}-${i}`}
+                className="flex items-center gap-1.5 px-4 font-mono text-[11px] tabular-nums"
+              >
+                <span className="font-semibold text-muted-foreground">{t.symbol}</span>
+                <span className="text-foreground">{fmt(t.last, t.decimals)}</span>
+                <span className={cn("font-medium", up ? "text-success" : "text-destructive")}>
+                  {up ? "▲" : "▼"} {Math.abs(t.change).toFixed(2)}%
+                </span>
               </span>
-            </span>
-          )
-        })}
+            )
+          })}
+        </div>
       </div>
     </div>
   )

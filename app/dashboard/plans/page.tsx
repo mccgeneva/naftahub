@@ -28,7 +28,7 @@ const plans = [
   },
   {
     id: "avantgarde",
-    name: "AVANTGARDE",
+    name: "Avant-Garde",
     icon: Crown,
     price: "€122,000",
     period: "/ year",
@@ -147,7 +147,7 @@ export default function PlansPage() {
                 variant={plan.highlighted ? "default" : "outline"}
                 onClick={() => selectPlan(plan.name, plan.price, plan.deposit)}
               >
-                {plan.highlighted ? "Upgrade to AVANTGARDE" : "Select PRO"}
+                {plan.highlighted ? "Upgrade to Avant-Garde" : "Select PRO"}
               </Button>
             </CardContent>
           </Card>

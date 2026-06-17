@@ -17,7 +17,7 @@ const initialRates = [
 
 export function LiveRates() {
   const [rates, setRates] = useState(initialRates)
-  const [lastUpdate, setLastUpdate] = useState(new Date())
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
   const refreshRates = () => {
@@ -37,6 +37,7 @@ export function LiveRates() {
   }
 
   useEffect(() => {
+    setLastUpdate(new Date())
     const interval = setInterval(refreshRates, 30000)
     return () => clearInterval(interval)
   }, [])
@@ -49,7 +50,7 @@ export function LiveRates() {
           <div>
             <CardTitle className="text-xs font-semibold uppercase tracking-wider">Live FX Rates</CardTitle>
             <p className="font-mono text-[10px] text-muted-foreground">
-              {lastUpdate.toLocaleTimeString("en-GB", { hour12: false })} UTC
+              {lastUpdate ? lastUpdate.toLocaleTimeString("en-GB", { hour12: false }) : "--:--:--"} UTC
             </p>
           </div>
         </div>
