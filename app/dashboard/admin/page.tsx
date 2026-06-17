@@ -1376,6 +1376,42 @@ export default function AdminPage() {
     setRejectReason("")
   }
 
+  // ---------------------------------------------------------------------------
+  // Pending Decisions command center
+  // A single index of everything awaiting an administrator decision across all
+  // workflows. Each entry links to the full section below (which holds the
+  // proper approve / reject / moderate controls for that item type), so the
+  // admin can see and jump to anything outstanding from one place at the top.
+  // ---------------------------------------------------------------------------
+  const pendingCategories = [
+    { id: "section-payments", label: "Outgoing Payments", count: pending.length, icon: ArrowUpRight },
+    { id: "section-instruments", label: "Bank Instruments", count: pendingInstruments.length, icon: FileText },
+    { id: "section-ppp", label: "Yield / PPP", count: pendingPPP.length, icon: TrendingUp },
+    { id: "section-leverage", label: "Leverage Lines", count: pendingLeverage.length, icon: Gauge },
+    { id: "section-switchoff", label: "Leverage Switch-Off", count: pendingSwitchOff.length, icon: Power },
+    { id: "section-dof", label: "Download of Funds", count: pendingDOF.length, icon: Banknote },
+    { id: "section-monetization", label: "Instrument Monetization", count: pendingMonetization.length, icon: Landmark },
+    { id: "section-dtc", label: "DTC Settlement", count: pendingDTC.length, icon: Layers },
+    { id: "section-euroclear", label: "Euroclear Settlement", count: pendingEuroclear.length, icon: Globe },
+    { id: "section-commodity", label: "Commodity Deals", count: pendingDeals.length, icon: Ship },
+  ] as const
+
+  const totalPendingDecisions = pendingCategories.reduce((sum, c) => sum + c.count, 0)
+
+  const scrollToSection = (id: string) => {
+    if (typeof document === "undefined") return
+    const el = document.getElementById(id)
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" })
+      // Brief highlight so the admin sees which section they landed on.
+      el.classList.add("ring-2", "ring-primary", "ring-offset-2", "ring-offset-background")
+      window.setTimeout(
+        () => el.classList.remove("ring-2", "ring-primary", "ring-offset-2", "ring-offset-background"),
+        1600,
+      )
+    }
+  }
+
   // Passcode gate
   if (!unlocked) {
     return (
@@ -1504,8 +1540,75 @@ export default function AdminPage() {
         </Card>
       </div>
 
+      {/* Pending Decisions command center — unified review queue */}
+      <Card className="border-primary/30 bg-primary/5">
+        <CardHeader>
+          <CardTitle className="flex flex-wrap items-center gap-2 text-lg font-semibold">
+            <ShieldCheck className="h-5 w-5 text-primary" />
+            Pending Decisions
+            <Badge
+              variant={totalPendingDecisions > 0 ? "default" : "secondary"}
+              className="ml-1"
+            >
+              {totalPendingDecisions} awaiting
+            </Badge>
+          </CardTitle>
+          <p className="text-sm text-muted-foreground text-pretty">
+            Everything that needs to be approved, rejected, or moderated, in one place. Select a
+            category to jump to its review queue below.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {totalPendingDecisions === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+              <Check className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                All caught up. No items are currently awaiting a decision.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+              {pendingCategories.map((cat) => {
+                const Icon = cat.icon
+                const active = cat.count > 0
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => active && scrollToSection(cat.id)}
+                    disabled={!active}
+                    aria-label={`${cat.count} ${cat.label} awaiting decision`}
+                    className={cn(
+                      "flex min-h-[88px] flex-col justify-between rounded-lg border p-3 text-left transition-colors",
+                      active
+                        ? "border-border bg-card hover:border-primary hover:bg-secondary cursor-pointer"
+                        : "border-border/50 bg-card/40 opacity-60 cursor-default",
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <Icon className="h-4 w-4 text-muted-foreground" />
+                      <span
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-sm font-bold tabular-nums",
+                          active ? "bg-primary/15 text-primary" : "text-muted-foreground",
+                        )}
+                      >
+                        {cat.count}
+                      </span>
+                    </div>
+                    <span className="text-xs font-medium text-foreground text-pretty">
+                      {cat.label}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Pending requests */}
-      <Card className="bg-card border-border">
+      <Card id="section-payments" className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold">Pending Payment Requests</CardTitle>
         </CardHeader>
@@ -1696,7 +1799,7 @@ export default function AdminPage() {
       </Card>
 
       {/* Pending instrument requests */}
-      <Card className="bg-card border-border">
+      <Card id="section-instruments" className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold">Pending Instrument Requests</CardTitle>
         </CardHeader>
@@ -1847,7 +1950,7 @@ export default function AdminPage() {
       </Card>
 
       {/* Pending PPP applications */}
-      <Card className="bg-card border-border">
+      <Card id="section-ppp" className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold">Pending Yield/PPP Applications</CardTitle>
         </CardHeader>
@@ -1986,7 +2089,7 @@ export default function AdminPage() {
       </Card>
 
       {/* Pending leverage requests */}
-      <Card className="bg-card border-border">
+      <Card id="section-leverage" className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold">Pending Leverage Requests</CardTitle>
         </CardHeader>
@@ -2093,7 +2196,7 @@ export default function AdminPage() {
       </Card>
 
       {/* Pending leverage switch-off requests */}
-      <Card className="bg-card border-border">
+      <Card id="section-switchoff" className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold">Pending Leverage Switch-Off</CardTitle>
         </CardHeader>
@@ -2380,7 +2483,7 @@ export default function AdminPage() {
       </Card>
 
       {/* Pending Download of Funds */}
-      <Card className="bg-card border-border">
+      <Card id="section-dof" className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold">
             Pending Download of Funds (Institutional)
@@ -2552,7 +2655,7 @@ export default function AdminPage() {
       </Card>
 
       {/* Pending Bank Instrument Monetization */}
-      <Card className="bg-card border-border">
+      <Card id="section-monetization" className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold">
             Pending Bank Instrument Monetization
@@ -2737,7 +2840,7 @@ export default function AdminPage() {
       </Card>
 
       {/* Pending Securities Settlement (DTC / Euroclear) */}
-      <Card className="bg-card border-border">
+      <Card id="section-dtc" className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold">
             Pending Securities Settlement (DTC / Euroclear)
@@ -2918,7 +3021,7 @@ export default function AdminPage() {
       </Card>
 
       {/* Pending Euroclear Settlement (MT540-543) */}
-      <Card className="bg-card border-border">
+      <Card id="section-euroclear" className="bg-card border-border">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg font-semibold">
             <Landmark className="h-5 w-5 text-primary" />
@@ -3119,7 +3222,7 @@ export default function AdminPage() {
       </Card>
 
       {/* Pending Commodity Deals (POP / POF review + execution authorization) */}
-      <Card className="bg-card border-border">
+      <Card id="section-commodity" className="bg-card border-border">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg font-semibold">
             <Ship className="h-5 w-5 text-primary" />
