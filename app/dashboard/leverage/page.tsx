@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import {
   Gauge,
   Shield,
+  ShieldCheck,
   Clock,
   CheckCircle2,
   XCircle,
@@ -63,11 +64,14 @@ import {
   MAX_LEVERAGE,
   DEBIT_INTEREST_RATE,
   RISK_THRESHOLDS,
+  maxLeverageFor,
+  leverageRatiosFor,
   type LeverageRequest,
   type LeverageAccountKey,
 } from "@/lib/leverage-requests-store"
 
 const accountIcons: Record<LeverageAccountKey, typeof Building2> = {
+  treasury: ShieldCheck,
   master: Building2,
   instruments: Banknote,
   naftahub: Cpu,
@@ -413,6 +417,35 @@ export default function LeveragePage() {
     return [...map.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
   }, [activeLines, now])
 
+  // Live exposure broken down by funding category, so the client can see how
+  // their leveraged buying power and borrowed funds are distributed across
+  // Treasury, Master Banking, Bank Instruments and NAFTAhub. Currencies are
+  // summed into a single representative figure per category for the headline
+  // (each line keeps its own currency in the detailed list below).
+  const exposureByCategory = useMemo(() => {
+    return LEVERAGE_ACCOUNTS.map((opt) => {
+      const lines = activeLines.filter((r) => r.account === opt.key)
+      const buyingPower = lines.reduce((s, r) => s + r.buyingPower, 0)
+      const borrowed = lines.reduce((s, r) => s + r.borrowedAmount, 0)
+      const equityBase = lines.reduce((s, r) => s + r.equity, 0)
+      // Blended ratio across the category's lines (buying power / equity).
+      const blendedRatio = equityBase > 0 ? buyingPower / equityBase : 0
+      // How much of the category ceiling the blended ratio consumes.
+      const utilisation = Math.min(100, (blendedRatio / opt.maxLeverage) * 100)
+      const currency = lines[0]?.currency ?? BASE_CURRENCY
+      return {
+        ...opt,
+        count: lines.length,
+        buyingPower,
+        borrowed,
+        equityBase,
+        blendedRatio,
+        utilisation,
+        currency,
+      }
+    })
+  }, [activeLines])
+
   // If the client already has requests, land on "My Trading Lines" so approval
   // decisions are visible immediately on arrival.
   const autoSelectedRef = useRef(false)
@@ -424,9 +457,24 @@ export default function LeveragePage() {
 
   const numericEquity = Number(equity.replace(/[^0-9.]/g, "")) || 0
   const numericRatio = Number(ratio) || LEVERAGE_RATIOS[0]
+  // Leverage ceiling for the selected funding category (Treasury caps at 1:10,
+  // the others at 1:30). Until an account is chosen, expose the full ladder.
+  const selectedMax = account ? maxLeverageFor(account) : MAX_LEVERAGE
+  const availableRatios = account ? leverageRatiosFor(account) : LEVERAGE_RATIOS
   const projectedBuyingPower = numericEquity * numericRatio
   const projectedBorrowed = numericEquity * (numericRatio - 1)
   const projectedAnnualInterest = projectedBorrowed * DEBIT_INTEREST_RATE
+
+  // When the funding category changes, clamp the chosen ratio to that
+  // category's ceiling so an out-of-range value can never be submitted.
+  const handleAccountChange = (next: LeverageAccountKey) => {
+    setAccount(next)
+    const cap = maxLeverageFor(next)
+    if (Number(ratio) > cap) {
+      const allowed = leverageRatiosFor(next)
+      setRatio(String(allowed[allowed.length - 1] ?? cap))
+    }
+  }
 
   const resetForm = () => {
     setAccount("")
@@ -449,6 +497,13 @@ export default function LeveragePage() {
     }
     if (!instrumentType) {
       setFormError("Please select an instrument type to trade.")
+      return
+    }
+
+    const cap = maxLeverageFor(account)
+    if (numericRatio > cap) {
+      const label = LEVERAGE_ACCOUNTS.find((a) => a.key === account)?.label ?? "this account"
+      setFormError(`${label} is limited to a maximum leverage of 1:${cap}.`)
       return
     }
 
@@ -643,7 +698,7 @@ export default function LeveragePage() {
                   <CardContent>
                     <p className="text-sm text-muted-foreground">{acc.description}</p>
                     <p className="mt-3 text-xs font-medium text-primary">
-                      Up to 1:{MAX_LEVERAGE} buying power
+                      Up to 1:{acc.maxLeverage} buying power
                     </p>
                   </CardContent>
                 </Card>
@@ -675,14 +730,17 @@ export default function LeveragePage() {
               <div className="space-y-4 py-2">
                 <div className="space-y-2">
                   <Label>Funding Account</Label>
-                  <Select value={account} onValueChange={(v) => setAccount(v as LeverageAccountKey)}>
+                  <Select value={account} onValueChange={(v) => handleAccountChange(v as LeverageAccountKey)}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select funding account" />
                     </SelectTrigger>
                     <SelectContent>
                       {LEVERAGE_ACCOUNTS.map((acc) => (
                         <SelectItem key={acc.key} value={acc.key}>
-                          {acc.label}
+                          <span className="flex w-full items-center justify-between gap-3">
+                            <span>{acc.label}</span>
+                            <span className="text-xs text-muted-foreground">max 1:{acc.maxLeverage}</span>
+                          </span>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -717,13 +775,20 @@ export default function LeveragePage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Leverage Ratio</Label>
+                  <div className="flex items-center justify-between">
+                    <Label>Leverage Ratio</Label>
+                    {account ? (
+                      <span className="text-xs text-muted-foreground">
+                        {LEVERAGE_ACCOUNTS.find((a) => a.key === account)?.label} ceiling: 1:{selectedMax}
+                      </span>
+                    ) : null}
+                  </div>
                   <Select value={ratio} onValueChange={setRatio}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {LEVERAGE_RATIOS.map((r) => (
+                      {availableRatios.map((r) => (
                         <SelectItem key={r} value={String(r)}>
                           1:{r}
                         </SelectItem>
@@ -817,6 +882,58 @@ export default function LeveragePage() {
 
         {/* Trading lines tab */}
         <TabsContent value="lines" className="mt-6 space-y-4">
+          {activeLines.length > 0 ? (
+            <Card className="border-border bg-card">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Activity className="h-4 w-4 text-primary" />
+                  Exposure by Category
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Leveraged buying power and borrowed funds across your funding categories, each
+                  measured against its leverage ceiling.
+                </p>
+              </CardHeader>
+              <CardContent className="grid gap-3 sm:grid-cols-2">
+                {exposureByCategory
+                  .filter((c) => c.count > 0)
+                  .map((c) => {
+                    const Icon = accountIcons[c.key]
+                    return (
+                      <div key={c.key} className="rounded-lg border border-border bg-secondary/40 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <div className="rounded-md bg-primary/10 p-1.5">
+                              <Icon className="h-4 w-4 text-primary" />
+                            </div>
+                            <div>
+                              <p className="text-sm font-medium">{c.label}</p>
+                              <p className="text-[11px] text-muted-foreground">
+                                {c.count} line{c.count === 1 ? "" : "s"} · blended 1:
+                                {c.blendedRatio.toFixed(1)} of 1:{c.maxLeverage}
+                              </p>
+                            </div>
+                          </div>
+                          <Badge variant="outline" className="border-primary/30 text-primary">
+                            {c.utilisation.toFixed(0)}%
+                          </Badge>
+                        </div>
+                        <Progress value={c.utilisation} className="mt-3 h-1.5" />
+                        <div className="mt-3 flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">Buying power</span>
+                          <span className="font-medium">{formatMoney(c.buyingPower, c.currency)}</span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">Borrowed</span>
+                          <span className="font-medium">{formatMoney(c.borrowed, c.currency)}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
+              </CardContent>
+            </Card>
+          ) : null}
+
           {myRequests.length === 0 ? (
             <Card className="border-border bg-card">
               <CardContent className="flex flex-col items-center justify-center gap-3 p-12 text-center">
@@ -858,6 +975,12 @@ export default function LeveragePage() {
                         {status.label}
                       </Badge>
                     </div>
+                    {req.modifications && req.modifications.length > 0 && (
+                      <Badge variant="outline" className="mt-2 w-fit border-primary/30 text-primary">
+                        <Activity className="mr-1 h-3 w-3" />
+                        Ratio adjusted by Administrator
+                      </Badge>
+                    )}
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -866,6 +989,29 @@ export default function LeveragePage() {
                       <Metric label="Buying Power" value={formatMoney(req.buyingPower, req.currency)} />
                       <Metric label="Leverage" value={`1:${req.leverageRatio}`} />
                     </div>
+
+                    {(req.status === "approved" || req.status === "switchoff_pending") &&
+                      req.modifications &&
+                      req.modifications.length > 0 &&
+                      (() => {
+                        const last = req.modifications![req.modifications!.length - 1]
+                        const credited = last.deltaBorrowed >= 0
+                        return (
+                          <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-foreground">
+                            <Activity className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                            <span className="text-muted-foreground">
+                              Administrator adjusted leverage from 1:{last.fromRatio} to 1:{last.toRatio} on{" "}
+                              {new Date(last.appliedAt).toLocaleDateString("en-GB")}.{" "}
+                              {credited
+                                ? `${formatMoney(last.deltaBorrowed, req.currency)} of additional borrowed funds credited.`
+                                : `${formatMoney(Math.abs(last.deltaBorrowed), req.currency)} of borrowed funds repaid.`}
+                              {req.modifications!.length > 1
+                                ? ` (${req.modifications!.length} adjustments total)`
+                                : ""}
+                            </span>
+                          </div>
+                        )
+                      })()}
 
                     {req.status === "pending" && (
                       <div className="flex items-start gap-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-3 text-sm text-yellow-500">

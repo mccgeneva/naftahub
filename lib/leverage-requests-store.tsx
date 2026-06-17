@@ -10,39 +10,71 @@ export type LeverageRequestStatus =
   | "switchoff_pending" // client requested switch-off, awaiting admin
   | "closed" // switched off and settled
 
-export type LeverageAccountKey = "master" | "instruments" | "naftahub"
+export type LeverageAccountKey = "treasury" | "master" | "instruments" | "naftahub"
 
 export interface LeverageAccountOption {
   key: LeverageAccountKey
   label: string
   description: string
+  maxLeverage: number
 }
 
-// The three funding sources a leverage line can be opened against, per the
-// platform's risk-management specification.
+// The funding sources a leverage line can be opened against, per the platform's
+// risk-management specification. Each category carries its own maximum leverage
+// ceiling that the platform will underwrite.
 export const LEVERAGE_ACCOUNTS: LeverageAccountOption[] = [
   {
+    key: "treasury",
+    label: "Treasury Services",
+    description: "Leveraged trading line collateralised by the MCC treasury deposit facility.",
+    maxLeverage: 10,
+  },
+  {
     key: "master",
-    label: "Master Account",
-    description: "Cash equity held in the MCC master treasury account.",
+    label: "Master Banking",
+    description: "Cash equity held in the MCC master banking account.",
+    maxLeverage: 30,
   },
   {
     key: "instruments",
     label: "Bank Instruments",
     description: "Monetizable bank instruments (SBLC, BG, MTN) pledged as collateral.",
+    maxLeverage: 30,
   },
   {
     key: "naftahub",
     label: "NAFTAhub Trading",
     description: "Equity allocated to the NAFTAhub NQAi trading desk.",
+    maxLeverage: 30,
   },
 ]
 
-// Fixed maximum leverage offered by the platform (1:30).
-export const MAX_LEVERAGE = 30
+// Per-category maximum leverage ceilings, keyed for O(1) lookup.
+export const ACCOUNT_MAX_LEVERAGE: Record<LeverageAccountKey, number> = LEVERAGE_ACCOUNTS.reduce(
+  (acc, opt) => {
+    acc[opt.key] = opt.maxLeverage
+    return acc
+  },
+  {} as Record<LeverageAccountKey, number>,
+)
 
-// Selectable leverage ratios offered to clients.
+// Highest leverage the platform offers across every category (1:30). Used for
+// display copy and global guards.
+export const MAX_LEVERAGE = Math.max(...LEVERAGE_ACCOUNTS.map((a) => a.maxLeverage))
+
+// Full ladder of selectable leverage ratios offered by the platform.
 export const LEVERAGE_RATIOS = [2, 5, 10, 20, 30]
+
+// Resolve the maximum leverage permitted for a given funding category.
+export function maxLeverageFor(account: LeverageAccountKey): number {
+  return ACCOUNT_MAX_LEVERAGE[account] ?? MAX_LEVERAGE
+}
+
+// Selectable ratios filtered to a category's ceiling (e.g. Treasury caps at 1:10).
+export function leverageRatiosFor(account: LeverageAccountKey): number[] {
+  const cap = maxLeverageFor(account)
+  return LEVERAGE_RATIOS.filter((r) => r <= cap)
+}
 
 // Annual debit interest rate charged on the borrowed (leveraged) funds.
 export const DEBIT_INTEREST_RATE = 0.018 // 1.8% per year
@@ -77,6 +109,23 @@ export interface LeverageRequest {
   settledInterest?: number // total debit interest charged at close
   repayEntryId?: string // ledger entry id for the principal repayment debit
   interestEntryId?: string // ledger entry id for the interest settlement debit
+  // Audit trail of admin ratio modifications applied to the active line.
+  modifications?: LeverageModification[]
+}
+
+// A single admin adjustment of an active line's leverage ratio. Interest that
+// accrued under the previous ratio is captured in `interestToDate` so accrual
+// can continue cleanly on the new principal from `appliedAt`.
+export interface LeverageModification {
+  appliedAt: string
+  fromRatio: number
+  toRatio: number
+  fromBorrowed: number
+  toBorrowed: number
+  deltaBorrowed: number // positive = extra credited, negative = repaid
+  interestToDate: number // interest accrued under the prior ratio up to appliedAt
+  adjustmentEntryId?: string // ledger entry id for the balancing credit/debit
+  note?: string
 }
 
 const KEY_BASE = "mcc.leverage-requests.v1"
@@ -88,18 +137,54 @@ const MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000
 // activation and the given point in time (defaults to now). For closed lines
 // the accrual stops at the close timestamp. Returns 0 for lines that were
 // never activated.
+//
+// When an admin has modified the ratio, interest accrues in segments: each
+// segment runs at the borrowed amount that was in force during that window, so
+// the position is charged fairly across every ratio it has carried.
 export function accruedInterest(request: LeverageRequest, asOf: number = Date.now()): number {
   if (!request.activatedAt) return 0
   const start = new Date(request.activatedAt).getTime()
   const end = request.closedAt ? new Date(request.closedAt).getTime() : asOf
-  const elapsedMs = Math.max(0, end - start)
-  return request.borrowedAmount * request.interestRate * (elapsedMs / MS_PER_YEAR)
+  if (end <= start) return 0
+
+  const rate = request.interestRate
+  const mods = (request.modifications ?? [])
+    .slice()
+    .sort((a, b) => new Date(a.appliedAt).getTime() - new Date(b.appliedAt).getTime())
+
+  let total = 0
+  let cursor = start
+  // The borrowed amount in force at activation is the first modification's
+  // "from" value (if any modifications exist), otherwise the current borrowed.
+  let borrowed = mods.length > 0 ? mods[0].fromBorrowed : request.borrowedAmount
+
+  for (const mod of mods) {
+    const boundary = Math.min(new Date(mod.appliedAt).getTime(), end)
+    if (boundary > cursor) {
+      total += borrowed * rate * ((boundary - cursor) / MS_PER_YEAR)
+      cursor = boundary
+    }
+    borrowed = mod.toBorrowed
+    if (cursor >= end) break
+  }
+
+  if (end > cursor) {
+    total += borrowed * rate * ((end - cursor) / MS_PER_YEAR)
+  }
+  return total
 }
 
 interface ApproveSwitchOffPayload {
   settledInterest: number
   repayEntryId?: string
   interestEntryId?: string
+}
+
+interface ModifyRatioPayload {
+  toRatio: number
+  interestToDate: number // interest accrued under the prior ratio, up to now
+  adjustmentEntryId?: string // ledger entry id for the balancing credit/debit
+  note?: string
 }
 
 interface LeverageRequestsContextValue {
@@ -122,6 +207,7 @@ interface LeverageRequestsContextValue {
   ) => LeverageRequest
   approveRequest: (id: string, creditEntryId?: string) => LeverageRequest | null
   rejectRequest: (id: string, reason?: string) => LeverageRequest | null
+  modifyRatio: (id: string, payload: ModifyRatioPayload) => LeverageRequest | null
   requestSwitchOff: (id: string) => LeverageRequest | null
   approveSwitchOff: (id: string, payload: ApproveSwitchOffPayload) => LeverageRequest | null
   rejectSwitchOff: (id: string, reason?: string) => LeverageRequest | null
@@ -225,6 +311,47 @@ export function LeverageRequestsProvider({ children }: { children: React.ReactNo
     return updated
   }
 
+  // Admin modifies the leverage ratio of an already-active line, within the
+  // category ceiling. The buying power and borrowed principal are recomputed on
+  // the new ratio; the difference is re-settled on the ledger (credit if the
+  // ratio went up, debit if it went down) by the caller, whose entry id we store.
+  // Interest accrued so far is captured as a modification segment so future
+  // accrual continues cleanly on the new principal.
+  const modifyRatio: LeverageRequestsContextValue["modifyRatio"] = (id, payload) => {
+    let updated: LeverageRequest | null = null
+    const now = new Date().toISOString()
+    setRequests((prev) =>
+      prev.map((r) => {
+        if (r.id !== id || r.status !== "approved") return r
+        const cap = maxLeverageFor(r.account)
+        const toRatio = Math.max(1, Math.min(payload.toRatio, cap))
+        if (toRatio === r.leverageRatio) return r
+        const newBuyingPower = r.equity * toRatio
+        const newBorrowed = r.equity * (toRatio - 1)
+        const modification: LeverageModification = {
+          appliedAt: now,
+          fromRatio: r.leverageRatio,
+          toRatio,
+          fromBorrowed: r.borrowedAmount,
+          toBorrowed: newBorrowed,
+          deltaBorrowed: newBorrowed - r.borrowedAmount,
+          interestToDate: payload.interestToDate,
+          adjustmentEntryId: payload.adjustmentEntryId,
+          note: payload.note?.trim() || undefined,
+        }
+        updated = {
+          ...r,
+          leverageRatio: toRatio,
+          buyingPower: newBuyingPower,
+          borrowedAmount: newBorrowed,
+          modifications: [...(r.modifications ?? []), modification],
+        }
+        return updated
+      }),
+    )
+    return updated
+  }
+
   // Client asks to switch off an active line. Moves it into the admin queue
   // without touching the ledger — settlement happens on admin approval.
   const requestSwitchOff: LeverageRequestsContextValue["requestSwitchOff"] = (id) => {
@@ -292,6 +419,7 @@ export function LeverageRequestsProvider({ children }: { children: React.ReactNo
         addRequest,
         approveRequest,
         rejectRequest,
+        modifyRatio,
         requestSwitchOff,
         approveSwitchOff,
         rejectSwitchOff,

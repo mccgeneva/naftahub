@@ -6,12 +6,15 @@ import {
   ArrowUpRight,
   ArrowDownLeft,
   Users,
-  Info,
   Wallet,
   ShieldCheck,
   Clock,
   CheckCircle2,
   XCircle,
+  Zap,
+  Mail,
+  Search,
+  Download,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -32,26 +35,47 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { cn } from "@/lib/utils"
 import { useActivityLog } from "@/components/activity-tracker"
-import { useLedger } from "@/lib/ledger-store"
+import { useLedger, creditUserLedger } from "@/lib/ledger-store"
 import { usePaymentRequests } from "@/lib/payment-requests-store"
+import { getActiveUserId } from "@/lib/user-scope"
+import {
+  getUserById,
+  getTransferDirectory,
+  findTransferRecipientByEmail,
+  type TransferDirectoryEntry,
+} from "@/lib/users"
+import { exportToCsv } from "@/lib/export-utils"
 import { toast } from "sonner"
 
-const currencySymbols: Record<string, string> = { EUR: "€", USD: "$", GBP: "£", CHF: "CHF" }
+const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "JPY", "AUD", "CAD", "SGD"]
+const INSTANT_CATEGORY = "Internal Transfer"
+const APPROVAL_SOURCE = "Send Money (internal transfer)"
 
-// Internal transfers carry no platform fee (unlike external SWIFT payments).
-const TRANSFER_FEE_RATE = 0
+type SendMethod = "instant" | "approval"
 
-function formatCurrency(amount: number, currency: string): string {
-  const symbol = currencySymbols[currency] || currency
-  return `${symbol}${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-}
+const formatCurrency = (value: number, currency: string) =>
+  `${currency} ${value.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })
-}
+const formatDate = (iso: string) =>
+  new Date(iso).toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
 
-const statusBadge: Record<string, { label: string; className: string; icon: typeof Clock }> = {
+const approvalStatusBadge: Record<
+  string,
+  { label: string; className: string; icon: typeof Clock }
+> = {
   pending: {
     label: "Pending approval",
     className: "border-yellow-500/20 bg-yellow-500/10 text-yellow-500",
@@ -69,65 +93,231 @@ const statusBadge: Record<string, { label: string; className: string; icon: type
   },
 }
 
+// A single unified row type so instant settlements and approval requests can
+// share one history list.
+type HistoryRow = {
+  key: string
+  kind: "instant" | "approval"
+  direction: "credit" | "debit"
+  status: "settled" | "pending" | "approved" | "rejected"
+  counterparty: string
+  reference: string
+  note: string
+  amount: number
+  currency: string
+  date: string
+  decisionNote?: string
+}
+
 export default function SendMoneyPage() {
   const logActivity = useActivityLog()
-  const { balanceFor } = useLedger()
+  const { entries, balanceFor, addDebit, hydrated } = useLedger()
   const { requests, addRequest } = usePaymentRequests()
 
-  const [recipient, setRecipient] = useState("")
+  const activeUserId = getActiveUserId()
+  const self = getUserById(activeUserId)
+  const directory = useMemo<TransferDirectoryEntry[]>(
+    () => getTransferDirectory().filter((d) => d.id !== activeUserId),
+    [activeUserId],
+  )
+
+  const [method, setMethod] = useState<SendMethod>("instant")
+  const [recipientEmail, setRecipientEmail] = useState("")
+  const [recipientName, setRecipientName] = useState("")
   const [amount, setAmount] = useState("")
   const [currency, setCurrency] = useState("EUR")
+  const [reference, setReference] = useState("")
   const [note, setNote] = useState("")
+  const [formError, setFormError] = useState<string | null>(null)
+  const [search, setSearch] = useState("")
 
   const availableBalance = balanceFor(currency)
 
-  // The history of transfers the customer has submitted is derived directly
-  // from the persisted payment-requests store, so rows never disappear on
-  // navigation and always reflect the latest Administrator decision.
-  const history = useMemo(
-    () =>
-      requests
-        .filter((r) => r.payeeSource === "Send Money (internal transfer)")
-        .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()),
-    [requests],
+  // Live recipient resolution for the instant method.
+  const resolvedRecipient = useMemo(
+    () => (recipientEmail.trim() ? findTransferRecipientByEmail(recipientEmail) : undefined),
+    [recipientEmail],
   )
+  const recipientIsSelf = resolvedRecipient?.id === activeUserId
+
+  // Unified history: instant settlements come from the ledger, approval
+  // requests come from the payment-requests store. Merge and sort by date.
+  const history = useMemo<HistoryRow[]>(() => {
+    const instant: HistoryRow[] = entries
+      .filter((e) => e.category === INSTANT_CATEGORY)
+      .map((e) => ({
+        key: `instant-${e.id}-${e.direction}-${e.date}`,
+        kind: "instant",
+        direction: e.direction,
+        status: "settled",
+        counterparty: e.counterparty,
+        reference: e.reference || e.id,
+        note: e.comment || "",
+        amount: e.amount,
+        currency: e.currency,
+        date: e.date,
+      }))
+
+    const approval: HistoryRow[] = requests
+      .filter((r) => r.payeeSource === APPROVAL_SOURCE)
+      .map((r) => ({
+        key: `approval-${r.id}`,
+        kind: "approval",
+        direction: "debit",
+        status: r.status,
+        counterparty: r.beneficiary,
+        reference: r.id,
+        note: r.notes || "",
+        amount: r.amount,
+        currency: r.currency,
+        date: r.submittedAt,
+        decisionNote: r.decisionNote,
+      }))
+
+    return [...instant, ...approval].sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+    )
+  }, [entries, requests])
+
+  const filteredHistory = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return history
+    return history.filter(
+      (t) =>
+        t.counterparty.toLowerCase().includes(q) ||
+        t.reference.toLowerCase().includes(q) ||
+        t.note.toLowerCase().includes(q),
+    )
+  }, [history, search])
+
+  const sentTotal = history
+    .filter((t) => t.direction === "debit" && t.status !== "rejected")
+    .reduce((sum, t) => sum + t.amount, 0)
+  const receivedTotal = history
+    .filter((t) => t.direction === "credit")
+    .reduce((sum, t) => sum + t.amount, 0)
+  const pendingCount = history.filter((t) => t.status === "pending").length
 
   const resetForm = () => {
-    setRecipient("")
+    setRecipientEmail("")
+    setRecipientName("")
     setAmount("")
+    setReference("")
     setNote("")
+    setFormError(null)
   }
 
-  const handleSubmit = () => {
+  const handleInstantSend = () => {
+    setFormError(null)
     const amountValue = Number.parseFloat(amount)
-    const to = recipient.trim()
+    const email = recipientEmail.trim().toLowerCase()
+
+    if (!email) {
+      setFormError("Please enter the recipient's registered email address.")
+      return
+    }
+    const recipient = findTransferRecipientByEmail(email)
+    if (!recipient) {
+      setFormError("No platform account is registered to that email address.")
+      return
+    }
+    if (recipient.id === activeUserId) {
+      setFormError("You cannot send an instant transfer to your own account.")
+      return
+    }
+    if (!amount || Number.isNaN(amountValue) || amountValue <= 0) {
+      setFormError("Please enter a valid amount greater than 0.")
+      return
+    }
+    if (amountValue > availableBalance) {
+      setFormError(
+        `Insufficient funds. This transfer needs ${formatCurrency(amountValue, currency)} but only ${formatCurrency(availableBalance, currency)} is available.`,
+      )
+      return
+    }
+
+    const ref = reference.trim() || `ITR-${new Date().getTime().toString().slice(-8)}`
+    const nowIso = new Date().toISOString()
+    const senderLabel = `${self.fullName || self.company} (${self.email})`
+    const recipientLabel = `${recipient.displayName} (${recipient.email})`
+
+    const credited = creditUserLedger(recipient.id, {
+      id: ref,
+      amount: amountValue,
+      currency,
+      status: "completed",
+      date: nowIso,
+      counterparty: senderLabel,
+      account: self.email,
+      bank: "MCC Capital — Internal Transfer",
+      reference: ref,
+      comment: note.trim() || `Internal transfer received from ${senderLabel}.`,
+      category: INSTANT_CATEGORY,
+    })
+
+    if (!credited) {
+      setFormError("The transfer could not be completed. Please try again.")
+      return
+    }
+
+    addDebit({
+      id: ref,
+      amount: amountValue,
+      currency,
+      status: "completed",
+      date: nowIso,
+      counterparty: recipientLabel,
+      account: recipient.email,
+      bank: "MCC Capital — Internal Transfer",
+      reference: ref,
+      comment: note.trim() || `Internal transfer sent to ${recipientLabel}.`,
+      category: INSTANT_CATEGORY,
+    })
+
+    logActivity({
+      action: `Sent an instant internal transfer of ${formatCurrency(amountValue, currency)} to ${recipient.email}`,
+      category: "Payments",
+      details: {
+        summary: `Client sent an instant internal P2P transfer of ${formatCurrency(amountValue, currency)} to ${recipient.displayName} (${recipient.email}). Funds were debited from this account and credited to the recipient in real time. Reference: ${ref}.`,
+        referenceId: ref,
+        recipientEmail: recipient.email,
+        recipientName: recipient.displayName,
+        amount: formatCurrency(amountValue, currency),
+        currency,
+        note: note.trim() || "(none)",
+        settlement: "Instant / Internal",
+      },
+    })
+
+    toast.success("Transfer sent instantly", {
+      description: `${formatCurrency(amountValue, currency)} delivered to ${recipient.displayName} (${recipient.email}).`,
+    })
+    resetForm()
+  }
+
+  const handleApprovalSend = () => {
+    setFormError(null)
+    const amountValue = Number.parseFloat(amount)
+    const to = recipientName.trim()
 
     if (!to) {
-      toast.error("Enter the recipient's name or registered email address")
+      setFormError("Enter the recipient's name or registered email address.")
       return
     }
     if (!Number.isFinite(amountValue) || amountValue <= 0) {
-      toast.error("Enter a valid amount greater than 0")
+      setFormError("Enter a valid amount greater than 0.")
       return
     }
-
-    const feeValue = Math.round(amountValue * TRANSFER_FEE_RATE * 100) / 100
-    const totalDebit = amountValue + feeValue
-
-    // Soft pre-check. Funds are NOT moved here — they are only debited once an
-    // Administrator approves the request.
-    if (totalDebit > availableBalance) {
-      toast.error("Insufficient balance", {
-        description: `This transfer needs ${formatCurrency(totalDebit, currency)} but only ${formatCurrency(availableBalance, currency)} is available.`,
-      })
+    if (amountValue > availableBalance) {
+      setFormError(
+        `Insufficient balance. This transfer needs ${formatCurrency(amountValue, currency)} but only ${formatCurrency(availableBalance, currency)} is available.`,
+      )
       return
     }
 
     const requestId = `TRF-${new Date().getTime().toString().slice(-8)}`
     const formatted = formatCurrency(amountValue, currency)
 
-    // Create a PENDING request. No ledger movement happens until an
-    // Administrator approves it — the customer cannot move funds directly.
     addRequest({
       id: requestId,
       beneficiary: to,
@@ -138,9 +328,9 @@ export default function SendMoneyPage() {
       notes: note.trim(),
       currency,
       amount: amountValue,
-      fee: feeValue,
-      total: totalDebit,
-      payeeSource: "Send Money (internal transfer)",
+      fee: 0,
+      total: amountValue,
+      payeeSource: APPROVAL_SOURCE,
     })
 
     logActivity({
@@ -161,178 +351,438 @@ export default function SendMoneyPage() {
     resetForm()
   }
 
+  const handleExport = () => {
+    const count = exportToCsv(
+      "send-money",
+      filteredHistory.map((t) => ({
+        reference: t.reference,
+        method: t.kind === "instant" ? "Instant" : "Approval",
+        direction: t.direction === "credit" ? "Received" : "Sent",
+        status: t.status,
+        amount: formatCurrency(t.amount, t.currency),
+        counterparty: t.counterparty,
+        note: t.note,
+        date: t.date,
+      })),
+      [
+        { key: "reference", label: "Reference" },
+        { key: "method", label: "Method" },
+        { key: "direction", label: "Direction" },
+        { key: "status", label: "Status" },
+        { key: "amount", label: "Amount" },
+        { key: "counterparty", label: "Counterparty" },
+        { key: "note", label: "Note" },
+        { key: "date", label: "Date" },
+      ],
+    )
+    toast.success("Transfers exported", {
+      description: `${count} transfer${count === 1 ? "" : "s"} exported to CSV.`,
+    })
+  }
+
+  const stats = [
+    {
+      title: "Available Balance",
+      value: formatCurrency(availableBalance, currency),
+      hint: `${currency} account`,
+      icon: Wallet,
+      color: "text-primary",
+    },
+    {
+      title: "Total Sent",
+      value: formatCurrency(sentTotal, currency),
+      hint: pendingCount > 0 ? `${pendingCount} pending approval` : "Settled & approved",
+      icon: ArrowUpRight,
+      color: "text-red-400",
+    },
+    {
+      title: "Total Received",
+      value: formatCurrency(receivedTotal, currency),
+      hint: "Instant transfers",
+      icon: ArrowDownLeft,
+      color: "text-green-400",
+    },
+  ]
+
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold text-foreground">Send Money</h1>
-        <p className="text-sm text-muted-foreground">
-          Submit an internal transfer to another MCC Capital account holder for Administrator approval.
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Send Money</h1>
+          <p className="text-sm text-muted-foreground">
+            Transfer funds to another MCC Capital account holder — instantly to a verified account, or
+            via Administrator approval for any recipient.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={handleExport}>
+          <Download className="mr-2 h-4 w-4" />
+          Export
+        </Button>
       </div>
 
-      {/* Approval notice */}
-      <div className="flex items-start gap-3 rounded-lg border border-border bg-secondary/30 p-4">
-        <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-        <p className="text-sm text-muted-foreground">
-          <span className="font-medium text-foreground">Administrator approval required:</span> for your
-          security, every outgoing transfer is reviewed and authorised by an MCC Administrator before any
-          funds move. When you submit a transfer it is placed in a pending queue &mdash; no funds leave your
-          account until the request is approved.
-        </p>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Request form */}
-        <Card className="bg-card border-border">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <div className="rounded-lg bg-blue-500/10 p-2 text-blue-400">
-                <Send className="h-5 w-5" />
-              </div>
+      {/* Stats */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {stats.map((stat) => (
+          <Card key={stat.title} className="bg-card border-border">
+            <CardContent className="flex items-center justify-between p-5">
               <div>
-                <CardTitle className="text-lg">Request a Transfer</CardTitle>
-                <CardDescription>Submit funds to another account holder for approval</CardDescription>
+                <p className="text-xs text-muted-foreground">{stat.title}</p>
+                <p className="mt-1 text-xl font-bold text-foreground">{stat.value}</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">{stat.hint}</p>
               </div>
-            </div>
+              <div className={cn("rounded-lg bg-secondary/50 p-3", stat.color)}>
+                <stat.icon className="h-5 w-5" />
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-5">
+        {/* Transfer form */}
+        <Card className="bg-card border-border lg:col-span-2">
+          <CardHeader className="space-y-3">
+            <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+              <Send className="h-5 w-5 text-primary" />
+              New Transfer
+            </CardTitle>
+            {/* Method toggle */}
+            <Tabs value={method} onValueChange={(v) => { setMethod(v as SendMethod); setFormError(null) }}>
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="instant" className="gap-1.5">
+                  <Zap className="h-3.5 w-3.5" />
+                  Instant
+                </TabsTrigger>
+                <TabsTrigger value="approval" className="gap-1.5">
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  Approval
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <CardDescription>
+              {method === "instant" ? (
+                <>
+                  Settled in real time to a verified MCC account holder using their registered email.
+                </>
+              ) : (
+                <>
+                  Submitted to an MCC Administrator for review. No funds move until the request is
+                  approved.
+                </>
+              )}
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Balance summary */}
-            <div className="flex items-center justify-between gap-3 rounded-lg bg-secondary/30 px-3 py-2">
-              <div className="flex items-center gap-2">
-                <Wallet className="h-4 w-4 text-primary" />
-                <span className="text-xs text-muted-foreground">Available {currency} balance</span>
+            {/* Recipient — depends on method */}
+            {method === "instant" ? (
+              <div className="space-y-2">
+                <Label htmlFor="recipient-email">Recipient email</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="recipient-email"
+                    type="email"
+                    inputMode="email"
+                    autoComplete="off"
+                    placeholder="recipient@mccgva.ch"
+                    value={recipientEmail}
+                    onChange={(e) => setRecipientEmail(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                {recipientEmail.trim() && resolvedRecipient && !recipientIsSelf && (
+                  <div className="flex items-center gap-2 rounded-lg border border-green-500/20 bg-green-500/10 p-2.5">
+                    <Avatar className="h-8 w-8">
+                      <AvatarFallback className="bg-primary/20 text-xs text-primary">
+                        {resolvedRecipient.initials}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {resolvedRecipient.displayName}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {resolvedRecipient.company}
+                      </p>
+                    </div>
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-green-500" />
+                  </div>
+                )}
+                {recipientEmail.trim() && recipientIsSelf && (
+                  <p className="text-xs text-red-400">You cannot transfer to your own account.</p>
+                )}
+                {recipientEmail.trim() && !resolvedRecipient && (
+                  <p className="text-xs text-muted-foreground">
+                    No account found for this email yet.
+                  </p>
+                )}
               </div>
-              <span className="font-semibold text-foreground">
-                {formatCurrency(availableBalance, currency)}
-              </span>
-            </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="recipient-name">Recipient</Label>
+                <Input
+                  id="recipient-name"
+                  inputMode="email"
+                  autoComplete="off"
+                  placeholder="Name or name@example.com"
+                  value={recipientName}
+                  onChange={(e) => setRecipientName(e.target.value)}
+                />
+              </div>
+            )}
 
-            <div className="grid gap-2">
-              <Label htmlFor="recipient">Recipient</Label>
-              <Input
-                id="recipient"
-                inputMode="email"
-                autoComplete="off"
-                placeholder="Name or name@example.com"
-                value={recipient}
-                onChange={(e) => setRecipient(e.target.value)}
-              />
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-2">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2 space-y-2">
                 <Label htmlFor="amount">Amount</Label>
                 <Input
                   id="amount"
                   type="number"
                   min="0"
                   step="0.01"
+                  inputMode="decimal"
                   placeholder="0.00"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                 />
               </div>
-              <div className="grid gap-2">
+              <div className="space-y-2">
                 <Label htmlFor="currency">Currency</Label>
                 <Select value={currency} onValueChange={setCurrency}>
                   <SelectTrigger id="currency">
-                    <SelectValue placeholder="EUR" />
+                    <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="EUR">EUR</SelectItem>
-                    <SelectItem value="USD">USD</SelectItem>
-                    <SelectItem value="GBP">GBP</SelectItem>
-                    <SelectItem value="CHF">CHF</SelectItem>
+                    {CURRENCIES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Available:{" "}
+              <span className="font-medium text-foreground">
+                {formatCurrency(availableBalance, currency)}
+              </span>
+            </p>
 
-            <div className="grid gap-2">
+            {method === "instant" && (
+              <div className="space-y-2">
+                <Label htmlFor="reference">Reference (optional)</Label>
+                <Input
+                  id="reference"
+                  placeholder="e.g. Invoice 2026-014"
+                  value={reference}
+                  onChange={(e) => setReference(e.target.value)}
+                />
+              </div>
+            )}
+
+            <div className="space-y-2">
               <Label htmlFor="note">Note (optional)</Label>
               <Textarea
                 id="note"
-                placeholder="What's this transfer for?"
+                rows={2}
+                placeholder={
+                  method === "instant" ? "Add a message for the recipient" : "What's this transfer for?"
+                }
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                rows={2}
               />
             </div>
 
-            <Button onClick={handleSubmit} className="w-full sm:w-auto">
-              <Send className="mr-2 h-4 w-4" />
-              Submit for Approval
-            </Button>
+            {/* Approval method security notice */}
+            {method === "approval" && (
+              <div className="flex items-start gap-2 rounded-lg border border-border bg-secondary/30 p-3">
+                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                <p className="text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">Approval required:</span> the transfer
+                  is placed in a pending queue and no funds leave your account until an MCC Administrator
+                  authorises it.
+                </p>
+              </div>
+            )}
+
+            {formError && (
+              <p className="rounded-lg border border-red-500/20 bg-red-500/10 p-2.5 text-xs text-red-400">
+                {formError}
+              </p>
+            )}
+
+            {method === "instant" ? (
+              <Button
+                className="w-full"
+                onClick={handleInstantSend}
+                disabled={!resolvedRecipient || recipientIsSelf}
+              >
+                <Zap className="mr-2 h-4 w-4" />
+                Send Instantly
+              </Button>
+            ) : (
+              <Button className="w-full" onClick={handleApprovalSend}>
+                <Send className="mr-2 h-4 w-4" />
+                Submit for Approval
+              </Button>
+            )}
+
+            {/* Quick directory — useful for both methods */}
+            {directory.length > 0 && (
+              <div className="space-y-2 border-t border-border pt-3">
+                <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <Users className="h-3.5 w-3.5" />
+                  Platform accounts
+                </p>
+                <div className="space-y-1">
+                  {directory.map((d) => (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() =>
+                        method === "instant" ? setRecipientEmail(d.email) : setRecipientName(d.email)
+                      }
+                      className="flex w-full items-center gap-2 rounded-lg p-2 text-left transition-colors hover:bg-secondary/60"
+                    >
+                      <Avatar className="h-7 w-7">
+                        <AvatarFallback className="bg-secondary text-[10px] text-foreground">
+                          {d.initials}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-medium text-foreground">
+                          {d.displayName}
+                        </p>
+                        <p className="truncate text-[11px] text-muted-foreground">{d.email}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* Transfer history */}
-        <Card className="bg-card border-border">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <div className="rounded-lg bg-primary/10 p-2 text-primary">
-                <Users className="h-5 w-5" />
-              </div>
-              <div>
-                <CardTitle className="text-lg">Your Transfer Requests</CardTitle>
-                <CardDescription>Transfers you&apos;ve submitted and their approval status</CardDescription>
-              </div>
+        {/* Unified history */}
+        <Card className="bg-card border-border lg:col-span-3">
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <CardTitle className="text-lg font-semibold">Transfer History</CardTitle>
+            <div className="relative w-full sm:w-64">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search transfers"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-9"
+              />
             </div>
           </CardHeader>
           <CardContent>
-            {history.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
-                <Users className="h-8 w-8 text-muted-foreground/50" />
-                <p className="text-sm text-muted-foreground">No transfers yet.</p>
-                <p className="text-xs text-muted-foreground">
-                  Transfers you submit will appear here with their approval status.
+            {!hydrated ? (
+              <p className="py-10 text-center text-sm text-muted-foreground">Loading…</p>
+            ) : filteredHistory.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
+                <Send className="h-8 w-8 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">
+                  No transfers yet. Send funds to another account to get started.
                 </p>
               </div>
             ) : (
-              <ul className="divide-y divide-border">
-                {history.map((t) => {
-                  const badge = statusBadge[t.status] ?? statusBadge.pending
-                  const BadgeIcon = badge.icon
+              <div className="space-y-2">
+                {filteredHistory.map((t) => {
+                  const isReceived = t.direction === "credit"
+                  const approvalBadge =
+                    t.kind === "approval"
+                      ? approvalStatusBadge[t.status] ?? approvalStatusBadge.pending
+                      : null
+                  const ApprovalIcon = approvalBadge?.icon
                   return (
-                    <li key={t.id} className="flex items-center gap-3 py-3">
-                      <div className="rounded-lg bg-blue-500/10 p-2 text-blue-400">
-                        {t.status === "approved" ? (
-                          <ArrowUpRight className="h-4 w-4" />
+                    <div
+                      key={t.key}
+                      className="flex items-center gap-3 rounded-lg border border-border p-3"
+                    >
+                      <div
+                        className={cn(
+                          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
+                          isReceived
+                            ? "bg-green-500/10 text-green-500"
+                            : t.status === "rejected"
+                              ? "bg-red-500/10 text-red-400"
+                              : "bg-blue-500/10 text-blue-400",
+                        )}
+                      >
+                        {isReceived ? (
+                          <ArrowDownLeft className="h-4 w-4" />
                         ) : t.status === "rejected" ? (
                           <XCircle className="h-4 w-4" />
                         ) : (
-                          <ArrowDownLeft className="h-4 w-4" />
+                          <ArrowUpRight className="h-4 w-4" />
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-foreground">To {t.beneficiary}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="truncate text-sm font-medium text-foreground">
+                            {isReceived ? "From" : "To"} {t.counterparty}
+                          </p>
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "shrink-0 text-[10px]",
+                              t.kind === "instant"
+                                ? "border-primary/20 bg-primary/10 text-primary"
+                                : "border-border bg-secondary/40 text-muted-foreground",
+                            )}
+                          >
+                            {t.kind === "instant" ? "Instant" : "Approval"}
+                          </Badge>
+                        </div>
                         <p className="truncate text-xs text-muted-foreground">
-                          {t.id} &middot; {formatDate(t.submittedAt)}
+                          {t.reference} · {formatDate(t.date)}
                         </p>
-                        {t.notes && (
-                          <p className="truncate text-xs text-muted-foreground italic">&ldquo;{t.notes}&rdquo;</p>
+                        {t.note && (
+                          <p className="truncate text-[11px] text-muted-foreground/80">{t.note}</p>
                         )}
                         {t.status === "rejected" && t.decisionNote && (
-                          <p className="truncate text-xs text-red-400">Reason: {t.decisionNote}</p>
+                          <p className="truncate text-[11px] text-red-400">
+                            Reason: {t.decisionNote}
+                          </p>
                         )}
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm font-semibold text-foreground">
+                      <div className="shrink-0 text-right">
+                        <p
+                          className={cn(
+                            "text-sm font-semibold",
+                            isReceived ? "text-green-500" : "text-foreground",
+                          )}
+                        >
+                          {isReceived ? "+" : "−"}
                           {formatCurrency(t.amount, t.currency)}
                         </p>
-                        <Badge
-                          variant="outline"
-                          className={`mt-0.5 gap-1 text-[10px] ${badge.className}`}
-                        >
-                          <BadgeIcon className="h-3 w-3" />
-                          {badge.label}
-                        </Badge>
+                        {t.kind === "instant" ? (
+                          <Badge
+                            variant="outline"
+                            className="mt-1 border-green-500/20 bg-green-500/10 text-[10px] text-green-500"
+                          >
+                            <CheckCircle2 className="mr-1 h-3 w-3" />
+                            Settled
+                          </Badge>
+                        ) : (
+                          approvalBadge && (
+                            <Badge
+                              variant="outline"
+                              className={cn("mt-1 gap-1 text-[10px]", approvalBadge.className)}
+                            >
+                              {ApprovalIcon && <ApprovalIcon className="h-3 w-3" />}
+                              {approvalBadge.label}
+                            </Badge>
+                          )
+                        )}
                       </div>
-                    </li>
+                    </div>
                   )
                 })}
-              </ul>
+              </div>
             )}
           </CardContent>
         </Card>
