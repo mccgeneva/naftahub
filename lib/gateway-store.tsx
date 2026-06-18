@@ -29,27 +29,19 @@ export type { PartnerBank, BankRegion } from "@/lib/partner-banks"
 // Account types & currencies
 // ---------------------------------------------------------------------------
 
-export type GatewayAccountType = "collection" | "multicurrency" | "virtual_iban"
+// The account-type and currency catalogue lives in a server-safe module so it
+// can be shared with server actions (e.g. the admin global config that
+// enables/disables them). Re-exported here so existing imports keep working.
+export {
+  ACCOUNT_TYPES,
+  ACCOUNT_TYPE_KEYS,
+  GATEWAY_CURRENCIES,
+  isAccountTypeKey,
+  isGatewayCurrency,
+} from "@/lib/gateway-catalog"
+export type { GatewayAccountType } from "@/lib/gateway-catalog"
 
-export const ACCOUNT_TYPES: Record<
-  GatewayAccountType,
-  { label: string; blurb: string }
-> = {
-  virtual_iban: {
-    label: "Virtual IBAN",
-    blurb: "A dedicated IBAN in the client's name for receiving funds, routed through a partner bank.",
-  },
-  collection: {
-    label: "Collection Account",
-    blurb: "A named collection account to aggregate incoming payments before sweeping to the Master Account.",
-  },
-  multicurrency: {
-    label: "Multi-Currency Account",
-    blurb: "A single account able to hold and receive multiple currencies via the partner network.",
-  },
-}
-
-export const GATEWAY_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "SGD", "CAD", "HKD", "JPY", "CNY", "AUD", "NZD", "AED", "SAR", "QAR", "INR", "ZAR", "BRL", "MXN", "SEK", "NOK", "DKK", "KRW", "MYR"]
+import type { GatewayAccountType } from "@/lib/gateway-catalog"
 
 export type GatewayStatus = "pending" | "active" | "rejected" | "closed"
 

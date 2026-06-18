@@ -39,6 +39,7 @@ import { generateIban, formatIban, countrySupportsIban } from "@/lib/iban"
 import { useLedger } from "@/lib/ledger-store"
 import { useActivityLog } from "@/components/activity-tracker"
 import { BankInventoryManager } from "@/components/admin/bank-inventory-manager"
+import { GatewayConfigManager } from "@/components/admin/gateway-config-manager"
 import {
   allocateBankSlotAdmin,
   getBankAvailabilityForCurrency,
@@ -270,6 +271,9 @@ export function AdminGatewaySection() {
 
   return (
     <>
+      {/* Account Types & Currencies availability */}
+      <GatewayConfigManager />
+
       {/* Partner Bank Availability & Capacity */}
       <BankInventoryManager />
 
