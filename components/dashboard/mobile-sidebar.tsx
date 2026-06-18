@@ -27,10 +27,13 @@ import {
   Layers,
   Ship,
   Gauge,
+  LogOut,
   type LucideIcon,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { logout } from "@/app/actions/auth"
 
 type NavItem = {
   title: string
@@ -197,6 +200,18 @@ export function MobileSidebar() {
           </div>
           <p className="mt-1 text-[10px] text-muted-foreground">Unlimited trading volume</p>
         </div>
+
+        {/* Sign Out — always reachable from the mobile navigation */}
+        <form action={logout} className="mt-3">
+          <Button
+            type="submit"
+            variant="ghost"
+            className="h-11 w-full justify-start gap-2 text-sm text-destructive hover:bg-destructive/10 hover:text-destructive"
+          >
+            <LogOut className="h-4 w-4 shrink-0" />
+            <span>Sign out</span>
+          </Button>
+        </form>
       </div>
     </div>
   )

@@ -30,12 +30,14 @@ import {
   Layers,
   Ship,
   Gauge,
+  LogOut,
   type LucideIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
+import { logout } from "@/app/actions/auth"
 
 type NavItem = {
   title: string
@@ -308,6 +310,24 @@ export function DashboardSidebar() {
           </div>
         </div>
       )}
+
+      {/* Sign Out — always available, regardless of collapsed state */}
+      <div className="border-t border-sidebar-border p-3">
+        <form action={logout}>
+          <Button
+            type="submit"
+            variant="ghost"
+            className={cn(
+              "h-10 w-full gap-2 text-sm text-destructive hover:bg-destructive/10 hover:text-destructive",
+              collapsed ? "justify-center px-0" : "justify-start",
+            )}
+            title="Sign out"
+          >
+            <LogOut className="h-4 w-4 shrink-0" />
+            {collapsed ? <span className="sr-only">Sign out</span> : <span>Sign out</span>}
+          </Button>
+        </form>
+      </div>
 
       {/* Collapse Toggle */}
       <Button
