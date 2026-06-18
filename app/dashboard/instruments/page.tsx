@@ -694,7 +694,7 @@ export default function InstrumentsPage() {
                 New Trade
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[500px]">
+            <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[500px]">
               <DialogHeader>
                 <DialogTitle>Trade Bank Instrument</DialogTitle>
                 <DialogDescription>
@@ -1291,7 +1291,7 @@ export default function InstrumentsPage() {
 
       {/* View Details dialog */}
       <Dialog open={!!viewTarget} onOpenChange={(open) => !open && setViewTarget(null)}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           {viewTarget && (
             <>
               <DialogHeader>
@@ -1355,7 +1355,7 @@ export default function InstrumentsPage() {
 
       {/* Assign / Transfer dialog */}
       <Dialog open={!!actionTarget} onOpenChange={(open) => !open && setActionTarget(null)}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
           {actionTarget && (
             <>
               <DialogHeader>

@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Award, Check, X, Clock, History, RefreshCw, BadgeCheck } from "lucide-react"
+import { Award, Check, X, Clock, History, RefreshCw, BadgeCheck, Loader2 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -28,15 +28,12 @@ import { useActivityLog } from "@/components/activity-tracker"
 import { USERS, getUserById } from "@/lib/users"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
+import { CERTIFICATE_TYPE_LABELS, type CertificateRequest } from "@/lib/certificates-store"
 import {
-  getCertificateRequestsForUser,
-  setCertificateRequestsForUser,
-  approveCertificateInList,
-  rejectCertificateInList,
-  reissueCertificateInList,
-  CERTIFICATE_TYPE_LABELS,
-  type CertificateRequest,
-} from "@/lib/certificates-store"
+  adminListCertificateRequests,
+  adminDecideCertificate,
+  adminReissueCertificate,
+} from "@/app/actions/certificates"
 
 const statusStyles: Record<CertificateRequest["status"], string> = {
   pending: "border-amber-500/20 bg-amber-500/10 text-amber-400",
@@ -69,6 +66,8 @@ export function CertificateManager() {
   )
   const [targetUserId, setTargetUserId] = useState(USERS[0]?.id ?? "u1")
   const [requests, setRequests] = useState<CertificateRequest[]>([])
+  const [loading, setLoading] = useState(false)
+  const [working, setWorking] = useState(false)
 
   // Decision dialog
   const [decision, setDecision] = useState<{ req: CertificateRequest; mode: "approve" | "reject" } | null>(null)
@@ -89,16 +88,25 @@ export function CertificateManager() {
     }
   }, [])
 
-  const reload = (userId: string) => setRequests(getCertificateRequestsForUser(userId))
+  const reload = (userId: string) => {
+    setLoading(true)
+    return adminListCertificateRequests(ADMIN_PASSCODE, userId)
+      .then((res) => {
+        // Ignore a stale response if the admin switched clients meanwhile.
+        if (userId !== targetUserId) return
+        if (res.ok) setRequests(res.requests)
+        else toast.error("Could not load certificate requests", { description: res.error })
+      })
+      .catch(() => toast.error("Could not load certificate requests"))
+      .finally(() => {
+        if (userId === targetUserId) setLoading(false)
+      })
+  }
 
   useEffect(() => {
     reload(targetUserId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetUserId])
-
-  const persist = (next: CertificateRequest[]) => {
-    setCertificateRequestsForUser(targetUserId, next)
-    setRequests(next)
-  }
 
   const pending = useMemo(() => requests.filter((r) => r.status === "pending"), [requests])
   const decided = useMemo(() => requests.filter((r) => r.status !== "pending"), [requests])
@@ -108,14 +116,17 @@ export function CertificateManager() {
     setNote("")
   }
 
-  const confirmDecision = () => {
+  const confirmDecision = async () => {
     if (!decision) return
     const { req, mode } = decision
-    const next =
-      mode === "approve"
-        ? approveCertificateInList(requests, req.id, note)
-        : rejectCertificateInList(requests, req.id, note)
-    persist(next)
+    setWorking(true)
+    const res = await adminDecideCertificate(ADMIN_PASSCODE, req.id, mode, note, targetUser.fullName)
+    setWorking(false)
+    if (!res.ok) {
+      toast.error("Action failed", { description: res.error })
+      return
+    }
+    await reload(targetUserId)
     toast.success(mode === "approve" ? "Certificate issued" : "Request declined", {
       description: `${CERTIFICATE_TYPE_LABELS[req.type]} (${req.reference}) for ${targetUser.fullName}.`,
     })
@@ -132,18 +143,24 @@ export function CertificateManager() {
     setDecision(null)
   }
 
-  const reissue = (req: CertificateRequest) => {
-    const next = reissueCertificateInList(requests, req.id)
-    persist(next)
-    const updated = next.find((r) => r.id === req.id)
+  const reissue = async (req: CertificateRequest) => {
+    setWorking(true)
+    const res = await adminReissueCertificate(ADMIN_PASSCODE, req.id, undefined, targetUser.fullName)
+    setWorking(false)
+    if (!res.ok) {
+      toast.error("Re-issue failed", { description: res.error })
+      return
+    }
+    await reload(targetUserId)
+    const nextVersion = res.request?.version ?? req.version + 1
     toast.success("Certificate re-issued", {
-      description: `${req.reference} is now revision ${updated?.version ?? req.version + 1}.`,
+      description: `${req.reference} is now revision ${nextVersion}.`,
     })
     logActivity({
       action: `Re-issued ${CERTIFICATE_TYPE_LABELS[req.type]}`,
       category: "Administration",
       details: {
-        summary: `Compliance re-issued the ${CERTIFICATE_TYPE_LABELS[req.type]} ${req.reference} for ${targetUser.fullName}, bumping it to revision ${updated?.version ?? req.version + 1}.`,
+        summary: `Compliance re-issued the ${CERTIFICATE_TYPE_LABELS[req.type]} ${req.reference} for ${targetUser.fullName}, bumping it to revision ${nextVersion}.`,
         reference: req.reference,
         targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
       },
@@ -166,18 +183,30 @@ export function CertificateManager() {
         {/* Client selector */}
         <div className="space-y-1.5">
           <Label className="text-xs text-muted-foreground">Client account</Label>
-          <Select value={targetUserId} onValueChange={setTargetUserId}>
-            <SelectTrigger className="sm:max-w-md">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {clients.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.fullName} — {c.company}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex items-center gap-2">
+            <Select value={targetUserId} onValueChange={setTargetUserId}>
+              <SelectTrigger className="sm:max-w-md">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {clients.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.fullName} — {c.company}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => reload(targetUserId)}
+              disabled={loading}
+              title="Refresh requests"
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              <span className="sr-only">Refresh requests</span>
+            </Button>
+          </div>
         </div>
 
         {/* Pending */}
@@ -289,7 +318,7 @@ export function CertificateManager() {
                       <History className="h-4 w-4" />
                     </Button>
                     {req.status === "approved" && (
-                      <Button variant="outline" size="sm" onClick={() => reissue(req)}>
+                      <Button variant="outline" size="sm" onClick={() => reissue(req)} disabled={working}>
                         <RefreshCw className="mr-1.5 h-4 w-4" />
                         Re-issue
                       </Button>
@@ -334,12 +363,14 @@ export function CertificateManager() {
             </Button>
             <Button
               onClick={confirmDecision}
+              disabled={working}
               className={
                 decision?.mode === "approve"
                   ? "bg-emerald-600 text-white hover:bg-emerald-700"
                   : "bg-red-600 text-white hover:bg-red-700"
               }
             >
+              {working && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {decision?.mode === "approve" ? "Approve & Issue" : "Decline"}
             </Button>
           </DialogFooter>
