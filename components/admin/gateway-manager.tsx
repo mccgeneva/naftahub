@@ -82,7 +82,7 @@ function generateCoordinates(bankKey: string, holder: string): AccountCoordinate
   const reference = `MCC-${initials || "CLT"}-${rand(6)}`
 
   if (countrySupportsIban(bank.countryCode)) {
-    const iban = generateIban(bank.countryCode, bank.bic.slice(0, 4))
+    const iban = generateIban(bank.countryCode, bank.bic.slice(0, 4), bank.nationalBankCode)
     return {
       partnerBankKey: bank.key,
       partnerBankName: bank.name,

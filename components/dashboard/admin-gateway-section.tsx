@@ -84,7 +84,7 @@ function buildCoordinates(bankKey: string): AccountCoordinates {
     reference: genReference(),
   }
   if (scheme === "iban") {
-    base.iban = generateIban(bank.countryCode, bank.bic.slice(0, 4))
+    base.iban = generateIban(bank.countryCode, bank.bic.slice(0, 4), bank.nationalBankCode)
   } else {
     base.accountNumber = genAccountNumber()
     base.routingNumber =
