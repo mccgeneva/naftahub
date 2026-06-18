@@ -6,12 +6,27 @@
 // is the signed-in user's per-user session token.
 export const SESSION_COOKIE = "mcc_session"
 
+// httpOnly, HMAC-signed companion cookie holding the session metadata
+// (issued-at / absolute-expiry / last-seen). This is what makes session expiry
+// enforceable on the SERVER (Edge proxy + resolver) instead of relying on
+// client-side JavaScript. See lib/session-token.ts.
+export const SESSION_META_COOKIE = "mcc_sess_meta"
+
 // Short-lived, client-readable cookie set by the login action to mark a genuine
 // fresh login. Consumed once by the SessionGuard, then cleared.
 export const FRESH_LOGIN_COOKIE = "mcc_fresh"
 
-// Session lifetime in seconds (8 hours).
+// Absolute session lifetime in seconds (8 hours) — a hard cap that is never
+// extended, even for an actively-used session.
 export const SESSION_MAX_AGE = 60 * 60 * 8
+
+// Idle (inactivity) window in seconds. The session must see at least one request
+// within this window or it is rejected server-side. It also drives the cookie
+// `maxAge`, so the browser itself drops the cookie after this much inactivity —
+// which is what makes "closed the browser and came back later" log you out even
+// when the browser tries to restore the cookie. The proxy slides this window
+// forward on every authenticated request, so active users are never disrupted.
+export const SESSION_IDLE_MAX_AGE = 60 * 15 // 15 minutes
 
 // Cookie attributes. The v0 preview renders the app inside a cross-origin
 // iframe, where browsers only store/send cookies marked `SameSite=None; Secure`.
@@ -21,16 +36,30 @@ export const SESSION_MAX_AGE = 60 * 60 * 8
 // because the preview and production are both HTTPS, and browsers treat
 // `http://localhost` as a secure context, so local development keeps working.
 //
-// SECURITY: we deliberately OMIT `maxAge`/`expires` so this is a *session
-// cookie*. The browser discards it when the window/browser is fully closed,
-// which forces a fresh login on the next visit instead of silently restoring
-// the previous user's session. The 8-hour absolute session lifetime is still
-// enforced client-side by the SessionGuard via its EXPIRY timestamp.
+// SECURITY: `maxAge` is set to the IDLE window (not the full 8h) and is slid
+// forward by the proxy on every authenticated request. This means:
+//  - the browser drops the cookie after `SESSION_IDLE_MAX_AGE` of no requests,
+//    so a browser that restores cookies on relaunch can no longer silently
+//    restore a stale session after the user has been away, and
+//  - the absolute 8h lifetime is enforced independently and server-side via the
+//    signed metadata cookie (see SESSION_META_COOKIE), so it cannot be bypassed
+//    by the client even if JavaScript never runs.
 export const sessionCookieOptions = {
   httpOnly: true,
   secure: true,
   sameSite: "none",
   path: "/",
+  maxAge: SESSION_IDLE_MAX_AGE,
+} as const
+
+// httpOnly options for the signed session-metadata cookie. Same idle-bounded
+// maxAge so it dies in lock step with the session cookie.
+export const sessionMetaCookieOptions = {
+  httpOnly: true,
+  secure: true,
+  sameSite: "none",
+  path: "/",
+  maxAge: SESSION_IDLE_MAX_AGE,
 } as const
 
 // Same cross-iframe-safe attributes for the short-lived, client-readable
@@ -48,12 +77,13 @@ export const freshLoginCookieOptions = {
 // a security boundary — access is gated by the httpOnly session token in the
 // proxy; this cookie only selects which tenant's identity/data to show.
 //
-// Also a session cookie (no `maxAge`) so it is cleared on browser close in lock
-// step with the session cookie above — it must never outlive the session and
-// point a fresh visitor at the previous user's identity/data.
+// Idle-bounded `maxAge` in lock step with the session cookie — it must never
+// outlive the session and point a fresh visitor at the previous user's
+// identity/data.
 export const userCookieOptions = {
   httpOnly: false,
   secure: true,
   sameSite: "none",
   path: "/",
+  maxAge: SESSION_IDLE_MAX_AGE,
 } as const

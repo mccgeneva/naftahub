@@ -5,10 +5,14 @@ import { redirect } from "next/navigation"
 import {
   FRESH_LOGIN_COOKIE,
   SESSION_COOKIE,
+  SESSION_META_COOKIE,
+  SESSION_MAX_AGE,
   sessionCookieOptions,
+  sessionMetaCookieOptions,
   freshLoginCookieOptions,
   userCookieOptions,
 } from "@/lib/auth"
+import { signSessionMeta } from "@/lib/session-token"
 import { USER_COOKIE } from "@/lib/user-scope"
 import { findUserByEmail } from "@/lib/users"
 import { getDynamicUserByEmail } from "@/lib/admin-users-db"
@@ -81,6 +85,19 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
     cookieStore.set(SESSION_COOKIE, matchedUser.sessionToken, sessionCookieOptions)
     cookieStore.set(USER_COOKIE, matchedUser.id, userCookieOptions)
 
+    // Issue the signed session-metadata cookie. This is the server-enforced
+    // record of when the session was created (iat), when it MUST end no matter
+    // what (exp = now + 8h absolute), and when it was last seen (seen). The Edge
+    // proxy and server resolver verify it on every request, so expiry can no
+    // longer be bypassed by client-side tricks or browser cookie-restore.
+    const nowMs = Date.now()
+    const metaToken = await signSessionMeta({
+      iat: nowMs,
+      exp: nowMs + SESSION_MAX_AGE * 1000,
+      seen: nowMs,
+    })
+    cookieStore.set(SESSION_META_COOKIE, metaToken, sessionMetaCookieOptions)
+
     // Short-lived, readable marker proving this navigation is a genuine fresh
     // login. The SessionGuard consumes it to establish the per-tab session so a
     // real login is never mistaken for a reopened tab. Set server-side so it
@@ -107,6 +124,7 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
   // to "pass" by falling back to a previously authenticated session.
   const cookieStore = await cookies()
   cookieStore.delete(SESSION_COOKIE)
+  cookieStore.delete(SESSION_META_COOKIE)
   cookieStore.delete(USER_COOKIE)
   cookieStore.delete(FRESH_LOGIN_COOKIE)
 
@@ -138,6 +156,7 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
 export async function logout() {
   const cookieStore = await cookies()
   cookieStore.delete(SESSION_COOKIE)
+  cookieStore.delete(SESSION_META_COOKIE)
   cookieStore.delete(USER_COOKIE)
   await logActivity({
     action: "Logout",
@@ -161,6 +180,7 @@ const EXPIRE_REASON_LABELS: Record<ExpireReason, string> = {
 export async function expireSession(reason: ExpireReason) {
   const cookieStore = await cookies()
   cookieStore.delete(SESSION_COOKIE)
+  cookieStore.delete(SESSION_META_COOKIE)
   cookieStore.delete(USER_COOKIE)
   await logActivity({
     action: "Session terminated automatically",
