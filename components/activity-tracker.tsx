@@ -1,7 +1,7 @@
 "use client"
 
 import { createContext, useContext, useCallback } from "react"
-import { logActivity, type ActivityLog } from "@/app/actions/log-activity"
+import type { ActivityLog } from "@/lib/activity-email"
 import { getActiveUserId } from "@/lib/user-scope"
 import { getUserById } from "@/lib/users"
 
@@ -20,8 +20,23 @@ export function ActivityTracker({ children }: { children: React.ReactNode }) {
     // by passing their own `user` field.
     const current = getUserById(getActiveUserId())
     const user = activity.user ?? `${current.fullName} (${current.company})`
-    // Fire-and-forget; never block the UI on logging.
-    void logActivity({ ...activity, user, path: activity.path ?? window.location.pathname })
+    const payload: ActivityLog = {
+      ...activity,
+      user,
+      path: activity.path ?? window.location.pathname,
+    }
+    // Fire-and-forget; never block the UI on logging. We POST to a Route Handler
+    // (not a Server Action) so logging is unaffected by Server Action Origin/CSRF
+    // checks and works identically on every domain, including the apex -> www
+    // redirect on mcc-btp.app.
+    void fetch("/api/log-activity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    }).catch(() => {
+      // Logging must never surface an error to the user.
+    })
   }, [])
 
   // Note: page navigation is intentionally NOT logged/emailed — it is pure
