@@ -3,6 +3,7 @@ import { DashboardHeader } from "@/components/dashboard/header"
 import { MarketTicker } from "@/components/dashboard/market-ticker"
 import { BackToTop } from "@/components/dashboard/back-to-top"
 import { ActivityTracker } from "@/components/activity-tracker"
+import { CurrentUserProvider } from "@/lib/use-current-user"
 import { SessionGuard } from "@/components/session-guard"
 import { PointerEventsGuard } from "@/components/pointer-events-guard"
 import { DemoSeedGate } from "@/components/demo-seed-gate"
@@ -26,6 +27,7 @@ import { GatewayProvider } from "@/lib/gateway-store"
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
+    <CurrentUserProvider>
     <ActivityTracker>
       <DemoSeedGate>
       <BeneficiariesProvider>
@@ -79,5 +81,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </BeneficiariesProvider>
       </DemoSeedGate>
     </ActivityTracker>
+    </CurrentUserProvider>
   )
 }
