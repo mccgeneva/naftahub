@@ -21,6 +21,8 @@ import {
   Minus,
   Plus,
   BadgeCheck,
+  FileText,
+  ArrowUpRight,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -316,6 +318,16 @@ export default function TradingPage() {
             <p className="text-sm text-muted-foreground text-pretty">
               Neural Quantum AI trading across commodities, FX, equities, crypto &amp; indices.
             </p>
+            <a
+              href="https://v0-naftahub-daily-report.vercel.app/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary/40 px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-secondary"
+            >
+              <FileText className="h-3.5 w-3.5 text-primary" />
+              View NQAi Daily Report
+              <ArrowUpRight className="h-3.5 w-3.5 text-muted-foreground" />
+            </a>
           </div>
         </div>
         <button
