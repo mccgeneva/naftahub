@@ -41,9 +41,8 @@ import { cn } from "@/lib/utils"
 import { useActivityLog } from "@/components/activity-tracker"
 import { useLedger, creditUserLedger } from "@/lib/ledger-store"
 import { usePaymentRequests } from "@/lib/payment-requests-store"
-import { getActiveUserId } from "@/lib/user-scope"
+import { useCurrentUser } from "@/lib/use-current-user"
 import {
-  getUserById,
   getTransferDirectory,
   findTransferRecipientByEmail,
   type TransferDirectoryEntry,
@@ -115,8 +114,12 @@ export default function SendMoneyPage() {
   const { entries, balanceFor, addDebit, hydrated } = useLedger()
   const { requests, addRequest } = usePaymentRequests()
 
-  const activeUserId = getActiveUserId()
-  const self = getUserById(activeUserId)
+  // Resolve the acting sender from the authoritative signed-in identity (which
+  // resolves dynamic, admin-created users from the httpOnly session) rather than
+  // the client `mcc_user` cookie. This prevents a payment from ever being
+  // attributed to, or sent from, the wrong account.
+  const self = useCurrentUser()
+  const activeUserId = self.id
   const directory = useMemo<TransferDirectoryEntry[]>(
     () => getTransferDirectory().filter((d) => d.id !== activeUserId),
     [activeUserId],

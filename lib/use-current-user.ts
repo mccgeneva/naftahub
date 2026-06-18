@@ -1,54 +1,58 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { getUserById, PRIMARY_USER_ID, USERS, type UserProfile } from "@/lib/users"
-import { getActiveUserId } from "@/lib/user-scope"
+import { getUserById, UNKNOWN_USER_ID, type UserProfile } from "@/lib/users"
 import { hydrateProfile } from "@/lib/profile-types"
-import { getMyProfile } from "@/app/actions/admin-users"
+import { getMyIdentity } from "@/app/actions/admin-users"
 
 /**
  * Returns the identity profile of the currently signed-in user.
  *
- * The active user id comes from the client-readable `mcc_user` cookie. Cookies
- * aren't available during SSR, so we always start from a deterministic value
- * (the primary user) and then resolve the real user after mount. This keeps the
- * server and first client render identical (no hydration mismatch) while still
- * showing the correct identity for whoever is actually logged in.
+ * Identity is ALWAYS confirmed against the authoritative session (the httpOnly
+ * session cookie, resolved server-side via `getMyIdentity`). The client-readable
+ * `mcc_user` cookie is used only as a non-authoritative initial guess so the
+ * first paint shows something sensible without a flash; the server result then
+ * overrides it.
  *
- * IMPORTANT: there are two kinds of accounts:
- *  - Static users (lib/users.ts) — resolved synchronously by id.
- *  - Dynamic, admin-created users (Neon) — their id (e.g. "du_…") is NOT in the
- *    static registry, so `getUserById` would fall back to the PRIMARY user and
- *    wrongly show someone else's identity. For these we fetch the caller's OWN
- *    profile from the server (resolved from the httpOnly session cookie) and
- *    hydrate it. This guarantees a dynamic user can never see a static user's
- *    identity.
+ * Why this matters: the old code trusted the `mcc_user` cookie and fell back to
+ * the PRIMARY user when it was missing. A stale/absent/concurrent-overwritten
+ * cookie therefore caused one user to be displayed — and to act — as another
+ * real account (e.g. payments attributed to mesa@ipostrad.com). By confirming
+ * every session against the server, a wrong cookie can never expose or
+ * impersonate another account; at worst we show the neutral placeholder until
+ * the session resolves (and the session gate redirects truly unauthenticated
+ * users to /login).
  */
 export function useCurrentUser(): UserProfile {
-  const [user, setUser] = useState<UserProfile>(() => getUserById(PRIMARY_USER_ID))
+  // Deterministic neutral placeholder for SSR + first client render (prevents
+  // hydration mismatch and never shows a real account by default).
+  const [user, setUser] = useState<UserProfile>(() => getUserById(UNKNOWN_USER_ID))
 
   useEffect(() => {
     let cancelled = false
-    const activeId = getActiveUserId()
 
-    // Static user: resolve synchronously by id.
-    const staticUser = USERS.find((u) => u.id === activeId)
-    if (staticUser) {
-      setUser(staticUser)
-      return
-    }
-
-    // Dynamic (admin-created) user: the static registry has no record, so fetch
-    // this caller's own profile from the server and hydrate it. Never fall back
-    // to the primary user here — that would expose another account's identity.
-    getMyProfile()
-      .then((serialized) => {
-        if (cancelled || !serialized) return
-        setUser(hydrateProfile(serialized))
+    // Identity is resolved ONLY from the authoritative session — we never show a
+    // real identity based on the client `mcc_user` cookie, not even momentarily,
+    // because a stale/overwritten cookie could otherwise flash the wrong account
+    // on a payments screen. Until the server confirms, the neutral placeholder
+    // stays.
+    getMyIdentity()
+      .then((identity) => {
+        if (cancelled) return
+        if (!identity) {
+          // Unresolved session: keep the neutral placeholder.
+          setUser(getUserById(UNKNOWN_USER_ID))
+          return
+        }
+        if (identity.kind === "static") {
+          setUser(getUserById(identity.id))
+        } else {
+          setUser(hydrateProfile(identity.profile))
+        }
       })
       .catch(() => {
-        // Leave the deterministic placeholder; the session gate will redirect
-        // unauthenticated/unresolved sessions to /login.
+        // Network/transient error: do not assume any real identity.
+        if (!cancelled) setUser(getUserById(UNKNOWN_USER_ID))
       })
 
     return () => {

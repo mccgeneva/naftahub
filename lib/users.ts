@@ -290,6 +290,39 @@ export const DEMO_USER_ID = USER_DEMO.id
 // data is preserved. Additional users get their data namespaced by id.
 export const PRIMARY_USER_ID = USER_IPOSTRAD.id
 
+// Sentinel id used when the active user cannot be determined (e.g. the client
+// `mcc_user` cookie is missing/unreadable, or we're on the server). It is NOT a
+// real account: it owns its own isolated, empty data namespace and resolves to
+// a neutral placeholder identity. This guarantees that an unresolved session can
+// never silently read, write, or act as another real user (previously such
+// cases collapsed onto the primary user, mesa@ipostrad.com — a cross-user leak).
+export const UNKNOWN_USER_ID = "__unknown__"
+
+// A neutral, secrets-free identity returned for any id that does not match a
+// real account. It is intentionally generic so it can never be mistaken for,
+// or attributed to, a real client.
+const PLACEHOLDER_USER: UserProfile = {
+  id: UNKNOWN_USER_ID,
+  email: "",
+  password: "",
+  sessionToken: "",
+  firstName: "",
+  shortName: "Account",
+  fullName: "Account",
+  initials: "—",
+  company: "—",
+  role: "",
+  headerTag: "",
+  accountBadge: "",
+  accountEmail: "",
+  supportEmail: "",
+  cardHolderPerson: "",
+  cardHolderCompany: "",
+  principal: [],
+  companyInfo: [],
+  banking: [],
+}
+
 export function findUserByEmail(email: string): UserProfile | undefined {
   const normalized = email.trim().toLowerCase()
   return USERS.find((u) => u.email.toLowerCase() === normalized)
@@ -336,8 +369,16 @@ export function findTransferRecipientByEmail(email: string): TransferDirectoryEn
   return user ? toDirectoryEntry(user) : undefined
 }
 
+/**
+ * Resolve a STATIC user by id. For any id that is not a known static account
+ * (including dynamic admin-created users and the UNKNOWN sentinel) this returns
+ * a neutral placeholder — never a real account. Callers that need the identity
+ * of a dynamic user must resolve it from the authoritative session instead
+ * (see `useCurrentUser` / `getMyProfile`). This fail-safe prevents one user's
+ * actions from ever being attributed to another real account.
+ */
 export function getUserById(id: string | undefined | null): UserProfile {
-  return USERS.find((u) => u.id === id) ?? USER_IPOSTRAD
+  return USERS.find((u) => u.id === id) ?? PLACEHOLDER_USER
 }
 
 export function getUserBySessionToken(token: string | undefined | null): UserProfile | undefined {

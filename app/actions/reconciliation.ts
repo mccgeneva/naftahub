@@ -4,7 +4,8 @@ import { cookies } from "next/headers"
 import { query } from "@/lib/db"
 import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
-import { getUserBySessionToken, getUserById, type UserProfile } from "@/lib/users"
+import { getUserBySessionToken, type UserProfile } from "@/lib/users"
+import { resolveAccountProfileById } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import type { GatewayAccount, FundingEvent } from "@/lib/gateway-store"
 import type { LedgerEntry } from "@/lib/ledger-store"
@@ -311,7 +312,7 @@ async function matchRecordAndCredit(
       record.matchedAccountHolder = account.accountHolder
       record.ledgerEntryId = ledgerEntryId
 
-      const target = getUserById(account.userId)
+      const target = await resolveAccountProfileById(account.userId)
       await logActivity({
         action: `Reconciliation engine auto-credited ${payment.currency} ${amount.toLocaleString("en-US")} to ${target.fullName}'s Master Account`,
         category: "Administration",
@@ -475,7 +476,7 @@ export async function resolveReconciliationAdmin(
     record.updatedAt = new Date().toISOString()
     await writeRecord(record)
 
-    const target = getUserById(account.userId)
+    const target = await resolveAccountProfileById(account.userId)
     await logActivity({
       action: `Administrator manually reconciled ${record.payment.currency} ${record.payment.amount.toLocaleString("en-US")} to ${target.fullName}'s Master Account`,
       category: "Administration",

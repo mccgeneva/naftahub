@@ -4,7 +4,8 @@ import { cookies } from "next/headers"
 import { query, isDatabaseConfigured } from "@/lib/db"
 import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
-import { getUserBySessionToken, getUserById, type UserProfile } from "@/lib/users"
+import { getUserBySessionToken, type UserProfile } from "@/lib/users"
+import { resolveAccountProfileById } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import type { LedgerEntry } from "@/lib/ledger-store"
 
@@ -205,7 +206,7 @@ export async function addLedgerEntryForUserAdmin(
 
   try {
     await upsertEntry(userId, { ...entry, amount })
-    const target = getUserById(userId)
+    const target = await resolveAccountProfileById(userId)
     await logActivity({
       action: `Administrator posted a ${entry.direction} of ${entry.currency} ${amount.toLocaleString("en-US")} to ${target.fullName}`,
       category: "Administration",
@@ -275,7 +276,7 @@ export async function updateLedgerEntryForUserAdmin(
 
   try {
     await upsertEntry(userId, { ...entry, amount })
-    const target = getUserById(userId)
+    const target = await resolveAccountProfileById(userId)
     await logActivity({
       action: `Administrator edited ledger entry ${entry.id} for ${target.fullName}`,
       category: "Administration",
@@ -330,7 +331,7 @@ export async function reverseLedgerEntryForUserAdmin(
     }
     await upsertEntry(userId, reversal)
 
-    const target = getUserById(userId)
+    const target = await resolveAccountProfileById(userId)
     await logActivity({
       action: `Administrator reversed ledger entry ${original.id} for ${target.fullName}`,
       category: "Administration",

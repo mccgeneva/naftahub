@@ -17,8 +17,9 @@
 import "server-only"
 import { cookies } from "next/headers"
 import { SESSION_COOKIE } from "@/lib/auth"
-import { getUserBySessionToken, type UserProfile } from "@/lib/users"
+import { getUserById, getUserBySessionToken, USERS, type UserProfile } from "@/lib/users"
 import {
+  getDynamicUserById,
   getDynamicUserBySessionToken,
   type DynamicUserRecord,
   type UserStatus,
@@ -73,4 +74,27 @@ export async function resolveCurrentSession(): Promise<ResolvedSession | null> {
   const cookieStore = await cookies()
   const token = cookieStore.get(SESSION_COOKIE)?.value
   return resolveSessionByToken(token)
+}
+
+/**
+ * Resolve ANY account id — static OR dynamic (admin-created) — to its full
+ * identity profile. Intended for server-side labelling such as admin audit-log
+ * entries and emails, where we must show the CORRECT target account.
+ *
+ * For unknown ids it returns the neutral placeholder (via getUserById), never a
+ * different real user. This is what keeps "Administrator posted X to <account>"
+ * audit entries accurate for dynamic users instead of mis-attributing them to
+ * the primary account.
+ */
+export async function resolveAccountProfileById(userId: string | undefined | null): Promise<UserProfile> {
+  if (!userId) return getUserById(null)
+  const staticUser = USERS.find((u) => u.id === userId)
+  if (staticUser) return staticUser
+  try {
+    const dyn = await getDynamicUserById(userId)
+    if (dyn) return hydrateProfile(dyn.profile)
+  } catch {
+    // DB unavailable — fall through to the neutral placeholder.
+  }
+  return getUserById(userId)
 }
