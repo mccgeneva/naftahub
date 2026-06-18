@@ -4,7 +4,8 @@ import { cookies } from "next/headers"
 import { query } from "@/lib/db"
 import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
-import { getUserBySessionToken, getUserById, type UserProfile } from "@/lib/users"
+import { getUserBySessionToken, type UserProfile } from "@/lib/users"
+import { resolveAccountProfileById } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import type {
   TreasuryAccount,
@@ -168,7 +169,7 @@ export async function saveTreasuryRecordAdmin(
   const note = fields.note?.toString().trim() || null
   const now = new Date().toISOString()
 
-  const target = getUserById(userId)
+  const target = await resolveAccountProfileById(userId)
 
   try {
     const prev = await readAccount(userId)
@@ -281,7 +282,7 @@ export async function postTreasuryTxnAdmin(
       [userId, JSON.stringify(transactions), txn.date],
     )
 
-    const target = getUserById(userId)
+    const target = await resolveAccountProfileById(userId)
     await logActivity({
       action: `Administrator posted a treasury ${input.type} of EUR ${amount.toLocaleString("en-US")} for ${target.fullName}`,
       category: "Administration",

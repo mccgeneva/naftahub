@@ -10,23 +10,32 @@
 // result is that no user can ever see or touch another user's data.
 // ---------------------------------------------------------------------------
 
-import { PRIMARY_USER_ID } from "@/lib/users"
+import { PRIMARY_USER_ID, UNKNOWN_USER_ID } from "@/lib/users"
 
 // Client-readable cookie that records which user is currently signed in.
 export const USER_COOKIE = "mcc_user"
 
 /**
  * The id of the user whose data should be read/written right now.
- * Falls back to the primary user on the server or when no cookie is present.
+ *
+ * Read strictly from the client-readable `mcc_user` cookie. When the cookie is
+ * missing/unreadable (or we're on the server, where there is no per-request
+ * cookie here), we return the neutral UNKNOWN sentinel — NOT a real user.
+ *
+ * This is a deliberate fail-safe: previously this fell back to the primary user
+ * (mesa@ipostrad.com), which meant any cookie glitch caused a different client's
+ * data and actions to collapse onto that real account — a cross-user leak. The
+ * UNKNOWN namespace is empty and isolated, so an unresolved session simply sees
+ * nothing rather than someone else's account.
  */
 export function getActiveUserId(): string {
-  if (typeof document === "undefined") return PRIMARY_USER_ID
+  if (typeof document === "undefined") return UNKNOWN_USER_ID
   try {
     const match = document.cookie.match(new RegExp(`(?:^|; )${USER_COOKIE}=([^;]*)`))
     const id = match ? decodeURIComponent(match[1]) : ""
-    return id || PRIMARY_USER_ID
+    return id || UNKNOWN_USER_ID
   } catch {
-    return PRIMARY_USER_ID
+    return UNKNOWN_USER_ID
   }
 }
 

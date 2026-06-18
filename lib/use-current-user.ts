@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { getUserById, PRIMARY_USER_ID, USERS, type UserProfile } from "@/lib/users"
+import { getUserById, UNKNOWN_USER_ID, USERS, type UserProfile } from "@/lib/users"
 import { getActiveUserId } from "@/lib/user-scope"
 import { hydrateProfile } from "@/lib/profile-types"
 import { getMyProfile } from "@/app/actions/admin-users"
@@ -10,10 +10,11 @@ import { getMyProfile } from "@/app/actions/admin-users"
  * Returns the identity profile of the currently signed-in user.
  *
  * The active user id comes from the client-readable `mcc_user` cookie. Cookies
- * aren't available during SSR, so we always start from a deterministic value
- * (the primary user) and then resolve the real user after mount. This keeps the
- * server and first client render identical (no hydration mismatch) while still
- * showing the correct identity for whoever is actually logged in.
+ * aren't available during SSR, so we always start from a deterministic NEUTRAL
+ * placeholder (never a real account) and then resolve the real user after mount.
+ * This keeps the server and first client render identical (no hydration
+ * mismatch) while guaranteeing that no real user's identity is ever shown by
+ * default — only after we've positively resolved who is actually logged in.
  *
  * IMPORTANT: there are two kinds of accounts:
  *  - Static users (lib/users.ts) — resolved synchronously by id.
@@ -25,7 +26,7 @@ import { getMyProfile } from "@/app/actions/admin-users"
  *    identity.
  */
 export function useCurrentUser(): UserProfile {
-  const [user, setUser] = useState<UserProfile>(() => getUserById(PRIMARY_USER_ID))
+  const [user, setUser] = useState<UserProfile>(() => getUserById(UNKNOWN_USER_ID))
 
   useEffect(() => {
     let cancelled = false

@@ -4,7 +4,8 @@ import { cookies } from "next/headers"
 import { query } from "@/lib/db"
 import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
-import { getUserBySessionToken, getUserById, type UserProfile } from "@/lib/users"
+import { getUserBySessionToken, type UserProfile } from "@/lib/users"
+import { resolveAccountProfileById } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import type {
   GatewayAccount,
@@ -194,7 +195,7 @@ export async function approveGatewayAccountAdmin(
     }
     await writeAccount(userId, updated)
 
-    const target = getUserById(userId)
+    const target = await resolveAccountProfileById(userId)
     await logActivity({
       action: `Administrator approved gateway account ${requestId} for ${target.fullName}`,
       category: "Administration",
@@ -244,7 +245,7 @@ export async function rejectGatewayAccountAdmin(
     }
     await writeAccount(userId, updated)
 
-    const target = getUserById(userId)
+    const target = await resolveAccountProfileById(userId)
     await logActivity({
       action: `Administrator declined gateway account ${requestId} for ${target.fullName}`,
       category: "Administration",
@@ -352,7 +353,7 @@ export async function recordGatewayFundingAdmin(
     const updated: GatewayAccount = { ...account, funding: [event, ...account.funding] }
     await writeAccount(userId, updated)
 
-    const target = getUserById(userId)
+    const target = await resolveAccountProfileById(userId)
     await logActivity({
       action: `Administrator reconciled ${account.currency} ${amount.toLocaleString("en-US")} into ${target.fullName}'s Master Account via gateway account ${account.id}`,
       category: "Administration",
