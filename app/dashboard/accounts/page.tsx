@@ -26,6 +26,7 @@ import {
   Download,
   ChevronDown,
   Mail,
+  FileText,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useActivityLog } from "@/components/activity-tracker"
@@ -1099,6 +1100,18 @@ export default function BankAccountsPage() {
               </Tabs>
 
               <DialogFooter className="mt-6">
+                <Button
+                  variant="outline"
+                  className="border-zinc-700 gap-2"
+                  onClick={() => {
+                    const scope = selectedAccount?.id === "ACC-001" ? "master" : `cur:${selectedAccount?.currency}`
+                    setIsDetailDialogOpen(false)
+                    router.push(`/dashboard/statements?account=${encodeURIComponent(scope)}`)
+                  }}
+                >
+                  <FileText className="h-4 w-4" />
+                  View Statement
+                </Button>
                 <Button variant="outline" className="border-zinc-700 gap-2" onClick={handleExportAccount}>
                   <Download className="h-4 w-4" />
                   Export Details
