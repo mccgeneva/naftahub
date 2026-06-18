@@ -1,0 +1,1051 @@
+"use client"
+
+import { useEffect, useMemo, useState } from "react"
+import {
+  ShieldCheck,
+  Plus,
+  Pencil,
+  Trash2,
+  ArrowRightLeft,
+  FileText,
+  Paperclip,
+  History,
+  Download,
+  Check,
+  X,
+  Clock,
+  Loader2,
+  Landmark,
+} from "lucide-react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Badge } from "@/components/ui/badge"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { cn } from "@/lib/utils"
+import { toast } from "sonner"
+import { useActivityLog } from "@/components/activity-tracker"
+import { exportToCsv } from "@/lib/export-utils"
+import { USERS, getUserById } from "@/lib/users"
+import { ADMIN_PASSCODE } from "@/lib/admin-config"
+import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
+import {
+  getSkrRecordsForUser,
+  setSkrRecordsForUser,
+  getSkrRequestsForUser,
+  setSkrRequestsForUser,
+  generateSkrId,
+  generateSkrRef,
+  formatSkrValue,
+  SKR_STATUS_LABELS,
+  type SkrRecord,
+  type SkrStatus,
+  type SkrRequest,
+} from "@/lib/skr-store"
+
+const CURRENCIES = ["USD", "EUR", "GBP", "CHF", "AED", "SGD"]
+const STATUSES: SkrStatus[] = ["active", "pending", "matured", "transferred", "suspended", "cancelled"]
+
+const statusStyles: Record<SkrStatus, string> = {
+  active: "border-green-500/20 bg-green-500/10 text-green-500",
+  pending: "border-yellow-500/20 bg-yellow-500/10 text-yellow-500",
+  matured: "border-blue-500/20 bg-blue-500/10 text-blue-400",
+  transferred: "border-primary/20 bg-primary/10 text-primary",
+  suspended: "border-orange-500/20 bg-orange-500/10 text-orange-400",
+  cancelled: "border-muted bg-muted text-muted-foreground",
+}
+
+const todayISO = () => new Date().toISOString().slice(0, 10)
+const nowISO = () => new Date().toISOString()
+const fmtDate = (iso?: string) => {
+  if (!iso) return "—"
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB")
+}
+
+interface RecordForm {
+  custodian: string
+  beneficialOwner: string
+  faceValue: string
+  currency: string
+  issueDate: string
+  expiryDate: string
+  custodyAccountRef: string
+  status: SkrStatus
+  notes: string
+}
+
+const emptyForm = (ownerName = ""): RecordForm => ({
+  custodian: "",
+  beneficialOwner: ownerName,
+  faceValue: "",
+  currency: "USD",
+  issueDate: todayISO(),
+  expiryDate: "",
+  custodyAccountRef: "",
+  status: "active",
+  notes: "",
+})
+
+export function SkrManager() {
+  const logActivity = useActivityLog()
+
+  const [clients, setClients] = useState<SelectableClient[]>(
+    USERS.map((u) => ({
+      id: u.id,
+      fullName: u.fullName,
+      company: u.company,
+      email: u.email,
+      kind: "static" as const,
+    })),
+  )
+  const [targetUserId, setTargetUserId] = useState(USERS[0]?.id ?? "u1")
+  const [records, setRecords] = useState<SkrRecord[]>([])
+  const [requests, setRequests] = useState<SkrRequest[]>([])
+  const [loading, setLoading] = useState(false)
+
+  // Create / edit dialog
+  const [formOpen, setFormOpen] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
+  const [form, setForm] = useState<RecordForm>(emptyForm())
+
+  // Transaction / document / transfer dialogs
+  const [txTarget, setTxTarget] = useState<SkrRecord | null>(null)
+  const [txType, setTxType] = useState("Custody Update")
+  const [txDescription, setTxDescription] = useState("")
+  const [docTarget, setDocTarget] = useState<SkrRecord | null>(null)
+  const [docName, setDocName] = useState("")
+  const [docType, setDocType] = useState("SKR Certificate")
+  const [transferTarget, setTransferTarget] = useState<SkrRecord | null>(null)
+  const [transferToUserId, setTransferToUserId] = useState("")
+
+  const targetUser = clients.find((c) => c.id === targetUserId) ?? getUserById(targetUserId)
+
+  useEffect(() => {
+    let active = true
+    listSelectableClients(ADMIN_PASSCODE)
+      .then((list) => {
+        if (active && list.length) setClients(list)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
+
+  // Load the selected client's SKR data from their namespace.
+  const reload = (userId: string) => {
+    setLoading(true)
+    setRecords(getSkrRecordsForUser(userId))
+    setRequests(getSkrRequestsForUser(userId))
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    reload(targetUserId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetUserId])
+
+  const persistRecords = (userId: string, next: SkrRecord[]) => {
+    setSkrRecordsForUser(userId, next)
+    if (userId === targetUserId) setRecords(next)
+  }
+  const persistRequests = (next: SkrRequest[]) => {
+    setSkrRequestsForUser(targetUserId, next)
+    setRequests(next)
+  }
+
+  const totalByCurrency = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const r of records) map.set(r.currency, (map.get(r.currency) ?? 0) + r.faceValue)
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1])
+  }, [records])
+
+  // --- Create / Edit ---------------------------------------------------------
+
+  const openCreate = () => {
+    setEditId(null)
+    setForm(emptyForm(targetUser.fullName))
+    setFormOpen(true)
+  }
+
+  const openEdit = (record: SkrRecord) => {
+    setEditId(record.id)
+    setForm({
+      custodian: record.custodian,
+      beneficialOwner: record.beneficialOwner,
+      faceValue: String(record.faceValue),
+      currency: record.currency,
+      issueDate: record.issueDate?.slice(0, 10) || todayISO(),
+      expiryDate: record.expiryDate?.slice(0, 10) || "",
+      custodyAccountRef: record.custodyAccountRef,
+      status: record.status,
+      notes: record.notes ?? "",
+    })
+    setFormOpen(true)
+  }
+
+  const saveForm = () => {
+    const faceValue = Number(form.faceValue)
+    if (!form.custodian.trim()) {
+      toast.error("Enter the issuing bank or custodian.")
+      return
+    }
+    if (!form.beneficialOwner.trim()) {
+      toast.error("Enter the beneficial owner.")
+      return
+    }
+    if (!Number.isFinite(faceValue) || faceValue <= 0) {
+      toast.error("Enter a valid face value greater than zero.")
+      return
+    }
+
+    if (editId) {
+      const next = records.map((r) =>
+        r.id === editId
+          ? {
+              ...r,
+              custodian: form.custodian.trim(),
+              beneficialOwner: form.beneficialOwner.trim(),
+              faceValue,
+              currency: form.currency,
+              issueDate: form.issueDate,
+              expiryDate: form.expiryDate || undefined,
+              custodyAccountRef: form.custodyAccountRef.trim() || r.custodyAccountRef,
+              status: form.status,
+              notes: form.notes.trim() || undefined,
+              updatedAt: nowISO(),
+              transactions: [
+                {
+                  id: generateSkrRef("TX"),
+                  date: nowISO(),
+                  type: "Record Updated",
+                  description: `Administrator updated instrument details. Status: ${SKR_STATUS_LABELS[form.status]}.`,
+                  reference: generateSkrRef("ADM"),
+                },
+                ...r.transactions,
+              ],
+            }
+          : r,
+      )
+      persistRecords(targetUserId, next)
+      toast.success("SKR record updated", { description: `${editId} has been updated.` })
+      logActivity({
+        action: `Administrator updated SKR ${editId} for ${targetUser.fullName}`,
+        category: "Administration",
+        details: {
+          summary: `Administrator updated safe keeping receipt ${editId} on the account of ${targetUser.fullName} (${targetUser.company}). Face value ${formatSkrValue(faceValue, form.currency)}, status ${SKR_STATUS_LABELS[form.status]}.`,
+          referenceId: editId,
+          targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+          custodian: form.custodian.trim(),
+          faceValue: formatSkrValue(faceValue, form.currency),
+          status: SKR_STATUS_LABELS[form.status],
+        },
+      })
+    } else {
+      const id = generateSkrId()
+      const custodyRef = form.custodyAccountRef.trim() || generateSkrRef("CUST")
+      const record: SkrRecord = {
+        id,
+        custodian: form.custodian.trim(),
+        beneficialOwner: form.beneficialOwner.trim(),
+        faceValue,
+        currency: form.currency,
+        issueDate: form.issueDate,
+        expiryDate: form.expiryDate || undefined,
+        custodyAccountRef: custodyRef,
+        status: form.status,
+        notes: form.notes.trim() || undefined,
+        documents: [],
+        transactions: [
+          {
+            id: generateSkrRef("TX"),
+            date: nowISO(),
+            type: "Issuance",
+            description: `SKR created and assigned to ${targetUser.fullName} by administrator. Custodian: ${form.custodian.trim()}.`,
+            reference: generateSkrRef("ADM"),
+          },
+        ],
+        assignedUserId: targetUserId,
+        createdAt: nowISO(),
+        updatedAt: nowISO(),
+      }
+      persistRecords(targetUserId, [record, ...records])
+      toast.success("SKR record created", {
+        description: `${id} assigned to ${targetUser.fullName}.`,
+      })
+      logActivity({
+        action: `Administrator created SKR ${id} for ${targetUser.fullName}`,
+        category: "Administration",
+        details: {
+          summary: `Administrator created and assigned safe keeping receipt ${id} to the account of ${targetUser.fullName} (${targetUser.company}). Issuing bank/custodian ${form.custodian.trim()}, face value ${formatSkrValue(faceValue, form.currency)}, custody account ${custodyRef}, status ${SKR_STATUS_LABELS[form.status]}.`,
+          referenceId: id,
+          targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+          custodian: form.custodian.trim(),
+          beneficialOwner: form.beneficialOwner.trim(),
+          faceValue: formatSkrValue(faceValue, form.currency),
+          custodyAccountRef: custodyRef,
+          status: SKR_STATUS_LABELS[form.status],
+        },
+      })
+    }
+    setFormOpen(false)
+  }
+
+  const deleteRecord = (record: SkrRecord) => {
+    const next = records.filter((r) => r.id !== record.id)
+    persistRecords(targetUserId, next)
+    toast.success("SKR record deleted", { description: `${record.id} has been removed.` })
+    logActivity({
+      action: `Administrator deleted SKR ${record.id} from ${targetUser.fullName}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator permanently deleted safe keeping receipt ${record.id} (${formatSkrValue(record.faceValue, record.currency)}, ${record.custodian}) from the account of ${targetUser.fullName} (${targetUser.company}).`,
+        referenceId: record.id,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        decision: "Deleted",
+      },
+    })
+  }
+
+  // --- Status quick-change ---------------------------------------------------
+
+  const changeStatus = (record: SkrRecord, status: SkrStatus) => {
+    if (status === record.status) return
+    const next = records.map((r) =>
+      r.id === record.id
+        ? {
+            ...r,
+            status,
+            updatedAt: nowISO(),
+            transactions: [
+              {
+                id: generateSkrRef("TX"),
+                date: nowISO(),
+                type: "Status Update",
+                description: `Status changed from ${SKR_STATUS_LABELS[r.status]} to ${SKR_STATUS_LABELS[status]} by administrator.`,
+                reference: generateSkrRef("ADM"),
+              },
+              ...r.transactions,
+            ],
+          }
+        : r,
+    )
+    persistRecords(targetUserId, next)
+    toast.success("Status updated", {
+      description: `${record.id} is now ${SKR_STATUS_LABELS[status]}.`,
+    })
+    logActivity({
+      action: `Administrator set SKR ${record.id} to ${SKR_STATUS_LABELS[status]}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator changed the status of safe keeping receipt ${record.id} (${targetUser.fullName}) from ${SKR_STATUS_LABELS[record.status]} to ${SKR_STATUS_LABELS[status]}.`,
+        referenceId: record.id,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        previousStatus: SKR_STATUS_LABELS[record.status],
+        newStatus: SKR_STATUS_LABELS[status],
+      },
+    })
+  }
+
+  // --- Add transaction -------------------------------------------------------
+
+  const submitTransaction = () => {
+    if (!txTarget) return
+    if (!txDescription.trim()) {
+      toast.error("Enter a transaction description.")
+      return
+    }
+    const ref = generateSkrRef("TX")
+    const next = records.map((r) =>
+      r.id === txTarget.id
+        ? {
+            ...r,
+            updatedAt: nowISO(),
+            transactions: [
+              {
+                id: ref,
+                date: nowISO(),
+                type: txType,
+                description: txDescription.trim(),
+                reference: generateSkrRef("REF"),
+              },
+              ...r.transactions,
+            ],
+          }
+        : r,
+    )
+    persistRecords(targetUserId, next)
+    toast.success("Transaction recorded", { description: `Added to ${txTarget.id}.` })
+    logActivity({
+      action: `Administrator added a ${txType} transaction to SKR ${txTarget.id}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator recorded a "${txType}" transaction on safe keeping receipt ${txTarget.id} (${targetUser.fullName}): ${txDescription.trim()}`,
+        referenceId: txTarget.id,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        transactionType: txType,
+      },
+    })
+    setTxTarget(null)
+    setTxDescription("")
+    setTxType("Custody Update")
+  }
+
+  // --- Add document ----------------------------------------------------------
+
+  const submitDocument = () => {
+    if (!docTarget) return
+    if (!docName.trim()) {
+      toast.error("Enter a document name.")
+      return
+    }
+    const next = records.map((r) =>
+      r.id === docTarget.id
+        ? {
+            ...r,
+            updatedAt: nowISO(),
+            documents: [
+              ...r.documents,
+              {
+                id: generateSkrRef("DOC"),
+                name: docName.trim(),
+                docType,
+                uploadedAt: nowISO(),
+              },
+            ],
+            transactions: [
+              {
+                id: generateSkrRef("TX"),
+                date: nowISO(),
+                type: "Document Added",
+                description: `Supporting document "${docName.trim()}" (${docType}) attached by administrator.`,
+                reference: generateSkrRef("ADM"),
+              },
+              ...r.transactions,
+            ],
+          }
+        : r,
+    )
+    persistRecords(targetUserId, next)
+    toast.success("Document attached", { description: `${docName.trim()} added to ${docTarget.id}.` })
+    logActivity({
+      action: `Administrator attached document to SKR ${docTarget.id}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator attached supporting document "${docName.trim()}" (${docType}) to safe keeping receipt ${docTarget.id} (${targetUser.fullName}).`,
+        referenceId: docTarget.id,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        document: docName.trim(),
+        documentType: docType,
+      },
+    })
+    setDocTarget(null)
+    setDocName("")
+    setDocType("SKR Certificate")
+  }
+
+  // --- Transfer between internal accounts ------------------------------------
+
+  const submitTransfer = () => {
+    if (!transferTarget) return
+    if (!transferToUserId || transferToUserId === targetUserId) {
+      toast.error("Select a different destination account.")
+      return
+    }
+    const destUser = clients.find((c) => c.id === transferToUserId) ?? getUserById(transferToUserId)
+
+    // Remove from current owner.
+    const remaining = records.filter((r) => r.id !== transferTarget.id)
+    persistRecords(targetUserId, remaining)
+
+    // Append to destination owner's namespace with a transfer transaction.
+    const destRecords = getSkrRecordsForUser(transferToUserId)
+    const moved: SkrRecord = {
+      ...transferTarget,
+      assignedUserId: transferToUserId,
+      beneficialOwner: destUser.fullName,
+      status: "active",
+      updatedAt: nowISO(),
+      transactions: [
+        {
+          id: generateSkrRef("TX"),
+          date: nowISO(),
+          type: "Transfer",
+          description: `Transferred from ${targetUser.fullName} to ${destUser.fullName} by administrator.`,
+          reference: generateSkrRef("TRF"),
+        },
+        ...transferTarget.transactions,
+      ],
+    }
+    setSkrRecordsForUser(transferToUserId, [moved, ...destRecords])
+
+    toast.success("SKR transferred", {
+      description: `${transferTarget.id} moved to ${destUser.fullName}.`,
+    })
+    logActivity({
+      action: `Administrator transferred SKR ${transferTarget.id} to ${destUser.fullName}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator transferred safe keeping receipt ${transferTarget.id} (${formatSkrValue(transferTarget.faceValue, transferTarget.currency)}) from ${targetUser.fullName} (${targetUser.company}) to ${destUser.fullName} (${destUser.company}).`,
+        referenceId: transferTarget.id,
+        from: `${targetUser.fullName} — ${targetUser.email}`,
+        to: `${destUser.fullName} — ${destUser.email}`,
+        faceValue: formatSkrValue(transferTarget.faceValue, transferTarget.currency),
+      },
+    })
+    setTransferTarget(null)
+    setTransferToUserId("")
+  }
+
+  // --- Client requests -------------------------------------------------------
+
+  const decideRequest = (req: SkrRequest, status: "approved" | "rejected") => {
+    const next = requests.map((r) =>
+      r.id === req.id
+        ? {
+            ...r,
+            status,
+            decidedAt: nowISO(),
+            decisionNote:
+              status === "approved"
+                ? "Actioned by the custody desk."
+                : "Declined by the custody desk.",
+          }
+        : r,
+    )
+    persistRequests(next)
+    toast.success(`Request ${status}`, { description: `${req.type} request ${req.id} ${status}.` })
+    logActivity({
+      action: `Administrator ${status} SKR ${req.type} request ${req.id}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator ${status} the ${req.type} request ${req.id} from ${targetUser.fullName}${req.recordId ? ` concerning ${req.recordId}` : ""}. Message: ${req.message}`,
+        referenceId: req.id,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        decision: status === "approved" ? "Approved" : "Rejected",
+      },
+    })
+  }
+
+  // --- Reports / audit -------------------------------------------------------
+
+  const exportReport = () => {
+    if (records.length === 0) {
+      toast.error("No records to export for this client.")
+      return
+    }
+    exportToCsv(
+      `SKR-Report-${targetUser.fullName.replace(/\s+/g, "-")}`,
+      records.map((r) => ({
+        reference: r.id,
+        custodian: r.custodian,
+        beneficialOwner: r.beneficialOwner,
+        faceValue: r.faceValue,
+        currency: r.currency,
+        issueDate: fmtDate(r.issueDate),
+        expiryDate: fmtDate(r.expiryDate),
+        custodyAccountRef: r.custodyAccountRef,
+        status: SKR_STATUS_LABELS[r.status],
+        transactions: r.transactions.length,
+        documents: r.documents.length,
+      })),
+      [
+        { key: "reference", label: "SKR Reference" },
+        { key: "custodian", label: "Issuing Bank / Custodian" },
+        { key: "beneficialOwner", label: "Beneficial Owner" },
+        { key: "faceValue", label: "Face Value" },
+        { key: "currency", label: "Currency" },
+        { key: "issueDate", label: "Issue Date" },
+        { key: "expiryDate", label: "Expiry Date" },
+        { key: "custodyAccountRef", label: "Custody Account Ref" },
+        { key: "status", label: "Status" },
+        { key: "transactions", label: "Transactions" },
+        { key: "documents", label: "Documents" },
+      ],
+    )
+    toast.success("Report generated", {
+      description: `SKR portfolio report for ${targetUser.fullName} exported.`,
+    })
+    logActivity({
+      action: `Administrator generated an SKR portfolio report for ${targetUser.fullName}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator generated and exported the SKR portfolio report (${records.length} records) for ${targetUser.fullName} (${targetUser.company}).`,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        recordCount: String(records.length),
+      },
+    })
+  }
+
+  const pendingRequests = requests.filter((r) => r.status === "pending")
+
+  return (
+    <Card id="section-skr" className="bg-card border-border">
+      <CardHeader>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
+              <ShieldCheck className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <CardTitle className="text-lg font-semibold">SKR Trading Platform</CardTitle>
+              <p className="text-sm text-muted-foreground text-pretty">
+                Create, assign, and administer Safe Keeping Receipts held under custody. Customers
+                have read-only access to their own records.
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={exportReport}>
+              <Download className="mr-1.5 h-4 w-4" />
+              Report
+            </Button>
+            <Button size="sm" onClick={openCreate}>
+              <Plus className="mr-1.5 h-4 w-4" />
+              New SKR
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {/* Client selector */}
+        <div className="space-y-2">
+          <Label>Client account</Label>
+          <Select value={targetUserId} onValueChange={setTargetUserId}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select a client" />
+            </SelectTrigger>
+            <SelectContent>
+              {clients.map((u) => (
+                <SelectItem key={u.id} value={u.id}>
+                  {u.fullName} — {u.company} ({u.email})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {loading && (
+            <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> Loading portfolio…
+            </p>
+          )}
+        </div>
+
+        {/* Portfolio summary */}
+        <div className="rounded-lg border border-border bg-secondary/40 p-3">
+          <p className="mb-2 text-xs font-medium text-muted-foreground">
+            Portfolio — {targetUser.fullName} ({records.length} records)
+          </p>
+          {totalByCurrency.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No SKR records for this client.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {totalByCurrency.map(([cur, val]) => (
+                <Badge key={cur} variant="outline" className="text-sm font-semibold">
+                  {formatSkrValue(val, cur)}
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Pending client requests */}
+        {pendingRequests.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-foreground">
+              Pending client requests ({pendingRequests.length})
+            </p>
+            {pendingRequests.map((req) => (
+              <div
+                key={req.id}
+                className="flex flex-col gap-2 rounded-lg border border-yellow-500/20 bg-yellow-500/5 p-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="space-y-0.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className="border-yellow-500/20 bg-yellow-500/10 text-[10px] text-yellow-500">
+                      <Clock className="mr-1 h-3 w-3" />
+                      {req.type}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">{req.id}</span>
+                    {req.recordId && (
+                      <span className="text-xs text-muted-foreground">· {req.recordId}</span>
+                    )}
+                  </div>
+                  <p className="text-sm text-foreground text-pretty">{req.message}</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => decideRequest(req, "approved")}>
+                    <Check className="mr-1 h-4 w-4" />
+                    Approve
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => decideRequest(req, "rejected")}
+                  >
+                    <X className="mr-1 h-4 w-4" />
+                    Reject
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Records */}
+        <div className="space-y-3">
+          {records.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              No SKR records. Use “New SKR” to create and assign one to this client.
+            </p>
+          ) : (
+            records.map((record) => (
+              <div key={record.id} className="rounded-lg border border-border bg-secondary/30 p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-foreground">{record.id}</span>
+                      <Badge variant="outline" className={cn("text-[10px]", statusStyles[record.status])}>
+                        {SKR_STATUS_LABELS[record.status]}
+                      </Badge>
+                    </div>
+                    <div className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+                      <div className="flex items-center gap-2">
+                        <Landmark className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-foreground">{record.custodian}</span>
+                      </div>
+                      <div className="text-foreground">
+                        {formatSkrValue(record.faceValue, record.currency)}
+                      </div>
+                      <div className="text-muted-foreground">Owner: {record.beneficialOwner}</div>
+                      <div className="text-muted-foreground">A/c: {record.custodyAccountRef}</div>
+                      <div className="text-muted-foreground">Issued: {fmtDate(record.issueDate)}</div>
+                      <div className="text-muted-foreground">Expiry: {fmtDate(record.expiryDate)}</div>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      {record.transactions.length} transactions · {record.documents.length} documents
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-2 lg:w-52 lg:shrink-0">
+                    <Select
+                      value={record.status}
+                      onValueChange={(v) => changeStatus(record, v as SkrStatus)}
+                    >
+                      <SelectTrigger className="h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {STATUSES.map((s) => (
+                          <SelectItem key={s} value={s}>
+                            {SKR_STATUS_LABELS[s]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button variant="outline" size="sm" onClick={() => openEdit(record)}>
+                        <Pencil className="mr-1 h-3.5 w-3.5" />
+                        Edit
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setTxTarget(record)}>
+                        <History className="mr-1 h-3.5 w-3.5" />
+                        Txn
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setDocTarget(record)}>
+                        <Paperclip className="mr-1 h-3.5 w-3.5" />
+                        Doc
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setTransferToUserId("")
+                          setTransferTarget(record)
+                        }}
+                      >
+                        <ArrowRightLeft className="mr-1 h-3.5 w-3.5" />
+                        Move
+                      </Button>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      onClick={() => deleteRecord(record)}
+                    >
+                      <Trash2 className="mr-1 h-3.5 w-3.5" />
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </CardContent>
+
+      {/* Create / Edit dialog */}
+      <Dialog open={formOpen} onOpenChange={setFormOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{editId ? `Edit ${editId}` : "Create SKR Record"}</DialogTitle>
+            <DialogDescription>
+              {editId
+                ? "Update the safe keeping receipt details."
+                : `Create and assign a new safe keeping receipt to ${targetUser.fullName}.`}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="skr-custodian">Issuing bank / custodian</Label>
+              <Input
+                id="skr-custodian"
+                value={form.custodian}
+                onChange={(e) => setForm((f) => ({ ...f, custodian: e.target.value }))}
+                placeholder="e.g. Barclays Bank PLC, London"
+              />
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="skr-owner">Beneficial owner</Label>
+              <Input
+                id="skr-owner"
+                value={form.beneficialOwner}
+                onChange={(e) => setForm((f) => ({ ...f, beneficialOwner: e.target.value }))}
+                placeholder="Legal name of the owner"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="skr-face">Face value</Label>
+              <Input
+                id="skr-face"
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                value={form.faceValue}
+                onChange={(e) => setForm((f) => ({ ...f, faceValue: e.target.value }))}
+                placeholder="0.00"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Currency</Label>
+              <Select value={form.currency} onValueChange={(v) => setForm((f) => ({ ...f, currency: v }))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CURRENCIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="skr-issue">Date of issuance</Label>
+              <Input
+                id="skr-issue"
+                type="date"
+                value={form.issueDate}
+                onChange={(e) => setForm((f) => ({ ...f, issueDate: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="skr-expiry">Expiry date (optional)</Label>
+              <Input
+                id="skr-expiry"
+                type="date"
+                value={form.expiryDate}
+                onChange={(e) => setForm((f) => ({ ...f, expiryDate: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="skr-acct">Custody account reference (optional)</Label>
+              <Input
+                id="skr-acct"
+                value={form.custodyAccountRef}
+                onChange={(e) => setForm((f) => ({ ...f, custodyAccountRef: e.target.value }))}
+                placeholder="Auto-generated if left blank"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Status</Label>
+              <Select value={form.status} onValueChange={(v) => setForm((f) => ({ ...f, status: v as SkrStatus }))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {STATUSES.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {SKR_STATUS_LABELS[s]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="skr-notes">Custody notes (optional)</Label>
+              <Textarea
+                id="skr-notes"
+                value={form.notes}
+                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                rows={2}
+                placeholder="Any custody or instrument notes visible to the client."
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFormOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={saveForm}>{editId ? "Save changes" : "Create & assign"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add transaction dialog */}
+      <Dialog open={!!txTarget} onOpenChange={(open) => !open && setTxTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add transaction</DialogTitle>
+            <DialogDescription>
+              Record a transaction on {txTarget?.id}. It will appear in the client&apos;s history.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Type</Label>
+              <Select value={txType} onValueChange={setTxType}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["Custody Update", "Verification", "Valuation", "Collateral", "Amendment", "Note"].map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {t}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="skr-tx-desc">Description</Label>
+              <Textarea
+                id="skr-tx-desc"
+                value={txDescription}
+                onChange={(e) => setTxDescription(e.target.value)}
+                rows={3}
+                placeholder="Describe the transaction."
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTxTarget(null)}>
+              Cancel
+            </Button>
+            <Button onClick={submitTransaction}>Record transaction</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add document dialog */}
+      <Dialog open={!!docTarget} onOpenChange={(open) => !open && setDocTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Attach document</DialogTitle>
+            <DialogDescription>
+              Register a supporting document reference on {docTarget?.id}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="skr-doc-name">Document name</Label>
+              <Input
+                id="skr-doc-name"
+                value={docName}
+                onChange={(e) => setDocName(e.target.value)}
+                placeholder="e.g. SKR-Certificate-Barclays.pdf"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Document type</Label>
+              <Select value={docType} onValueChange={setDocType}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["SKR Certificate", "Custodian Confirmation", "Authentication", "Amendment", "Other"].map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {t}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDocTarget(null)}>
+              Cancel
+            </Button>
+            <Button onClick={submitDocument}>Attach document</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Transfer dialog */}
+      <Dialog open={!!transferTarget} onOpenChange={(open) => !open && setTransferTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Transfer SKR</DialogTitle>
+            <DialogDescription>
+              Transfer {transferTarget?.id} to another internal client account. The record moves to
+              the destination portfolio.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Destination account</Label>
+            <Select value={transferToUserId} onValueChange={setTransferToUserId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select destination client" />
+              </SelectTrigger>
+              <SelectContent>
+                {clients
+                  .filter((c) => c.id !== targetUserId)
+                  .map((u) => (
+                    <SelectItem key={u.id} value={u.id}>
+                      {u.fullName} — {u.company}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTransferTarget(null)}>
+              Cancel
+            </Button>
+            <Button onClick={submitTransfer}>Transfer</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  )
+}

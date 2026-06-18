@@ -80,6 +80,7 @@ const navGroups: NavGroup[] = [
       { title: "NAFTAhub Trading", href: "/dashboard/trading", icon: Cpu, badge: "NQAi" },
       { title: "SWIFT Services", href: "/dashboard/swift", icon: Globe },
       { title: "Bank Instruments", href: "/dashboard/instruments", icon: FileText, badge: "New" },
+      { title: "SKR Trading", href: "/dashboard/skr", icon: ShieldCheck, badge: "SKR" },
       { title: "Institutional Desk", href: "/dashboard/institutional", icon: Banknote, badge: "DOF" },
       { title: "Securities Settlement", href: "/dashboard/dtc", icon: Layers, badge: "DTC" },
       { title: "Euroclear Settlement", href: "/dashboard/euroclear", icon: Landmark, badge: "ICSD" },

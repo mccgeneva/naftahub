@@ -90,6 +90,7 @@ import { UserManager } from "@/components/admin/user-manager"
 import { BeneficiaryManager } from "@/components/admin/beneficiary-manager"
 import { adminListPendingKyc } from "@/app/actions/beneficiaries"
 import { BalanceManager } from "@/components/admin/balance-manager"
+import { SkrManager } from "@/components/admin/skr-manager"
 import { toast } from "sonner"
 
 const MASTER_ACCOUNT_CURRENCY = "EUR"
@@ -1586,6 +1587,7 @@ export default function AdminPage() {
     { id: "section-dtc", label: "DTC Settlement", count: pendingDTC.length, icon: Layers },
     { id: "section-euroclear", label: "Euroclear Settlement", count: pendingEuroclear.length, icon: Globe },
     { id: "section-commodity", label: "Commodity Deals", count: pendingDeals.length, icon: Ship },
+    { id: "section-skr", label: "SKR Trading", count: 0, icon: ShieldCheck },
   ] as const
 
   const totalPendingDecisions = pendingCategories.reduce((sum, c) => sum + c.count, 0)
@@ -4036,6 +4038,9 @@ export default function AdminPage() {
 
       {/* Treasury Services: security deposits & approved 1:10 leverage */}
       <TreasuryManager />
+
+      {/* SKR Trading Platform: create, assign, transfer & administer safe keeping receipts */}
+      <SkrManager />
 
       {/* Danger zone: reset account data */}
       <Card className="border-destructive/30 bg-destructive/5">
