@@ -73,7 +73,7 @@ export function DashboardHeader() {
           <SheetDescription className="sr-only">
             Browse banking, trading, and platform sections.
           </SheetDescription>
-          <MobileSidebar onNavigate={() => setMobileMenuOpen(false)} />
+          <MobileSidebar />
         </SheetContent>
       </Sheet>
 

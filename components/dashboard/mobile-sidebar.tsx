@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
@@ -99,22 +99,8 @@ const navGroups: NavGroup[] = [
   },
 ]
 
-export function MobileSidebar({ onNavigate }: { onNavigate?: () => void }) {
+export function MobileSidebar() {
   const pathname = usePathname()
-
-  // Safety net: whenever the route changes, close the mobile menu. Without this the
-  // Sheet (and its full-screen overlay) can stay mounted after navigating, leaving the
-  // page visible but untappable. We skip the very first render so the menu doesn't
-  // close itself the instant it opens.
-  const didMount = useRef(false)
-  useEffect(() => {
-    if (!didMount.current) {
-      didMount.current = true
-      return
-    }
-    onNavigate?.()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname])
 
   // Open every group by default so all destinations (Send Money, Internal Transfers,
   // Treasury, Fiduciary, etc.) are immediately visible. Users can still collapse any group.
@@ -133,17 +119,21 @@ export function MobileSidebar({ onNavigate }: { onNavigate?: () => void }) {
     <div className="flex h-full flex-col bg-sidebar">
       {/* Logo */}
       <div className="flex h-16 shrink-0 items-center border-b border-sidebar-border px-4">
-        <Link href="/dashboard" className="flex items-center gap-2" onClick={onNavigate}>
-          <img
-            src="/images/mcc-logo.png"
-            alt="MCC Capital logo"
-            className="h-9 w-9 rounded-full object-cover"
-          />
-          <div className="flex flex-col">
-            <span className="text-sm font-semibold text-sidebar-foreground">MCC Capital</span>
-            <span className="text-[10px] text-muted-foreground">Swiss Banking</span>
-          </div>
-        </Link>
+        {/* SheetClose closes the mobile menu when the logo is tapped so the overlay
+            never lingers and blocks the page after navigating. */}
+        <SheetClose asChild>
+          <Link href="/dashboard" className="flex items-center gap-2">
+            <img
+              src="/images/mcc-logo.png"
+              alt="MCC Capital logo"
+              className="h-9 w-9 rounded-full object-cover"
+            />
+            <div className="flex flex-col">
+              <span className="text-sm font-semibold text-sidebar-foreground">MCC Capital</span>
+              <span className="text-[10px] text-muted-foreground">Swiss Banking</span>
+            </div>
+          </Link>
+        </SheetClose>
       </div>
 
       {/* Scrollable dropdown navigation */}
@@ -176,28 +166,32 @@ export function MobileSidebar({ onNavigate }: { onNavigate?: () => void }) {
                 <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
                   <div className="space-y-1 pt-1">
                     {group.items.map((item) => (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        onClick={onNavigate}
-                        className={cn(
-                          "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
-                          pathname === item.href
-                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                            : "text-sidebar-foreground hover:bg-sidebar-accent/50",
-                        )}
-                      >
-                        <item.icon className="h-4 w-4 shrink-0" />
-                        <span className="flex-1">{item.title}</span>
-                        {item.badge && (
-                          <Badge
-                            variant="secondary"
-                            className="h-5 px-1.5 text-[10px] bg-primary/20 text-primary"
-                          >
-                            {item.badge}
-                          </Badge>
-                        )}
-                      </Link>
+                      // Each destination is wrapped in SheetClose so tapping it both
+                      // navigates and dismisses the mobile menu + its overlay. Without
+                      // this the sheet overlay can stay mounted and make the page
+                      // appear "stuck" / unclickable after navigating.
+                      <SheetClose asChild key={item.href}>
+                        <Link
+                          href={item.href}
+                          className={cn(
+                            "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
+                            pathname === item.href
+                              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                              : "text-sidebar-foreground hover:bg-sidebar-accent/50",
+                          )}
+                        >
+                          <item.icon className="h-4 w-4 shrink-0" />
+                          <span className="flex-1">{item.title}</span>
+                          {item.badge && (
+                            <Badge
+                              variant="secondary"
+                              className="h-5 px-1.5 text-[10px] bg-primary/20 text-primary"
+                            >
+                              {item.badge}
+                            </Badge>
+                          )}
+                        </Link>
+                      </SheetClose>
                     ))}
                   </div>
                 </CollapsibleContent>
