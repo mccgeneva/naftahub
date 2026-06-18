@@ -21,6 +21,17 @@ export interface PartnerBank {
   currencies: string[]
   /** Geographic grouping for the Partner Banks directory. */
   region: BankRegion
+  /**
+   * Real domestic clearing identifier used to seed the bank-code portion of a
+   * generated IBAN so it resolves to a genuine institution. Length/meaning is
+   * country-specific: GB/IE 6-digit sort code; DE 8-digit BLZ; FR code
+   * banque(5)+guichet(5); ES entidad(4)+oficina(4); IT ABI(5)+CAB(5); PT
+   * bank(4)+branch(4); CH/AT clearing(5); BE/AE/LU bank code(3); SA bank
+   * code(2); FI bank/office(6); SE clearing(3); NO/DK bank number(4). Omitted
+   * for countries whose IBAN bank code is the BIC stem (NL, QA) or that have no
+   * IBAN (US, CA, …).
+   */
+  nationalBankCode?: string
 }
 
 export type BankRegion = "Europe" | "Americas" | "Asia-Pacific" | "Middle East & Africa"
@@ -32,52 +43,52 @@ export const BANK_REGIONS: BankRegion[] = ["Europe", "Americas", "Asia-Pacific",
 // jurisdiction (IBAN countries get a generated IBAN, others domestic coords).
 export const PARTNER_BANKS: PartnerBank[] = [
   // --- United Kingdom & Ireland ---
-  { key: "hsbc", name: "HSBC", country: "United Kingdom", countryCode: "GB", bic: "HBUKGB4B", currencies: ["GBP", "USD", "EUR", "HKD", "SGD"], region: "Europe" },
-  { key: "barclays", name: "Barclays", country: "United Kingdom", countryCode: "GB", bic: "BARCGB22", currencies: ["GBP", "EUR", "USD"], region: "Europe" },
-  { key: "natwest", name: "NatWest", country: "United Kingdom", countryCode: "GB", bic: "NWBKGB2L", currencies: ["GBP", "EUR"], region: "Europe" },
-  { key: "lloyds", name: "Lloyds Bank", country: "United Kingdom", countryCode: "GB", bic: "LOYDGB2L", currencies: ["GBP", "EUR", "USD"], region: "Europe" },
-  { key: "standardchartered", name: "Standard Chartered", country: "United Kingdom", countryCode: "GB", bic: "SCBLGB2L", currencies: ["GBP", "USD", "EUR", "HKD", "SGD", "AED"], region: "Europe" },
-  { key: "santanderuk", name: "Santander UK", country: "United Kingdom", countryCode: "GB", bic: "ABBYGB2L", currencies: ["GBP", "EUR"], region: "Europe" },
-  { key: "aib", name: "Allied Irish Banks", country: "Ireland", countryCode: "IE", bic: "AIBKIE2D", currencies: ["EUR", "GBP", "USD"], region: "Europe" },
-  { key: "bankofireland", name: "Bank of Ireland", country: "Ireland", countryCode: "IE", bic: "BOFIIE2D", currencies: ["EUR", "GBP", "USD"], region: "Europe" },
+  { key: "hsbc", name: "HSBC", country: "United Kingdom", countryCode: "GB", bic: "HBUKGB4B", currencies: ["GBP", "USD", "EUR", "HKD", "SGD"], region: "Europe", nationalBankCode: "400003" },
+  { key: "barclays", name: "Barclays", country: "United Kingdom", countryCode: "GB", bic: "BARCGB22", currencies: ["GBP", "EUR", "USD"], region: "Europe", nationalBankCode: "200050" },
+  { key: "natwest", name: "NatWest", country: "United Kingdom", countryCode: "GB", bic: "NWBKGB2L", currencies: ["GBP", "EUR"], region: "Europe", nationalBankCode: "600001" },
+  { key: "lloyds", name: "Lloyds Bank", country: "United Kingdom", countryCode: "GB", bic: "LOYDGB2L", currencies: ["GBP", "EUR", "USD"], region: "Europe", nationalBankCode: "309634" },
+  { key: "standardchartered", name: "Standard Chartered", country: "United Kingdom", countryCode: "GB", bic: "SCBLGB2L", currencies: ["GBP", "USD", "EUR", "HKD", "SGD", "AED"], region: "Europe", nationalBankCode: "609104" },
+  { key: "santanderuk", name: "Santander UK", country: "United Kingdom", countryCode: "GB", bic: "ABBYGB2L", currencies: ["GBP", "EUR"], region: "Europe", nationalBankCode: "090029" },
+  { key: "aib", name: "Allied Irish Banks", country: "Ireland", countryCode: "IE", bic: "AIBKIE2D", currencies: ["EUR", "GBP", "USD"], region: "Europe", nationalBankCode: "931152" },
+  { key: "bankofireland", name: "Bank of Ireland", country: "Ireland", countryCode: "IE", bic: "BOFIIE2D", currencies: ["EUR", "GBP", "USD"], region: "Europe", nationalBankCode: "900017" },
 
   // --- Eurozone & wider Europe ---
-  { key: "bnpparibas", name: "BNP Paribas", country: "France", countryCode: "FR", bic: "BNPAFRPP", currencies: ["EUR", "USD", "CHF"], region: "Europe" },
-  { key: "creditagricole", name: "Crédit Agricole", country: "France", countryCode: "FR", bic: "AGRIFRPP", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "societegenerale", name: "Société Générale", country: "France", countryCode: "FR", bic: "SOGEFRPP", currencies: ["EUR", "USD", "GBP"], region: "Europe" },
-  { key: "bpce", name: "Groupe BPCE", country: "France", countryCode: "FR", bic: "CCBPFRPP", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "creditmutuel", name: "Crédit Mutuel", country: "France", countryCode: "FR", bic: "CMCIFRPP", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "deutschebank", name: "Deutsche Bank", country: "Germany", countryCode: "DE", bic: "DEUTDEFF", currencies: ["EUR", "USD", "GBP", "CHF"], region: "Europe" },
-  { key: "commerzbank", name: "Commerzbank", country: "Germany", countryCode: "DE", bic: "COBADEFF", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "dzbank", name: "DZ Bank", country: "Germany", countryCode: "DE", bic: "GENODEFF", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "kfw", name: "KfW", country: "Germany", countryCode: "DE", bic: "KFWIDEFF", currencies: ["EUR"], region: "Europe" },
+  { key: "bnpparibas", name: "BNP Paribas", country: "France", countryCode: "FR", bic: "BNPAFRPP", currencies: ["EUR", "USD", "CHF"], region: "Europe", nationalBankCode: "3000400001" },
+  { key: "creditagricole", name: "Crédit Agricole", country: "France", countryCode: "FR", bic: "AGRIFRPP", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "1900600001" },
+  { key: "societegenerale", name: "Société Générale", country: "France", countryCode: "FR", bic: "SOGEFRPP", currencies: ["EUR", "USD", "GBP"], region: "Europe", nationalBankCode: "3000300001" },
+  { key: "bpce", name: "Groupe BPCE", country: "France", countryCode: "FR", bic: "CCBPFRPP", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "1090700001" },
+  { key: "creditmutuel", name: "Crédit Mutuel", country: "France", countryCode: "FR", bic: "CMCIFRPP", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "1027800001" },
+  { key: "deutschebank", name: "Deutsche Bank", country: "Germany", countryCode: "DE", bic: "DEUTDEFF", currencies: ["EUR", "USD", "GBP", "CHF"], region: "Europe", nationalBankCode: "50070010" },
+  { key: "commerzbank", name: "Commerzbank", country: "Germany", countryCode: "DE", bic: "COBADEFF", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "50040000" },
+  { key: "dzbank", name: "DZ Bank", country: "Germany", countryCode: "DE", bic: "GENODEFF", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "50060400" },
+  { key: "kfw", name: "KfW", country: "Germany", countryCode: "DE", bic: "KFWIDEFF", currencies: ["EUR"], region: "Europe", nationalBankCode: "50020400" },
   { key: "ing", name: "ING Group", country: "Netherlands", countryCode: "NL", bic: "INGBNL2A", currencies: ["EUR", "USD", "GBP"], region: "Europe" },
   { key: "rabobank", name: "Rabobank", country: "Netherlands", countryCode: "NL", bic: "RABONL2U", currencies: ["EUR", "USD"], region: "Europe" },
   { key: "abnamro", name: "ABN AMRO", country: "Netherlands", countryCode: "NL", bic: "ABNANL2A", currencies: ["EUR", "USD", "GBP"], region: "Europe" },
-  { key: "santander", name: "Banco Santander", country: "Spain", countryCode: "ES", bic: "BSCHESMM", currencies: ["EUR", "USD", "GBP", "BRL"], region: "Europe" },
-  { key: "bbva", name: "BBVA", country: "Spain", countryCode: "ES", bic: "BBVAESMM", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "caixabank", name: "CaixaBank", country: "Spain", countryCode: "ES", bic: "CAIXESBB", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "intesa", name: "Intesa Sanpaolo", country: "Italy", countryCode: "IT", bic: "BCITITMM", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "unicredit", name: "UniCredit", country: "Italy", countryCode: "IT", bic: "UNCRITMM", currencies: ["EUR", "USD", "GBP"], region: "Europe" },
-  { key: "kbc", name: "KBC Group", country: "Belgium", countryCode: "BE", bic: "KREDBEBB", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "belfius", name: "Belfius", country: "Belgium", countryCode: "BE", bic: "GKCCBEBB", currencies: ["EUR"], region: "Europe" },
-  { key: "ubs", name: "UBS", country: "Switzerland", countryCode: "CH", bic: "UBSWCHZH", currencies: ["CHF", "EUR", "USD", "GBP"], region: "Europe" },
-  { key: "zkb", name: "Zürcher Kantonalbank", country: "Switzerland", countryCode: "CH", bic: "ZKBKCHZZ", currencies: ["CHF", "EUR", "USD"], region: "Europe" },
-  { key: "raiffeisench", name: "Raiffeisen Switzerland", country: "Switzerland", countryCode: "CH", bic: "RAIFCH22", currencies: ["CHF", "EUR"], region: "Europe" },
-  { key: "erste", name: "Erste Group Bank", country: "Austria", countryCode: "AT", bic: "GIBAATWW", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "raiffeisenat", name: "Raiffeisen Bank International", country: "Austria", countryCode: "AT", bic: "RZBAATWW", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "cgd", name: "Caixa Geral de Depósitos", country: "Portugal", countryCode: "PT", bic: "CGDIPTPL", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "millenniumbcp", name: "Millennium BCP", country: "Portugal", countryCode: "PT", bic: "BCOMPTPL", currencies: ["EUR"], region: "Europe" },
-  { key: "nordea", name: "Nordea", country: "Finland", countryCode: "FI", bic: "NDEAFIHH", currencies: ["EUR", "SEK", "NOK", "DKK", "USD"], region: "Europe" },
-  { key: "opbank", name: "OP Financial Group", country: "Finland", countryCode: "FI", bic: "OKOYFIHH", currencies: ["EUR", "USD"], region: "Europe" },
-  { key: "seb", name: "SEB", country: "Sweden", countryCode: "SE", bic: "ESSESESS", currencies: ["SEK", "EUR", "USD"], region: "Europe" },
-  { key: "handelsbanken", name: "Handelsbanken", country: "Sweden", countryCode: "SE", bic: "HANDSESS", currencies: ["SEK", "EUR", "USD", "GBP"], region: "Europe" },
-  { key: "swedbank", name: "Swedbank", country: "Sweden", countryCode: "SE", bic: "SWEDSESS", currencies: ["SEK", "EUR"], region: "Europe" },
-  { key: "dnb", name: "DNB Bank", country: "Norway", countryCode: "NO", bic: "DNBANOKK", currencies: ["NOK", "EUR", "USD"], region: "Europe" },
-  { key: "danskebank", name: "Danske Bank", country: "Denmark", countryCode: "DK", bic: "DABADKKK", currencies: ["DKK", "EUR", "USD", "SEK", "NOK"], region: "Europe" },
-  { key: "nykredit", name: "Nykredit", country: "Denmark", countryCode: "DK", bic: "NYKBDKKK", currencies: ["DKK", "EUR"], region: "Europe" },
-  { key: "bankingcircle", name: "Banking Circle SA", country: "Luxembourg", countryCode: "LU", bic: "BCIRLULL", currencies: ["EUR", "USD", "GBP", "CHF"], region: "Europe" },
-  { key: "bil", name: "Banque Internationale à Luxembourg", country: "Luxembourg", countryCode: "LU", bic: "BILLLULL", currencies: ["EUR", "USD", "CHF"], region: "Europe" },
+  { key: "santander", name: "Banco Santander", country: "Spain", countryCode: "ES", bic: "BSCHESMM", currencies: ["EUR", "USD", "GBP", "BRL"], region: "Europe", nationalBankCode: "00490001" },
+  { key: "bbva", name: "BBVA", country: "Spain", countryCode: "ES", bic: "BBVAESMM", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "01820001" },
+  { key: "caixabank", name: "CaixaBank", country: "Spain", countryCode: "ES", bic: "CAIXESBB", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "21000001" },
+  { key: "intesa", name: "Intesa Sanpaolo", country: "Italy", countryCode: "IT", bic: "BCITITMM", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "0306901600" },
+  { key: "unicredit", name: "UniCredit", country: "Italy", countryCode: "IT", bic: "UNCRITMM", currencies: ["EUR", "USD", "GBP"], region: "Europe", nationalBankCode: "0200801600" },
+  { key: "kbc", name: "KBC Group", country: "Belgium", countryCode: "BE", bic: "KREDBEBB", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "734" },
+  { key: "belfius", name: "Belfius", country: "Belgium", countryCode: "BE", bic: "GKCCBEBB", currencies: ["EUR"], region: "Europe", nationalBankCode: "068" },
+  { key: "ubs", name: "UBS", country: "Switzerland", countryCode: "CH", bic: "UBSWCHZH", currencies: ["CHF", "EUR", "USD", "GBP"], region: "Europe", nationalBankCode: "00240" },
+  { key: "zkb", name: "Zürcher Kantonalbank", country: "Switzerland", countryCode: "CH", bic: "ZKBKCHZZ", currencies: ["CHF", "EUR", "USD"], region: "Europe", nationalBankCode: "00700" },
+  { key: "raiffeisench", name: "Raiffeisen Switzerland", country: "Switzerland", countryCode: "CH", bic: "RAIFCH22", currencies: ["CHF", "EUR"], region: "Europe", nationalBankCode: "80000" },
+  { key: "erste", name: "Erste Group Bank", country: "Austria", countryCode: "AT", bic: "GIBAATWW", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "20111" },
+  { key: "raiffeisenat", name: "Raiffeisen Bank International", country: "Austria", countryCode: "AT", bic: "RZBAATWW", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "31000" },
+  { key: "cgd", name: "Caixa Geral de Depósitos", country: "Portugal", countryCode: "PT", bic: "CGDIPTPL", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "00350000" },
+  { key: "millenniumbcp", name: "Millennium BCP", country: "Portugal", countryCode: "PT", bic: "BCOMPTPL", currencies: ["EUR"], region: "Europe", nationalBankCode: "00330000" },
+  { key: "nordea", name: "Nordea", country: "Finland", countryCode: "FI", bic: "NDEAFIHH", currencies: ["EUR", "SEK", "NOK", "DKK", "USD"], region: "Europe", nationalBankCode: "182345" },
+  { key: "opbank", name: "OP Financial Group", country: "Finland", countryCode: "FI", bic: "OKOYFIHH", currencies: ["EUR", "USD"], region: "Europe", nationalBankCode: "500001" },
+  { key: "seb", name: "SEB", country: "Sweden", countryCode: "SE", bic: "ESSESESS", currencies: ["SEK", "EUR", "USD"], region: "Europe", nationalBankCode: "500" },
+  { key: "handelsbanken", name: "Handelsbanken", country: "Sweden", countryCode: "SE", bic: "HANDSESS", currencies: ["SEK", "EUR", "USD", "GBP"], region: "Europe", nationalBankCode: "600" },
+  { key: "swedbank", name: "Swedbank", country: "Sweden", countryCode: "SE", bic: "SWEDSESS", currencies: ["SEK", "EUR"], region: "Europe", nationalBankCode: "800" },
+  { key: "dnb", name: "DNB Bank", country: "Norway", countryCode: "NO", bic: "DNBANOKK", currencies: ["NOK", "EUR", "USD"], region: "Europe", nationalBankCode: "1200" },
+  { key: "danskebank", name: "Danske Bank", country: "Denmark", countryCode: "DK", bic: "DABADKKK", currencies: ["DKK", "EUR", "USD", "SEK", "NOK"], region: "Europe", nationalBankCode: "3000" },
+  { key: "nykredit", name: "Nykredit", country: "Denmark", countryCode: "DK", bic: "NYKBDKKK", currencies: ["DKK", "EUR"], region: "Europe", nationalBankCode: "8117" },
+  { key: "bankingcircle", name: "Banking Circle SA", country: "Luxembourg", countryCode: "LU", bic: "BCIRLULL", currencies: ["EUR", "USD", "GBP", "CHF"], region: "Europe", nationalBankCode: "080" },
+  { key: "bil", name: "Banque Internationale à Luxembourg", country: "Luxembourg", countryCode: "LU", bic: "BILLLULL", currencies: ["EUR", "USD", "CHF"], region: "Europe", nationalBankCode: "002" },
 
   // --- North America ---
   { key: "jpmorgan", name: "JPMorgan Chase", country: "United States", countryCode: "US", bic: "CHASUS33", currencies: ["USD", "EUR", "GBP", "JPY"], region: "Americas" },
@@ -132,11 +143,11 @@ export const PARTNER_BANKS: PartnerBank[] = [
 
   // --- Middle East & Africa ---
   { key: "qnb", name: "Qatar National Bank", country: "Qatar", countryCode: "QA", bic: "QNBAQAQA", currencies: ["QAR", "USD", "EUR", "GBP"], region: "Middle East & Africa" },
-  { key: "fab", name: "First Abu Dhabi Bank", country: "United Arab Emirates", countryCode: "AE", bic: "NBADAEAA", currencies: ["AED", "USD", "EUR", "GBP"], region: "Middle East & Africa" },
-  { key: "emiratesnbd", name: "Emirates NBD", country: "United Arab Emirates", countryCode: "AE", bic: "EBILAEAD", currencies: ["AED", "USD", "EUR"], region: "Middle East & Africa" },
-  { key: "adcb", name: "Abu Dhabi Commercial Bank", country: "United Arab Emirates", countryCode: "AE", bic: "ADCBAEAA", currencies: ["AED", "USD"], region: "Middle East & Africa" },
-  { key: "alrajhi", name: "Al Rajhi Bank", country: "Saudi Arabia", countryCode: "SA", bic: "RJHISARI", currencies: ["SAR", "USD"], region: "Middle East & Africa" },
-  { key: "snb", name: "Saudi National Bank", country: "Saudi Arabia", countryCode: "SA", bic: "NCBKSAJE", currencies: ["SAR", "USD", "EUR"], region: "Middle East & Africa" },
+  { key: "fab", name: "First Abu Dhabi Bank", country: "United Arab Emirates", countryCode: "AE", bic: "NBADAEAA", currencies: ["AED", "USD", "EUR", "GBP"], region: "Middle East & Africa", nationalBankCode: "035" },
+  { key: "emiratesnbd", name: "Emirates NBD", country: "United Arab Emirates", countryCode: "AE", bic: "EBILAEAD", currencies: ["AED", "USD", "EUR"], region: "Middle East & Africa", nationalBankCode: "033" },
+  { key: "adcb", name: "Abu Dhabi Commercial Bank", country: "United Arab Emirates", countryCode: "AE", bic: "ADCBAEAA", currencies: ["AED", "USD"], region: "Middle East & Africa", nationalBankCode: "030" },
+  { key: "alrajhi", name: "Al Rajhi Bank", country: "Saudi Arabia", countryCode: "SA", bic: "RJHISARI", currencies: ["SAR", "USD"], region: "Middle East & Africa", nationalBankCode: "80" },
+  { key: "snb", name: "Saudi National Bank", country: "Saudi Arabia", countryCode: "SA", bic: "NCBKSAJE", currencies: ["SAR", "USD", "EUR"], region: "Middle East & Africa", nationalBankCode: "10" },
   { key: "standardbank", name: "Standard Bank", country: "South Africa", countryCode: "ZA", bic: "SBZAZAJJ", currencies: ["ZAR", "USD", "EUR", "GBP"], region: "Middle East & Africa" },
   { key: "fnb", name: "First National Bank", country: "South Africa", countryCode: "ZA", bic: "FIRNZAJJ", currencies: ["ZAR", "USD"], region: "Middle East & Africa" },
   { key: "absa", name: "Absa Group", country: "South Africa", countryCode: "ZA", bic: "ABSAZAJJ", currencies: ["ZAR", "USD"], region: "Middle East & Africa" },
