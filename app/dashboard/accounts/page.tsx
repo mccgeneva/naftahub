@@ -34,6 +34,8 @@ import { useCurrentUser } from "@/lib/use-current-user"
 import { useLedger } from "@/lib/ledger-store"
 import { exportToCsv } from "@/lib/export-utils"
 import { VerifiedBankField } from "@/components/verified-bank-field"
+import { CountryCombobox } from "@/components/country-combobox"
+import { getCountryByCode } from "@/lib/countries"
 import { validateIban, validateBic } from "@/lib/iban-swift"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -275,6 +277,7 @@ export default function BankAccountsPage() {
   const [isDetailDialogOpen, setIsDetailDialogOpen] = useState(false)
   const [newIban, setNewIban] = useState("")
   const [newSwift, setNewSwift] = useState("")
+  const [newCountry, setNewCountry] = useState("")
   const [addError, setAddError] = useState<string | null>(null)
   const logActivity = useActivityLog()
   const user = useCurrentUser()
@@ -350,12 +353,14 @@ export default function BankAccountsPage() {
       details: {
         summary:
           "Client submitted a request to register a new bank account on the platform.",
+        country: newCountry ? getCountryByCode(newCountry)?.name ?? newCountry : "Not specified",
         submittedAt: new Date().toLocaleString("en-GB"),
       },
     })
     setIsAddDialogOpen(false)
     setNewIban("")
     setNewSwift("")
+    setNewCountry("")
     toast.success("Account submitted for review", {
       description: "Our onboarding team will verify and activate the account.",
     })
@@ -494,24 +499,17 @@ export default function BankAccountsPage() {
                   <Input placeholder="e.g., UBS AG" className="bg-zinc-800 border-zinc-700" />
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-zinc-300">Country</Label>
-                  <Select>
-                    <SelectTrigger className="bg-zinc-800 border-zinc-700">
-                      <SelectValue placeholder="Select country" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-zinc-800 border-zinc-700">
-                      <SelectItem value="CH">Switzerland</SelectItem>
-                      <SelectItem value="DE">Germany</SelectItem>
-                      <SelectItem value="US">United States</SelectItem>
-                      <SelectItem value="GB">United Kingdom</SelectItem>
-                      <SelectItem value="FR">France</SelectItem>
-                      <SelectItem value="SG">Singapore</SelectItem>
-                      <SelectItem value="JP">Japan</SelectItem>
-                      <SelectItem value="HK">Hong Kong</SelectItem>
-                      <SelectItem value="AE">UAE</SelectItem>
-                      <SelectItem value="AU">Australia</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label className="text-zinc-300" htmlFor="new-account-country">
+                    Country
+                  </Label>
+                  <CountryCombobox
+                    id="new-account-country"
+                    value={newCountry}
+                    onChange={setNewCountry}
+                    placeholder="Search and select country"
+                    triggerClassName="bg-zinc-800 border-zinc-700 text-zinc-100 hover:bg-zinc-800 hover:text-zinc-100"
+                    contentClassName="bg-zinc-900 border-zinc-800"
+                  />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">

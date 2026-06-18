@@ -38,6 +38,7 @@ import {
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
+import { CountryCombobox } from "@/components/country-combobox"
 import { useActivityLog } from "@/components/activity-tracker"
 import {
   listUsers,
@@ -518,10 +519,12 @@ export function UserManager() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="um-nat">Nationality (optional)</Label>
-                <Input
+                <CountryCombobox
                   id="um-nat"
+                  valueMode="name"
                   value={nationality}
-                  onChange={(e) => setNationality(e.target.value)}
+                  onChange={setNationality}
+                  placeholder="Search and select country"
                 />
               </div>
             </div>

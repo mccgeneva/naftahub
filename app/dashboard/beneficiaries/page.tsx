@@ -71,6 +71,7 @@ import {
 } from "@/lib/beneficiaries-store"
 import { exportToCsv, importCsvFile } from "@/lib/export-utils"
 import { VerifiedBankField } from "@/components/verified-bank-field"
+import { CountryCombobox } from "@/components/country-combobox"
 import { countryName, validateIban, validateBic } from "@/lib/iban-swift"
 
 const emptyForm = {
@@ -97,12 +98,6 @@ const emptyForm = {
   intermediarySwift: "",
   notes: "",
 }
-
-const countries = [
-  "Switzerland", "Germany", "United Kingdom", "United States", "France", 
-  "Italy", "Spain", "Netherlands", "Belgium", "Luxembourg", "Austria",
-  "Singapore", "Hong Kong", "Japan", "Australia", "Canada", "UAE"
-]
 
 const currencies = ["EUR", "USD", "GBP", "CHF", "JPY", "AUD", "CAD", "SGD", "HKD", "AED"]
 
@@ -546,19 +541,14 @@ export default function BeneficiariesPage() {
                         <Input id="dob" type="date" value={form.dateOfBirth} onChange={(e) => updateForm("dateOfBirth", e.target.value)} />
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="nationality">Nationality</Label>
-                        <Select value={form.nationality} onValueChange={(v) => updateForm("nationality", v)}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select country" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {countries.map((country) => (
-                              <SelectItem key={country} value={country.toLowerCase()}>
-                                {country}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                      <Label htmlFor="nationality">Nationality</Label>
+                      <CountryCombobox
+                        id="nationality"
+                        valueMode="name"
+                        value={form.nationality}
+                        onChange={(v) => updateForm("nationality", v)}
+                        placeholder="Search and select country"
+                      />
                       </div>
                     </div>
                   )}
@@ -591,18 +581,13 @@ export default function BeneficiariesPage() {
                     </div>
                     <div className="col-span-2 space-y-2">
                       <Label htmlFor="country">Country *</Label>
-                      <Select value={form.beneficiaryCountry} onValueChange={(v) => updateForm("beneficiaryCountry", v)}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select country" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {countries.map((country) => (
-                            <SelectItem key={country} value={country.toLowerCase()}>
-                              {country}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <CountryCombobox
+                        id="country"
+                        valueMode="name"
+                        value={form.beneficiaryCountry}
+                        onChange={(v) => updateForm("beneficiaryCountry", v)}
+                        placeholder="Search and select country"
+                      />
                     </div>
                   </div>
                 </div>
@@ -676,18 +661,13 @@ export default function BeneficiariesPage() {
                     </div>
                     <div className="col-span-2 space-y-2">
                       <Label htmlFor="bankCountry">Bank Country *</Label>
-                      <Select value={form.bankCountry} onValueChange={(v) => updateForm("bankCountry", v)}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select country" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {countries.map((country) => (
-                            <SelectItem key={country} value={country.toLowerCase()}>
-                              {country}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <CountryCombobox
+                        id="bankCountry"
+                        valueMode="name"
+                        value={form.bankCountry}
+                        onChange={(v) => updateForm("bankCountry", v)}
+                        placeholder="Search and select country"
+                      />
                     </div>
                   </div>
                 </div>
