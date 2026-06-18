@@ -607,6 +607,8 @@ export default function BeneficiariesPage() {
                       onResolved={(info) => {
                         if (info && !form.bankName) updateForm("bankName", info.name)
                         if (info?.country) updateForm("bankCountry", info.country.toLowerCase())
+                        // Auto-fill the SWIFT/BIC field from the resolved IBAN.
+                        if (info?.bic && !form.swiftBic.trim()) updateForm("swiftBic", info.bic)
                       }}
                     />
                     <div className="space-y-2">

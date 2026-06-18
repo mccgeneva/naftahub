@@ -643,6 +643,11 @@ export default function PaymentsPage() {
                   placeholder="XX00 0000 0000 0000 0000 00"
                   value={payIban}
                   onChange={setPayIban}
+                  onResolved={(info) => {
+                    // Auto-fill the SWIFT/BIC and country from the resolved IBAN.
+                    if (info?.bic && !paySwift.trim()) setPaySwift(info.bic)
+                    if (info?.country && !payCountry.trim()) setPayCountry(info.country)
+                  }}
                 />
                 <div className="grid gap-2">
                   <Label htmlFor="reference">Payment Reference</Label>
