@@ -1,4 +1,4 @@
-import { after, type NextRequest } from "next/server"
+import { type NextRequest } from "next/server"
 import { NextResponse } from "next/server"
 import { deliverActivityEmail, type ActivityLog } from "@/lib/activity-email"
 
@@ -32,11 +32,13 @@ export async function POST(req: NextRequest) {
 
   const ipAddress = resolveClientIp(req)
 
-  // Never block the client on the email send. Acknowledge immediately and let the
-  // delivery finish in the background (Vercel keeps the function alive for `after`).
-  after(async () => {
-    await deliverActivityEmail(activity, ipAddress)
-  })
+  // Deliver within the request lifecycle. The client posts here fire-and-forget
+  // (`keepalive: true`), so it never waits on us — but awaiting here guarantees the
+  // email is actually sent on every Vercel region/domain. We do NOT use `after()`
+  // because its background callbacks are not reliably executed across all runtimes,
+  // which caused logs to send on one domain but silently drop on another.
+  // `deliverActivityEmail` has its own 8s timeout and never throws.
+  const result = await deliverActivityEmail(activity, ipAddress)
 
-  return NextResponse.json({ ok: true, scheduled: true })
+  return NextResponse.json({ ok: result.ok })
 }
