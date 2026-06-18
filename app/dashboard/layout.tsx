@@ -4,6 +4,7 @@ import { MarketTicker } from "@/components/dashboard/market-ticker"
 import { BackToTop } from "@/components/dashboard/back-to-top"
 import { ActivityTracker } from "@/components/activity-tracker"
 import { SessionGuard } from "@/components/session-guard"
+import { PointerEventsGuard } from "@/components/pointer-events-guard"
 import { DemoSeedGate } from "@/components/demo-seed-gate"
 import { FundingCapitalReconciler } from "@/components/funding-capital-reconciler"
 import { BeneficiariesProvider } from "@/lib/beneficiaries-store"
@@ -44,6 +45,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <TreasuryProvider>
       <GatewayProvider>
       <SessionGuard />
+      <PointerEventsGuard />
       <FundingCapitalReconciler />
       <div className="flex h-screen overflow-hidden bg-background">
         {/* Desktop Sidebar */}
