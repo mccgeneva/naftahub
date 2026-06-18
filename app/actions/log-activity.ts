@@ -4,9 +4,6 @@ import { headers } from "next/headers"
 import { after } from "next/server"
 import { deliverActivityEmail, type ActivityLog } from "@/lib/activity-email"
 
-// Re-export the shared type so existing server-side imports keep working.
-export type { ActivityLog }
-
 async function resolveClientIp() {
   try {
     const h = await headers()
