@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import {
   Activity,
   TrendingUp,
@@ -195,7 +195,18 @@ export default function TradingPage() {
   const formatEur = (n: number) =>
     `€${n.toLocaleString("en-US", { maximumFractionDigits: 0 })}`
 
-  const openFund = () => setActiveTab("fund")
+  const tabsNavRef = useRef<HTMLDivElement>(null)
+
+  // When switching sections, bring the sticky nav into view so the new section
+  // starts from its top instead of leaving the user stranded mid-scroll.
+  const handleTabChange = (value: string) => {
+    setActiveTab(value)
+    requestAnimationFrame(() => {
+      tabsNavRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+    })
+  }
+
+  const openFund = () => handleTabChange("fund")
 
   const submitApplication = () => {
     log({
@@ -471,14 +482,21 @@ export default function TradingPage() {
       </div>
 
       {/* Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="flex-wrap">
-          <TabsTrigger value="markets">Markets</TabsTrigger>
-          <TabsTrigger value="signals">AI Signals</TabsTrigger>
-          <TabsTrigger value="positions">Positions</TabsTrigger>
-          <TabsTrigger value="tiers">ROI Tiers</TabsTrigger>
-          <TabsTrigger value="fund">Treuhand Fund</TabsTrigger>
-        </TabsList>
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
+        {/* Sticky section nav: stays pinned below the header so users can jump
+            between sections from anywhere in a long, data-heavy tab. */}
+        <div
+          ref={tabsNavRef}
+          className="sticky top-0 z-30 -mx-4 mb-2 scroll-mt-2 border-b border-border bg-background/95 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:-mx-6 md:px-6"
+        >
+          <TabsList className="flex w-full justify-start overflow-x-auto">
+            <TabsTrigger value="markets">Markets</TabsTrigger>
+            <TabsTrigger value="signals">AI Signals</TabsTrigger>
+            <TabsTrigger value="positions">Positions</TabsTrigger>
+            <TabsTrigger value="tiers">ROI Tiers</TabsTrigger>
+            <TabsTrigger value="fund">Treuhand Fund</TabsTrigger>
+          </TabsList>
+        </div>
 
         {/* Markets */}
         <TabsContent value="markets" className="mt-6">
@@ -627,7 +645,7 @@ export default function TradingPage() {
                       tab or apply to the Treuhand AG fund to begin.
                     </p>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => setActiveTab("markets")}>
+                  <Button variant="outline" size="sm" onClick={() => handleTabChange("markets")}>
                     Browse Markets
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
