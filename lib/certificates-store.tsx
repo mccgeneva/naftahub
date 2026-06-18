@@ -137,13 +137,21 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
-function writeJson(key: string, value: unknown) {
+// Dedicated same-tab sync channel. We deliberately do NOT reuse a synthetic
+// "storage" event here: the active provider both writes and listens, so a
+// self-notifying write would create an infinite write→event→setState→write
+// loop. Instead, only EXTERNAL writes (e.g. the admin manager editing another
+// user, or this provider receiving an admin change) opt into notification, and
+// the provider persists its own state with `notify = false`.
+const CERT_SYNC_EVENT = "mcc:certificate-requests-sync"
+
+function writeJson(key: string, value: unknown, notify = true) {
   if (typeof window === "undefined") return
   try {
     window.localStorage.setItem(key, JSON.stringify(value))
-    // Same-tab notification so the active-user provider resyncs immediately
-    // (native storage events only fire in *other* tabs).
-    window.dispatchEvent(new StorageEvent("storage", { key }))
+    if (notify) {
+      window.dispatchEvent(new CustomEvent(CERT_SYNC_EVENT, { detail: { key } }))
+    }
   } catch {
     // ignore quota/availability errors
   }
@@ -298,26 +306,35 @@ export function CertificateRequestsProvider({ children }: { children: React.Reac
   }, [])
 
   // Persist on change (only after hydration to avoid clobbering stored data).
+  // notify=false: this is OUR OWN state being saved, so we must not fire the
+  // same-tab sync event back at ourselves (that caused an infinite loop).
   useEffect(() => {
     if (!hydrated) return
-    writeJson(requestsKey(), requests)
+    writeJson(requestsKey(), requests, false)
   }, [requests, hydrated])
 
-  // Resync on cross-tab/same-tab writes (e.g. compliance approves) and refocus.
+  // Resync on EXTERNAL writes only: real cross-tab `storage` events and the
+  // same-tab custom event fired by the admin manager. We never resync from our
+  // own persist, so there is no write→resync→write feedback loop.
   useEffect(() => {
     if (!hydrated) return
     const resync = () => setRequests(readJson<CertificateRequest[]>(requestsKey(), []))
     const onStorage = (e: StorageEvent) => {
       if (e.key === requestsKey()) resync()
     }
+    const onSameTabSync = (e: Event) => {
+      if ((e as CustomEvent<{ key: string }>).detail?.key === requestsKey()) resync()
+    }
     const onVisible = () => {
       if (document.visibilityState === "visible") resync()
     }
     window.addEventListener("storage", onStorage)
+    window.addEventListener(CERT_SYNC_EVENT, onSameTabSync as EventListener)
     window.addEventListener("focus", resync)
     document.addEventListener("visibilitychange", onVisible)
     return () => {
       window.removeEventListener("storage", onStorage)
+      window.removeEventListener(CERT_SYNC_EVENT, onSameTabSync as EventListener)
       window.removeEventListener("focus", resync)
       document.removeEventListener("visibilitychange", onVisible)
     }
