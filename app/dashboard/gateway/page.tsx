@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   Landmark,
   Building2,
@@ -49,6 +49,7 @@ import { useCurrentUser } from "@/lib/use-current-user"
 import {
   useGateway,
   ACCOUNT_TYPES,
+  ACCOUNT_TYPE_KEYS,
   GATEWAY_CURRENCIES,
   PARTNER_BANKS,
   BANK_REGIONS,
@@ -62,6 +63,7 @@ import {
   type GatewayStatus,
 } from "@/lib/gateway-store"
 import { formatIban, countrySupportsIban } from "@/lib/iban"
+import { getGatewayConfig, type GatewayConfig } from "@/app/actions/gateway-config"
 
 const typeIcons: Record<GatewayAccountType, typeof Building2> = {
   virtual_iban: Landmark,
@@ -180,6 +182,44 @@ export default function GatewayPage() {
   const [bankKey, setBankKey] = useState("")
   const [purpose, setPurpose] = useState("")
   const [bankQuery, setBankQuery] = useState("")
+
+  // Global gateway configuration: which account types and currencies an
+  // administrator has left enabled platform-wide. Fails open while loading.
+  const [config, setConfig] = useState<GatewayConfig>({
+    disabledAccountTypes: [],
+    disabledCurrencies: [],
+  })
+  useEffect(() => {
+    let active = true
+    getGatewayConfig().then((c) => {
+      if (active) setConfig(c)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  // Only offer account types and currencies the administrator has enabled.
+  const enabledTypes = useMemo(
+    () => ACCOUNT_TYPE_KEYS.filter((k) => !config.disabledAccountTypes.includes(k)),
+    [config.disabledAccountTypes],
+  )
+  const enabledCurrencies = useMemo(
+    () => GATEWAY_CURRENCIES.filter((c) => !config.disabledCurrencies.includes(c)),
+    [config.disabledCurrencies],
+  )
+
+  // Keep the selected type/currency valid as the enabled sets change so the
+  // form never submits an option the administrator has disabled.
+  useEffect(() => {
+    if (enabledTypes.length && !enabledTypes.includes(type)) setType(enabledTypes[0])
+  }, [enabledTypes, type])
+  useEffect(() => {
+    if (enabledCurrencies.length && !enabledCurrencies.includes(currency)) {
+      onCurrencyChange(enabledCurrencies[0])
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabledCurrencies, currency])
 
   // Partner-bank directory: filter by name/country/BIC/currency, then group by region.
   const banksByRegion = useMemo(() => {
@@ -305,7 +345,7 @@ export default function GatewayPage() {
               <div className="space-y-2">
                 <Label>Account type</Label>
                 <div className="grid gap-2">
-                  {(Object.keys(ACCOUNT_TYPES) as GatewayAccountType[]).map((key) => {
+                  {enabledTypes.map((key) => {
                     const Icon = typeIcons[key]
                     const selected = type === key
                     return (
@@ -344,7 +384,7 @@ export default function GatewayPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {GATEWAY_CURRENCIES.map((c) => (
+                    {enabledCurrencies.map((c) => (
                       <SelectItem key={c} value={c}>
                         {c}
                       </SelectItem>
