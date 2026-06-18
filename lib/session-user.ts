@@ -16,7 +16,8 @@
 
 import "server-only"
 import { cookies } from "next/headers"
-import { SESSION_COOKIE } from "@/lib/auth"
+import { SESSION_COOKIE, SESSION_META_COOKIE, SESSION_IDLE_MAX_AGE } from "@/lib/auth"
+import { verifySessionMeta, evaluateSessionMeta } from "@/lib/session-token"
 import { getUserById, getUserBySessionToken, USERS, type UserProfile } from "@/lib/users"
 import {
   getDynamicUserById,
@@ -73,6 +74,13 @@ export async function resolveSessionByToken(token: string | undefined | null): P
 export async function resolveCurrentSession(): Promise<ResolvedSession | null> {
   const cookieStore = await cookies()
   const token = cookieStore.get(SESSION_COOKIE)?.value
+
+  // Defense-in-depth: enforce server-side session expiry here too, so any RSC,
+  // layout, or server action that resolves the session rejects an expired/idle
+  // session even if it were somehow reached without passing the Edge proxy.
+  const meta = await verifySessionMeta(cookieStore.get(SESSION_META_COOKIE)?.value)
+  if (evaluateSessionMeta(meta, SESSION_IDLE_MAX_AGE * 1000) !== "valid") return null
+
   return resolveSessionByToken(token)
 }
 
