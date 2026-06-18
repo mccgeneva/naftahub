@@ -62,6 +62,7 @@ import {
 } from "@/lib/monetization-requests-store"
   import { usePPPRequests, type PPPRequest } from "@/lib/ppp-requests-store"
   import { useProjectFunding, type ProjectFundingRequest } from "@/lib/project-funding-store"
+  import { useFiduciaryRequests, type FiduciaryRequest } from "@/lib/fiduciary-requests-store"
   import { calculateCashCommitment, annualCostOfCapital, AES_EQUITY_COMPONENTS } from "@/lib/aes"
 import { useDOFRequests, type DOFRequest } from "@/lib/dof-requests-store"
 import { useDTCRequests, type DTCRequest } from "@/lib/dtc-requests-store"
@@ -135,6 +136,11 @@ export default function AdminPage() {
     rejectRequest: rejectFunding,
   } = useProjectFunding()
   const {
+    requests: fiduciaryRequests,
+    approveRequest: approveFiduciary,
+    rejectRequest: rejectFiduciary,
+  } = useFiduciaryRequests()
+  const {
     requests: dofRequests,
     approveRequest: approveDOF,
     rejectRequest: rejectDOF,
@@ -181,6 +187,8 @@ export default function AdminPage() {
   const [rejectFundingReason, setRejectFundingReason] = useState("")
   const [approveFundingTarget, setApproveFundingTarget] = useState<ProjectFundingRequest | null>(null)
   const [approveFundingScore, setApproveFundingScore] = useState("5")
+  const [rejectFiduciaryTarget, setRejectFiduciaryTarget] = useState<FiduciaryRequest | null>(null)
+  const [rejectFiduciaryReason, setRejectFiduciaryReason] = useState("")
   const [rejectDOFTarget, setRejectDOFTarget] = useState<DOFRequest | null>(null)
   const [rejectDOFReason, setRejectDOFReason] = useState("")
   const [rejectMonetizationTarget, setRejectMonetizationTarget] =
@@ -501,6 +509,72 @@ export default function AdminPage() {
     })
     setRejectFundingTarget(null)
     setRejectFundingReason("")
+  }
+
+  const pendingFiduciary = useMemo(
+    () =>
+      fiduciaryRequests
+        .filter((r) => r.status === "pending")
+        .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()),
+    [fiduciaryRequests],
+  )
+  const decidedFiduciary = useMemo(
+    () =>
+      fiduciaryRequests
+        .filter((r) => r.status !== "pending")
+        .sort(
+          (a, b) =>
+            new Date(b.decidedAt || b.submittedAt).getTime() -
+            new Date(a.decidedAt || a.submittedAt).getTime(),
+        ),
+    [fiduciaryRequests],
+  )
+
+  const fiduciaryValueText = (r: FiduciaryRequest) =>
+    r.estimatedValue > 0
+      ? `${r.currency} ${r.estimatedValue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : "—"
+
+  const handleApproveFiduciary = (request: FiduciaryRequest) => {
+    const approved = approveFiduciary(request.id)
+    if (!approved) return
+    toast.success("Fiduciary service job actioned", {
+      description: `${request.serviceLabel} (${request.id}) has been approved by the custody desk.`,
+    })
+    logActivity({
+      action: `Administrator actioned fiduciary service job ${request.id} — ${request.serviceLabel}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator (custody desk) approved fiduciary service job ${request.id}: ${request.serviceLabel}.${request.assetType ? ` Asset: ${request.assetType}.` : ""}${request.estimatedValue > 0 ? ` Value ${fiduciaryValueText(request)}.` : ""}`,
+        referenceId: request.id,
+        service: request.serviceLabel,
+        asset: request.assetType || "(not applicable)",
+        estimatedValue: fiduciaryValueText(request),
+        decision: "Approved",
+      },
+    })
+  }
+
+  const confirmRejectFiduciary = () => {
+    if (!rejectFiduciaryTarget) return
+    const request = rejectFiduciaryTarget
+    rejectFiduciary(request.id, rejectFiduciaryReason)
+    toast.success("Fiduciary service job rejected", {
+      description: `${request.serviceLabel} (${request.id}) was rejected.`,
+    })
+    logActivity({
+      action: `Administrator rejected fiduciary service job ${request.id} — ${request.serviceLabel}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator (custody desk) rejected fiduciary service job ${request.id}: ${request.serviceLabel}.${rejectFiduciaryReason.trim() ? ` Reason: ${rejectFiduciaryReason.trim()}` : ""}`,
+        referenceId: request.id,
+        service: request.serviceLabel,
+        decision: "Rejected",
+        reason: rejectFiduciaryReason.trim() || "(none)",
+      },
+    })
+    setRejectFiduciaryTarget(null)
+    setRejectFiduciaryReason("")
   }
 
   const pendingLeverage = useMemo(
@@ -1504,6 +1578,7 @@ export default function AdminPage() {
     { id: "section-instruments", label: "Bank Instruments", count: pendingInstruments.length, icon: FileText },
     { id: "section-ppp", label: "Yield / PPP", count: pendingPPP.length, icon: TrendingUp },
     { id: "section-funding", label: "Project Funding", count: pendingFunding.length, icon: Building2 },
+    { id: "section-fiduciary", label: "Fiduciary & Assets", count: pendingFiduciary.length, icon: Landmark },
     { id: "section-leverage", label: "Leverage Lines", count: pendingLeverage.length, icon: Gauge },
     { id: "section-switchoff", label: "Leverage Switch-Off", count: pendingSwitchOff.length, icon: Power },
     { id: "section-dof", label: "Download of Funds", count: pendingDOF.length, icon: Banknote },
@@ -1608,6 +1683,7 @@ export default function AdminPage() {
                   pendingInstruments.length +
                   pendingPPP.length +
                   pendingFunding.length +
+                  pendingFiduciary.length +
                   pendingDOF.length +
                   pendingMonetization.length +
                   pendingLeverage.length +
@@ -1615,7 +1691,8 @@ export default function AdminPage() {
               </p>
               <p className="mt-1 text-[11px] text-muted-foreground">
                 {pending.length} payments · {pendingInstruments.length} instruments ·{" "}
-                {pendingPPP.length} PPP · {pendingFunding.length} funding · {pendingDOF.length} DOF ·{" "}
+                {pendingPPP.length} PPP · {pendingFunding.length} funding ·{" "}
+                {pendingFiduciary.length} fiduciary · {pendingDOF.length} DOF ·{" "}
                 {pendingMonetization.length} monetization · {pendingLeverage.length} leverage ·{" "}
                 {pendingSwitchOff.length} switch-off
               </p>
@@ -2788,6 +2865,134 @@ export default function AdminPage() {
                 </div>
               )
             })
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Pending Fiduciary service jobs */}
+      <Card id="section-fiduciary" className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">Pending Fiduciary Service Jobs</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {pendingFiduciary.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
+              <Check className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                No pending fiduciary service jobs. All requests have been actioned.
+              </p>
+            </div>
+          ) : (
+            pendingFiduciary.map((r) => (
+              <div key={r.id} className="rounded-lg border border-border bg-secondary/30 p-4">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge
+                        variant="outline"
+                        className="border-yellow-500/20 bg-yellow-500/10 text-yellow-500 text-[10px]"
+                      >
+                        <Clock className="mr-1 h-3 w-3" />
+                        Pending
+                      </Badge>
+                      <span className="font-medium text-foreground">{r.serviceLabel}</span>
+                      <span className="text-xs text-muted-foreground">{r.id}</span>
+                      <span className="text-xs text-muted-foreground">
+                        Submitted {formatTimestamp(r.submittedAt)}
+                      </span>
+                    </div>
+                    <div className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                      {r.assetType && (
+                        <div className="flex items-center gap-2">
+                          <Landmark className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Asset:</span>
+                          <span className="text-foreground">{r.assetType}</span>
+                        </div>
+                      )}
+                      {r.estimatedValue > 0 && (
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Value:</span>
+                          <span className="text-foreground">{fiduciaryValueText(r)}</span>
+                        </div>
+                      )}
+                    </div>
+                    {r.notes && (
+                      <p className="text-xs text-muted-foreground text-pretty">{r.notes}</p>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col items-stretch gap-3 lg:w-56 lg:shrink-0">
+                    <div className="flex gap-2">
+                      <Button className="flex-1" size="sm" onClick={() => handleApproveFiduciary(r)}>
+                        <Check className="mr-1 h-4 w-4" />
+                        Approve
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => {
+                          setRejectFiduciaryReason("")
+                          setRejectFiduciaryTarget(r)
+                        }}
+                      >
+                        <X className="mr-1 h-4 w-4" />
+                        Reject
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Fiduciary decision history */}
+      <Card className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">Fiduciary Decision History</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {decidedFiduciary.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              No decisions yet. Approved and rejected service jobs will appear here.
+            </p>
+          ) : (
+            decidedFiduciary.map((r) => (
+              <div
+                key={r.id}
+                className="flex flex-col gap-2 rounded-lg border border-border p-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="flex items-center gap-3">
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "text-[10px]",
+                      r.status === "approved"
+                        ? "border-green-500/20 bg-green-500/10 text-green-500"
+                        : "border-red-500/20 bg-red-500/10 text-red-500",
+                    )}
+                  >
+                    {r.status === "approved" ? (
+                      <Check className="mr-1 h-3 w-3" />
+                    ) : (
+                      <X className="mr-1 h-3 w-3" />
+                    )}
+                    {r.status === "approved" ? "Approved" : "Rejected"}
+                  </Badge>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{r.serviceLabel}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {r.id} · {formatTimestamp(r.decidedAt)}
+                      {r.decisionNote ? ` · ${r.decisionNote}` : ""}
+                    </p>
+                  </div>
+                </div>
+                <span className="text-sm font-medium text-foreground">{fiduciaryValueText(r)}</span>
+              </div>
+            ))
           )}
         </CardContent>
       </Card>
@@ -4161,6 +4366,51 @@ export default function AdminPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Reject Fiduciary service job dialog */}
+      <Dialog
+        open={!!rejectFiduciaryTarget}
+        onOpenChange={(open) => !open && setRejectFiduciaryTarget(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          {rejectFiduciaryTarget && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Reject Fiduciary Service Job</DialogTitle>
+                <DialogDescription>
+                  Reject the {rejectFiduciaryTarget.serviceLabel} service job{" "}
+                  {rejectFiduciaryTarget.id}. The custody desk will not action this request.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 p-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                <p className="text-xs text-muted-foreground text-pretty">
+                  This action cannot be undone. The customer will see the service job marked as
+                  rejected.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reject-fiduciary-reason">Reason (optional)</Label>
+                <Textarea
+                  id="reject-fiduciary-reason"
+                  value={rejectFiduciaryReason}
+                  onChange={(e) => setRejectFiduciaryReason(e.target.value)}
+                  placeholder="e.g. Source-of-funds documentation required before custody can proceed."
+                  rows={3}
+                />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setRejectFiduciaryTarget(null)}>
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={confirmRejectFiduciary}>
+                  Reject Service Job
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Reject leverage switch-off dialog */}
       <Dialog
         open={!!rejectSwitchOffTarget}
@@ -4541,6 +4791,51 @@ export default function AdminPage() {
                   Cancel
                 </Button>
                 <Button variant="destructive" onClick={confirmRejectMonetization}>
+                  Reject Request
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject Fiduciary service job dialog */}
+      <Dialog
+        open={!!rejectFiduciaryTarget}
+        onOpenChange={(open) => !open && setRejectFiduciaryTarget(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          {rejectFiduciaryTarget && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Reject Fiduciary Service Job</DialogTitle>
+                <DialogDescription>
+                  Reject service job {rejectFiduciaryTarget.id} — {rejectFiduciaryTarget.serviceLabel}.
+                  The custody desk will not action this request.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 p-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                <p className="text-xs text-muted-foreground text-pretty">
+                  This action cannot be undone. The client will see the service job marked as
+                  rejected.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reject-fiduciary-reason">Reason (optional)</Label>
+                <Textarea
+                  id="reject-fiduciary-reason"
+                  value={rejectFiduciaryReason}
+                  onChange={(e) => setRejectFiduciaryReason(e.target.value)}
+                  placeholder="e.g. Asset documentation incomplete; please resubmit with custody schedule."
+                  rows={3}
+                />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setRejectFiduciaryTarget(null)}>
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={confirmRejectFiduciary}>
                   Reject Request
                 </Button>
               </DialogFooter>

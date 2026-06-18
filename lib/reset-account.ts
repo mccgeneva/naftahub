@@ -10,6 +10,7 @@ export const ACCOUNT_DATA_KEYS = [
   "mcc.payment-requests.v1",
   "mcc.ppp-requests.v1",
   "mcc.project-funding-requests.v1",
+  "mcc.fiduciary-requests.v1",
   "mcc.instruments.v1",
   "mcc.beneficiaries.v1",
   "mcc.dof-requests.v1",
