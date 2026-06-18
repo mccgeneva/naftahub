@@ -1,284 +1,54 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
-import { scopedKey, scopedKeyForUser } from "@/lib/user-scope"
+import { createContext, useContext, useEffect, useRef, useState } from "react"
+import { scopedKey } from "@/lib/user-scope"
+import {
+  buildCertificateRequest,
+  type CertificateRequest,
+  type NewCertificateInput,
+} from "@/lib/certificates-shared"
+import { getMyCertificateRequests, syncMyCertificateRequests } from "@/app/actions/certificates"
 
 // ---------------------------------------------------------------------------
-// Official bank certificates store.
+// Official bank certificates store (client provider).
 //
-// Clients REQUEST one of four official certificates (Good Standing, Endorsement
-// / Bank Reference Letter, Proof of Funds, Ownership). A request captures an
-// immutable, verified snapshot of the account's identity + banking + balance
-// data AT THE MOMENT OF REQUEST, so the issued certificate always reflects real
-// account data and the audit trail can never be altered after the fact.
+// Clients REQUEST one of four official certificates; an administrator
+// (Compliance desk) must APPROVE a request before the certificate can be
+// issued/downloaded.
 //
-// An administrator (Compliance desk) must APPROVE a request before the
-// certificate can be issued/downloaded — no certificate is ever produced
-// without sign-off. Approval assigns the issuance date and the issued version.
-//
-// Persistence mirrors the rest of the platform: per-user namespaced
-// localStorage. Customers see/manage only their own requests (reactive provider
-// below). Administrators read and decide on ANY client's requests through the
-// `*ForUser` helpers, which dispatch a same-tab StorageEvent so an open client
-// view updates immediately. This keeps strict per-user data isolation.
+// Persistence now mirrors the beneficiaries feature: the DURABLE source of
+// truth is Neon (lib/certificates-db.ts via app/actions/certificates.ts), so an
+// administrator can see and decide on a client's requests from ANY device — the
+// previous localStorage-only design meant requests made on the client's browser
+// were invisible to the admin panel running in a different browser/session. A
+// local cache still seeds the first paint and acts as a fallback when the
+// database is unavailable (e.g. local dev without DATABASE_URL).
 // ---------------------------------------------------------------------------
 
-export type CertificateType = "good-standing" | "endorsement" | "proof-of-funds" | "ownership"
-
-export type CertificateStatus = "pending" | "approved" | "rejected"
-
-/** A per-currency cleared-balance snapshot taken when the request is created. */
-export interface CertificateBalance {
-  currency: string
-  amount: number
-}
-
-/** Immutable audit-trail entry appended on every lifecycle action. */
-export interface CertificateAuditEvent {
-  at: string // ISO timestamp
-  action: "Requested" | "Approved" | "Rejected" | "Downloaded" | "Re-issued"
-  actor: string // "Client" | "Compliance" | "Administrator"
-  note?: string
-}
-
-export interface CertificateRequest {
-  /** Internal request reference, e.g. CERT-1A2B3C4D. */
-  id: string
-  /** Public certificate reference printed on the document, e.g. MCC-COS-20260618-1842. */
-  reference: string
-  /** Short verification code used to authenticate the certificate. */
-  verificationCode: string
-
-  type: CertificateType
-  /** Account scope this certificate covers: "master" | "cur:EUR" | "instruments". */
-  accountScope: string
-  accountLabel: string
-  /** Why the client needs the certificate (shown to compliance + on the document). */
-  purpose: string
-  /** Optional named recipient (e.g. a correspondent bank) for reference letters / POF. */
-  addressee?: string
-
-  // ---- Immutable verified snapshot captured at request time ----------------
-  holderName: string
-  holderCompany?: string
-  bankName?: string
-  bankAddress?: string
-  beneficiaryAddress?: string
-  iban?: string
-  bic?: string
-  accountEmail?: string
-  /** Per-currency cleared balances (Proof of Funds). */
-  balances: CertificateBalance[]
-  /** Aggregate of all balances converted to EUR (headline figure). */
-  totalEur: number
-  /** Primary currency used for the headline funds figure. */
-  displayCurrency: string
-
-  // ---- Lifecycle -----------------------------------------------------------
-  status: CertificateStatus
-  /** Issued version. 0 while pending/rejected; 1 on first issuance, incremented on re-issue. */
-  version: number
-  submittedAt: string // ISO
-  decidedAt?: string // ISO
-  decisionNote?: string
-  issuedAt?: string // ISO — issuance date printed on an approved certificate
-  approvedBy?: string
-  events: CertificateAuditEvent[]
-}
+// Re-export the pure logic so existing imports from "@/lib/certificates-store"
+// keep working unchanged.
+export * from "@/lib/certificates-shared"
 
 const REQUESTS_KEY = "mcc.certificate-requests.v1"
 const requestsKey = () => scopedKey(REQUESTS_KEY)
 
-// --- Type metadata shared across surfaces -----------------------------------
-
-export const CERTIFICATE_TYPE_LABELS: Record<CertificateType, string> = {
-  "good-standing": "Certificate of Good Standing",
-  endorsement: "Certificate of Endorsement",
-  "proof-of-funds": "Certificate of Proof of Funds",
-  ownership: "Certificate of Ownership",
-}
-
-/** Secondary / native-language title shown under the main title. */
-export const CERTIFICATE_TYPE_SUBTITLES: Record<CertificateType, string> = {
-  "good-standing": "Confirmation of Active Account in Good Standing",
-  endorsement: "Bank Reference Letter — Lettera di Referenza Bancaria",
-  "proof-of-funds": "Verified Statement of Available Cleared Funds",
-  ownership: "Confirmation of Legal & Beneficial Account Ownership",
-}
-
-export const CERTIFICATE_TYPE_DESCRIPTIONS: Record<CertificateType, string> = {
-  "good-standing":
-    "Certifies that the account is active, in good standing and that the relationship has been maintained without adverse findings.",
-  endorsement:
-    "An official bank reference endorsing the account holder's conduct and standing, addressed to a recipient of your choice.",
-  "proof-of-funds":
-    "A verified statement confirming the cleared funds available on the account as of the issuance date.",
-  ownership:
-    "Confirms the account holder is the sole legal and beneficial owner of the account and the assets held therein.",
-}
-
-/** 3-letter code used inside the public reference number. */
-export const CERTIFICATE_TYPE_CODE: Record<CertificateType, string> = {
-  "good-standing": "COS",
-  endorsement: "REF",
-  "proof-of-funds": "POF",
-  ownership: "OWN",
-}
-
-// --- Low-level cross-user persistence (used by the admin manager) -----------
-
-function readJson<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback
+function readCache(): CertificateRequest[] {
+  if (typeof window === "undefined") return []
   try {
-    const raw = window.localStorage.getItem(key)
-    return raw ? (JSON.parse(raw) as T) : fallback
+    const raw = window.localStorage.getItem(requestsKey())
+    return raw ? (JSON.parse(raw) as CertificateRequest[]) : []
   } catch {
-    return fallback
+    return []
   }
 }
 
-// Dedicated same-tab sync channel. We deliberately do NOT reuse a synthetic
-// "storage" event here: the active provider both writes and listens, so a
-// self-notifying write would create an infinite write→event→setState→write
-// loop. Instead, only EXTERNAL writes (e.g. the admin manager editing another
-// user, or this provider receiving an admin change) opt into notification, and
-// the provider persists its own state with `notify = false`.
-const CERT_SYNC_EVENT = "mcc:certificate-requests-sync"
-
-function writeJson(key: string, value: unknown, notify = true) {
+function writeCache(requests: CertificateRequest[]) {
   if (typeof window === "undefined") return
   try {
-    window.localStorage.setItem(key, JSON.stringify(value))
-    if (notify) {
-      window.dispatchEvent(new CustomEvent(CERT_SYNC_EVENT, { detail: { key } }))
-    }
+    window.localStorage.setItem(requestsKey(), JSON.stringify(requests))
   } catch {
     // ignore quota/availability errors
   }
-}
-
-/** Read every certificate request for a specific client account. */
-export function getCertificateRequestsForUser(userId: string): CertificateRequest[] {
-  return readJson<CertificateRequest[]>(scopedKeyForUser(REQUESTS_KEY, userId), [])
-}
-
-/** Overwrite the certificate requests for a specific client account. */
-export function setCertificateRequestsForUser(userId: string, requests: CertificateRequest[]) {
-  writeJson(scopedKeyForUser(REQUESTS_KEY, userId), requests)
-}
-
-// --- Reference / id generators ----------------------------------------------
-
-export function generateCertificateId(): string {
-  return `CERT-${Math.random().toString(16).slice(2, 10).toUpperCase()}`
-}
-
-export function generateCertificateReference(type: CertificateType, date = new Date()): string {
-  const code = CERTIFICATE_TYPE_CODE[type]
-  const stamp = date.toISOString().slice(0, 10).replace(/-/g, "")
-  const suffix = String(1000 + Math.floor(Math.random() * 9000))
-  return `MCC-${code}-${stamp}-${suffix}`
-}
-
-export function generateVerificationCode(): string {
-  const part = () => Math.random().toString(36).slice(2, 6).toUpperCase()
-  return `${part()}-${part()}-${part()}`
-}
-
-// --- Admin decision helpers (pure transforms over a request list) -----------
-
-const ADMIN_SIGNATORY = "MCC Capital — Compliance Office"
-
-/** Approve a pending request: assign issuance date + version 1, append audit. */
-export function approveCertificateInList(
-  list: CertificateRequest[],
-  id: string,
-  note?: string,
-): CertificateRequest[] {
-  const now = new Date().toISOString()
-  return list.map((r) =>
-    r.id === id && r.status === "pending"
-      ? {
-          ...r,
-          status: "approved" as const,
-          version: r.version > 0 ? r.version : 1,
-          decidedAt: now,
-          issuedAt: now,
-          approvedBy: ADMIN_SIGNATORY,
-          decisionNote: note?.trim() || undefined,
-          events: [
-            { at: now, action: "Approved" as const, actor: "Compliance", note: note?.trim() || undefined },
-            ...r.events,
-          ],
-        }
-      : r,
-  )
-}
-
-/** Reject a pending request with an optional reason. */
-export function rejectCertificateInList(
-  list: CertificateRequest[],
-  id: string,
-  reason?: string,
-): CertificateRequest[] {
-  const now = new Date().toISOString()
-  return list.map((r) =>
-    r.id === id && r.status === "pending"
-      ? {
-          ...r,
-          status: "rejected" as const,
-          decidedAt: now,
-          decisionNote: reason?.trim() || undefined,
-          events: [
-            { at: now, action: "Rejected" as const, actor: "Compliance", note: reason?.trim() || undefined },
-            ...r.events,
-          ],
-        }
-      : r,
-  )
-}
-
-/** Re-issue an already-approved certificate, bumping the version + issuance date. */
-export function reissueCertificateInList(
-  list: CertificateRequest[],
-  id: string,
-  note?: string,
-): CertificateRequest[] {
-  const now = new Date().toISOString()
-  return list.map((r) =>
-    r.id === id && r.status === "approved"
-      ? {
-          ...r,
-          version: r.version + 1,
-          issuedAt: now,
-          events: [
-            { at: now, action: "Re-issued" as const, actor: "Compliance", note: note?.trim() || undefined },
-            ...r.events,
-          ],
-        }
-      : r,
-  )
-}
-
-// --- Active-user reactive context (customer facing) -------------------------
-
-export interface NewCertificateInput {
-  type: CertificateType
-  accountScope: string
-  accountLabel: string
-  purpose: string
-  addressee?: string
-  holderName: string
-  holderCompany?: string
-  bankName?: string
-  bankAddress?: string
-  beneficiaryAddress?: string
-  iban?: string
-  bic?: string
-  accountEmail?: string
-  balances: CertificateBalance[]
-  totalEur: number
-  displayCurrency: string
 }
 
 interface CertificatesContextValue {
@@ -288,7 +58,7 @@ interface CertificatesContextValue {
   addRequest: (input: NewCertificateInput) => CertificateRequest
   /** Append a "Downloaded" audit event when an approved certificate is generated. */
   recordDownload: (id: string) => void
-  /** Force a re-read from storage (used after admin writes in the same tab). */
+  /** Force a re-read from the durable server copy (e.g. after returning to the tab). */
   refresh: () => void
 }
 
@@ -297,61 +67,71 @@ const CertificatesContext = createContext<CertificatesContextValue | null>(null)
 export function CertificateRequestsProvider({ children }: { children: React.ReactNode }) {
   const [requests, setRequests] = useState<CertificateRequest[]>([])
   const [hydrated, setHydrated] = useState(false)
+  // Skip the very first mirror that the hydration setState would trigger, so we
+  // never echo freshly-loaded server data straight back to the server.
+  const skipNextSync = useRef(true)
 
-  const load = () => setRequests(readJson<CertificateRequest[]>(requestsKey(), []))
+  const loadFromServer = () => {
+    getMyCertificateRequests()
+      .then((res) => {
+        if (res.ok && res.requests.length) {
+          skipNextSync.current = true
+          setRequests(res.requests)
+        }
+      })
+      .catch(() => {})
+  }
 
+  // Seed instantly from the local cache, then reconcile with the server.
   useEffect(() => {
-    load()
-    setHydrated(true)
+    const cached = readCache()
+    if (cached.length) setRequests(cached)
+
+    getMyCertificateRequests()
+      .then((res) => {
+        if (res.ok && res.requests.length) {
+          skipNextSync.current = true
+          setRequests(res.requests)
+        }
+      })
+      .catch(() => {})
+      .finally(() => setHydrated(true))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Persist on change (only after hydration to avoid clobbering stored data).
-  // notify=false: this is OUR OWN state being saved, so we must not fire the
-  // same-tab sync event back at ourselves (that caused an infinite loop).
+  // Persist on change: write the local cache (instant) and mirror to the server
+  // (durable). The server merge preserves administrator-owned lifecycle fields.
   useEffect(() => {
     if (!hydrated) return
-    writeJson(requestsKey(), requests, false)
+    writeCache(requests)
+    if (skipNextSync.current) {
+      skipNextSync.current = false
+      return
+    }
+    void syncMyCertificateRequests(
+      requests.map((r) => ({ id: r.id, data: r as unknown as Record<string, unknown>, status: r.status })),
+    ).catch(() => {})
   }, [requests, hydrated])
 
-  // Resync on EXTERNAL writes only: real cross-tab `storage` events and the
-  // same-tab custom event fired by the admin manager. We never resync from our
-  // own persist, so there is no write→resync→write feedback loop.
+  // Re-fetch from the server when the client returns to the tab, so a freshly
+  // approved/declined certificate appears without a manual reload.
   useEffect(() => {
     if (!hydrated) return
-    const resync = () => setRequests(readJson<CertificateRequest[]>(requestsKey(), []))
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === requestsKey()) resync()
-    }
-    const onSameTabSync = (e: Event) => {
-      if ((e as CustomEvent<{ key: string }>).detail?.key === requestsKey()) resync()
-    }
+    const onFocus = () => loadFromServer()
     const onVisible = () => {
-      if (document.visibilityState === "visible") resync()
+      if (document.visibilityState === "visible") loadFromServer()
     }
-    window.addEventListener("storage", onStorage)
-    window.addEventListener(CERT_SYNC_EVENT, onSameTabSync as EventListener)
-    window.addEventListener("focus", resync)
+    window.addEventListener("focus", onFocus)
     document.addEventListener("visibilitychange", onVisible)
     return () => {
-      window.removeEventListener("storage", onStorage)
-      window.removeEventListener(CERT_SYNC_EVENT, onSameTabSync as EventListener)
-      window.removeEventListener("focus", resync)
+      window.removeEventListener("focus", onFocus)
       document.removeEventListener("visibilitychange", onVisible)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated])
 
   const addRequest: CertificatesContextValue["addRequest"] = (input) => {
-    const now = new Date().toISOString()
-    const full: CertificateRequest = {
-      ...input,
-      id: generateCertificateId(),
-      reference: generateCertificateReference(input.type),
-      verificationCode: generateVerificationCode(),
-      status: "pending",
-      version: 0,
-      submittedAt: now,
-      events: [{ at: now, action: "Requested", actor: "Client" }],
-    }
+    const full = buildCertificateRequest(input)
     setRequests((prev) => [full, ...prev])
     return full
   }
@@ -368,7 +148,9 @@ export function CertificateRequestsProvider({ children }: { children: React.Reac
   }
 
   return (
-    <CertificatesContext.Provider value={{ requests, hydrated, addRequest, recordDownload, refresh: load }}>
+    <CertificatesContext.Provider
+      value={{ requests, hydrated, addRequest, recordDownload, refresh: loadFromServer }}
+    >
       {children}
     </CertificatesContext.Provider>
   )
