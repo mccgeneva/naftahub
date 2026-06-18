@@ -91,6 +91,7 @@ import { BeneficiaryManager } from "@/components/admin/beneficiary-manager"
 import { adminListPendingKyc } from "@/app/actions/beneficiaries"
 import { BalanceManager } from "@/components/admin/balance-manager"
 import { SkrManager } from "@/components/admin/skr-manager"
+import { CertificateManager } from "@/components/admin/certificate-manager"
 import { toast } from "sonner"
 
 const MASTER_ACCOUNT_CURRENCY = "EUR"
@@ -4041,6 +4042,9 @@ export default function AdminPage() {
 
       {/* SKR Trading Platform: create, assign, transfer & administer safe keeping receipts */}
       <SkrManager />
+
+      {/* Bank Certificates: approve, issue, decline & re-issue official certificates */}
+      <CertificateManager />
 
       {/* Danger zone: reset account data */}
       <Card className="border-destructive/30 bg-destructive/5">

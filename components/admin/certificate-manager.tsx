@@ -1,0 +1,376 @@
+"use client"
+
+import { useEffect, useMemo, useState } from "react"
+import { Award, Check, X, Clock, History, RefreshCw, BadgeCheck } from "lucide-react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { cn } from "@/lib/utils"
+import { toast } from "sonner"
+import { useActivityLog } from "@/components/activity-tracker"
+import { USERS, getUserById } from "@/lib/users"
+import { ADMIN_PASSCODE } from "@/lib/admin-config"
+import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
+import {
+  getCertificateRequestsForUser,
+  setCertificateRequestsForUser,
+  approveCertificateInList,
+  rejectCertificateInList,
+  reissueCertificateInList,
+  CERTIFICATE_TYPE_LABELS,
+  type CertificateRequest,
+} from "@/lib/certificates-store"
+
+const statusStyles: Record<CertificateRequest["status"], string> = {
+  pending: "border-amber-500/20 bg-amber-500/10 text-amber-400",
+  approved: "border-emerald-500/20 bg-emerald-500/10 text-emerald-400",
+  rejected: "border-red-500/20 bg-red-500/10 text-red-400",
+}
+
+const fmt = (iso?: string) => {
+  if (!iso) return "—"
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? iso
+    : `${d.toLocaleDateString("en-GB")} ${d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
+}
+
+const money = (amount: number, currency: string) =>
+  `${currency} ${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+export function CertificateManager() {
+  const logActivity = useActivityLog()
+
+  const [clients, setClients] = useState<SelectableClient[]>(
+    USERS.map((u) => ({
+      id: u.id,
+      fullName: u.fullName,
+      company: u.company,
+      email: u.email,
+      kind: "static" as const,
+    })),
+  )
+  const [targetUserId, setTargetUserId] = useState(USERS[0]?.id ?? "u1")
+  const [requests, setRequests] = useState<CertificateRequest[]>([])
+
+  // Decision dialog
+  const [decision, setDecision] = useState<{ req: CertificateRequest; mode: "approve" | "reject" } | null>(null)
+  const [note, setNote] = useState("")
+  const [auditReq, setAuditReq] = useState<CertificateRequest | null>(null)
+
+  const targetUser = clients.find((c) => c.id === targetUserId) ?? getUserById(targetUserId)
+
+  useEffect(() => {
+    let active = true
+    listSelectableClients(ADMIN_PASSCODE)
+      .then((list) => {
+        if (active && list.length) setClients(list)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const reload = (userId: string) => setRequests(getCertificateRequestsForUser(userId))
+
+  useEffect(() => {
+    reload(targetUserId)
+  }, [targetUserId])
+
+  const persist = (next: CertificateRequest[]) => {
+    setCertificateRequestsForUser(targetUserId, next)
+    setRequests(next)
+  }
+
+  const pending = useMemo(() => requests.filter((r) => r.status === "pending"), [requests])
+  const decided = useMemo(() => requests.filter((r) => r.status !== "pending"), [requests])
+
+  const openDecision = (req: CertificateRequest, mode: "approve" | "reject") => {
+    setDecision({ req, mode })
+    setNote("")
+  }
+
+  const confirmDecision = () => {
+    if (!decision) return
+    const { req, mode } = decision
+    const next =
+      mode === "approve"
+        ? approveCertificateInList(requests, req.id, note)
+        : rejectCertificateInList(requests, req.id, note)
+    persist(next)
+    toast.success(mode === "approve" ? "Certificate issued" : "Request declined", {
+      description: `${CERTIFICATE_TYPE_LABELS[req.type]} (${req.reference}) for ${targetUser.fullName}.`,
+    })
+    logActivity({
+      action: `${mode === "approve" ? "Approved & issued" : "Declined"} ${CERTIFICATE_TYPE_LABELS[req.type]}`,
+      category: "Administration",
+      details: {
+        summary: `Compliance ${mode === "approve" ? "approved and issued" : "declined"} the ${CERTIFICATE_TYPE_LABELS[req.type]} request ${req.reference} for ${targetUser.fullName} (${targetUser.company}).${note.trim() ? ` Note: ${note.trim()}` : ""}`,
+        reference: req.reference,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        decision: mode === "approve" ? "Approved" : "Rejected",
+      },
+    })
+    setDecision(null)
+  }
+
+  const reissue = (req: CertificateRequest) => {
+    const next = reissueCertificateInList(requests, req.id)
+    persist(next)
+    const updated = next.find((r) => r.id === req.id)
+    toast.success("Certificate re-issued", {
+      description: `${req.reference} is now revision ${updated?.version ?? req.version + 1}.`,
+    })
+    logActivity({
+      action: `Re-issued ${CERTIFICATE_TYPE_LABELS[req.type]}`,
+      category: "Administration",
+      details: {
+        summary: `Compliance re-issued the ${CERTIFICATE_TYPE_LABELS[req.type]} ${req.reference} for ${targetUser.fullName}, bumping it to revision ${updated?.version ?? req.version + 1}.`,
+        reference: req.reference,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+      },
+    })
+  }
+
+  return (
+    <Card className="border-border bg-card">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg font-semibold text-foreground">
+          <Award className="h-5 w-5 text-primary" />
+          Bank Certificates — Approval & Issuance
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Review client certificate requests, approve and issue official documents, or decline with a reason. All
+          actions are recorded in the audit trail.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {/* Client selector */}
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Client account</Label>
+          <Select value={targetUserId} onValueChange={setTargetUserId}>
+            <SelectTrigger className="sm:max-w-md">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {clients.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.fullName} — {c.company}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Pending */}
+        <div>
+          <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Clock className="h-4 w-4 text-amber-400" />
+            Pending approval ({pending.length})
+          </p>
+          {pending.length === 0 ? (
+            <p className="rounded-md border border-border bg-secondary/30 p-4 text-center text-sm italic text-muted-foreground">
+              No certificate requests awaiting approval for this client.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {pending.map((req) => (
+                <div key={req.id} className="rounded-lg border border-border bg-secondary/30 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">
+                        {CERTIFICATE_TYPE_LABELS[req.type]}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {req.reference} · {req.accountLabel} · requested {fmt(req.submittedAt)}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        <span className="text-foreground">Purpose:</span> {req.purpose}
+                      </p>
+                      {req.addressee && (
+                        <p className="text-xs text-muted-foreground">
+                          <span className="text-foreground">Addressee:</span> {req.addressee}
+                        </p>
+                      )}
+                      {req.type === "proof-of-funds" && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          <span className="text-foreground">Snapshot:</span>{" "}
+                          {req.balances.map((b) => money(b.amount, b.currency)).join(" · ")} (≈{" "}
+                          {money(req.totalEur, "EUR")})
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button variant="ghost" size="sm" onClick={() => setAuditReq(req)} title="Audit trail">
+                        <History className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                        onClick={() => openDecision(req, "reject")}
+                      >
+                        <X className="mr-1.5 h-4 w-4" />
+                        Decline
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="bg-emerald-600 text-white hover:bg-emerald-700"
+                        onClick={() => openDecision(req, "approve")}
+                      >
+                        <Check className="mr-1.5 h-4 w-4" />
+                        Approve & Issue
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* History */}
+        <div>
+          <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+            <BadgeCheck className="h-4 w-4 text-primary" />
+            Issued & decided ({decided.length})
+          </p>
+          {decided.length === 0 ? (
+            <p className="rounded-md border border-border bg-secondary/30 p-4 text-center text-sm italic text-muted-foreground">
+              No issued or declined certificates yet.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {decided.map((req) => (
+                <div
+                  key={req.id}
+                  className="flex flex-col gap-2 rounded-lg border border-border bg-secondary/30 p-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="flex items-center gap-3">
+                    <Badge variant="secondary" className={cn("shrink-0", statusStyles[req.status])}>
+                      {req.status === "approved" ? (
+                        <Check className="mr-1 h-3 w-3" />
+                      ) : (
+                        <X className="mr-1 h-3 w-3" />
+                      )}
+                      {req.status === "approved" ? `Issued${req.version > 1 ? ` · rev ${req.version}` : ""}` : "Declined"}
+                    </Badge>
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        {CERTIFICATE_TYPE_LABELS[req.type]}{" "}
+                        <span className="text-xs text-muted-foreground">({req.reference})</span>
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {fmt(req.decidedAt)}
+                        {req.decisionNote ? ` · ${req.decisionNote}` : ""}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="sm" onClick={() => setAuditReq(req)} title="Audit trail">
+                      <History className="h-4 w-4" />
+                    </Button>
+                    {req.status === "approved" && (
+                      <Button variant="outline" size="sm" onClick={() => reissue(req)}>
+                        <RefreshCw className="mr-1.5 h-4 w-4" />
+                        Re-issue
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </CardContent>
+
+      {/* Decision dialog */}
+      <Dialog open={!!decision} onOpenChange={(o) => !o && setDecision(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {decision?.mode === "approve" ? "Approve & issue certificate" : "Decline request"}
+            </DialogTitle>
+            <DialogDescription>
+              {decision ? `${CERTIFICATE_TYPE_LABELS[decision.req.type]} · ${decision.req.reference}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">
+              {decision?.mode === "approve" ? "Issuance note (optional)" : "Reason for decline"}
+            </Label>
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={3}
+              placeholder={
+                decision?.mode === "approve"
+                  ? "Optional note recorded in the audit trail."
+                  : "Explain why the request is being declined."
+              }
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDecision(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmDecision}
+              className={
+                decision?.mode === "approve"
+                  ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                  : "bg-red-600 text-white hover:bg-red-700"
+              }
+            >
+              {decision?.mode === "approve" ? "Approve & Issue" : "Decline"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Audit trail */}
+      <Dialog open={!!auditReq} onOpenChange={(o) => !o && setAuditReq(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Audit Trail</DialogTitle>
+            <DialogDescription>{auditReq?.reference}</DialogDescription>
+          </DialogHeader>
+          {auditReq && (
+            <ol className="space-y-3">
+              {auditReq.events.map((ev, i) => (
+                <li key={i} className="flex gap-3">
+                  <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary" />
+                  <div>
+                    <p className="text-sm font-medium text-foreground">
+                      {ev.action} <span className="text-xs text-muted-foreground">· {ev.actor}</span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">{fmt(ev.at)}</p>
+                    {ev.note && <p className="mt-0.5 text-xs text-muted-foreground">“{ev.note}”</p>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+        </DialogContent>
+      </Dialog>
+    </Card>
+  )
+}

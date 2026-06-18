@@ -22,6 +22,7 @@ import { DTCRequestsProvider } from "@/lib/dtc-requests-store"
 import { EuroclearRequestsProvider } from "@/lib/euroclear-requests-store"
 import { CommodityDealsProvider } from "@/lib/commodity-deals-store"
 import { LeverageRequestsProvider } from "@/lib/leverage-requests-store"
+import { CertificateRequestsProvider } from "@/lib/certificates-store"
 import { TreasuryProvider } from "@/lib/treasury-store"
 import { GatewayProvider } from "@/lib/gateway-store"
 
@@ -44,6 +45,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <EuroclearRequestsProvider>
       <CommodityDealsProvider>
       <LeverageRequestsProvider>
+      <CertificateRequestsProvider>
       <TreasuryProvider>
       <GatewayProvider>
       <SessionGuard />
@@ -65,6 +67,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </div>
       </GatewayProvider>
       </TreasuryProvider>
+      </CertificateRequestsProvider>
       </LeverageRequestsProvider>
       </CommodityDealsProvider>
       </EuroclearRequestsProvider>
