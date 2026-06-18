@@ -67,19 +67,10 @@ const principles = [
   },
 ]
 
-type Holding = {
-  icon: typeof Building
-  name: string
-  detail: string
-  value: string
-  change: string
-}
-
-// No assets are held under custody until a fiduciary mandate is funded.
-// Holdings are populated from real custody records, never placeholder figures.
-const holdings: Holding[] = []
-
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF"] as const
+
+// Asset classes that place value under custody, vs. those that remove it.
+const DEPOSIT_TYPES: FiduciaryServiceType[] = ["open_mandate", "deposit_asset"]
 
 // The interactive service catalogue. Each tile opens the request dialog and
 // raises a tracked service job for the custody desk to action.
@@ -161,11 +152,78 @@ export default function FiduciaryPage() {
     [requests],
   )
 
-  // Total under custody is summed from real holdings; €0.00 when none are held.
-  const totalCustody = holdings.reduce((sum, h) => {
-    const numeric = Number.parseFloat(h.value.replace(/[^0-9.]/g, "")) || 0
-    return sum + numeric
-  }, 0)
+  // Live custody is derived from real service jobs — never placeholder figures.
+  // An asset counts toward custody once the desk APPROVES the deposit/mandate;
+  // approved releases reduce it. Pending deposits are shown separately so the
+  // client immediately sees a just-registered asset acknowledged.
+  const approvedDeposits = useMemo(
+    () =>
+      myRequests.filter(
+        (r) =>
+          DEPOSIT_TYPES.includes(r.serviceType) &&
+          r.status === "approved" &&
+          r.estimatedValue > 0,
+      ),
+    [myRequests],
+  )
+  const approvedReleases = useMemo(
+    () =>
+      myRequests.filter(
+        (r) => r.serviceType === "release_asset" && r.status === "approved" && r.estimatedValue > 0,
+      ),
+    [myRequests],
+  )
+  const pendingDeposits = useMemo(
+    () =>
+      myRequests.filter(
+        (r) =>
+          DEPOSIT_TYPES.includes(r.serviceType) &&
+          r.status === "pending" &&
+          r.estimatedValue > 0,
+      ),
+    [myRequests],
+  )
+
+  // Net custody, grouped by currency (deposits minus releases).
+  const custodyByCurrency = useMemo(() => {
+    const totals = new Map<string, number>()
+    for (const r of approvedDeposits) {
+      totals.set(r.currency, (totals.get(r.currency) ?? 0) + r.estimatedValue)
+    }
+    for (const r of approvedReleases) {
+      totals.set(r.currency, (totals.get(r.currency) ?? 0) - r.estimatedValue)
+    }
+    return [...totals.entries()]
+      .map(([currency, amount]) => ({ currency, amount }))
+      .filter((x) => x.amount > 0.005)
+      .sort((a, b) => b.amount - a.amount)
+  }, [approvedDeposits, approvedReleases])
+
+  const pendingByCurrency = useMemo(() => {
+    const totals = new Map<string, number>()
+    for (const r of pendingDeposits) {
+      totals.set(r.currency, (totals.get(r.currency) ?? 0) + r.estimatedValue)
+    }
+    return [...totals.entries()]
+      .map(([currency, amount]) => ({ currency, amount }))
+      .filter((x) => x.amount > 0)
+      .sort((a, b) => b.amount - a.amount)
+  }, [pendingDeposits])
+
+  // Active holdings under custody (one row per approved deposit / mandate).
+  const holdings = useMemo(
+    () =>
+      approvedDeposits.map((r) => ({
+        id: r.id,
+        icon: r.serviceType === "open_mandate" ? Vault : Building,
+        name: r.assetType || r.serviceLabel,
+        detail: `${r.serviceLabel} · Approved ${new Date(r.decidedAt || r.submittedAt).toLocaleDateString("en-GB")}`,
+        value: formatMoney(r.estimatedValue, r.currency),
+      })),
+    [approvedDeposits],
+  )
+
+  const primaryCustody = custodyByCurrency[0] ?? null
 
   const openService = (service: (typeof services)[number]) => {
     setActiveService(service)
@@ -273,13 +331,32 @@ export default function FiduciaryPage() {
                 Total Assets Under Custody
               </p>
               <p className="text-3xl font-bold text-foreground">
-                €{totalCustody.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {primaryCustody
+                  ? formatMoney(primaryCustody.amount, primaryCustody.currency)
+                  : "EUR 0.00"}
               </p>
+              {custodyByCurrency.length > 1 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {custodyByCurrency
+                    .slice(1)
+                    .map((c) => formatMoney(c.amount, c.currency))
+                    .join("  ·  ")}
+                </p>
+              )}
+              {pendingByCurrency.length > 0 && (
+                <p className="mt-1 flex items-center gap-1 text-xs text-yellow-500">
+                  <Clock className="h-3 w-3" />
+                  Pending custody review:{" "}
+                  {pendingByCurrency.map((c) => formatMoney(c.amount, c.currency)).join("  ·  ")}
+                </p>
+              )}
             </div>
           </div>
           <Badge variant="outline" className="w-fit bg-secondary text-muted-foreground border-border">
             <ShieldCheck className="mr-1 h-3 w-3" />
-            {holdings.length > 0 ? `${holdings.length} holdings` : "No assets under custody"}
+            {holdings.length > 0
+              ? `${holdings.length} ${holdings.length === 1 ? "holding" : "holdings"}`
+              : "No assets under custody"}
           </Badge>
         </CardContent>
       </Card>
@@ -385,7 +462,9 @@ export default function FiduciaryPage() {
       <Card className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold">Asset Holdings</CardTitle>
-          <p className="text-xs text-muted-foreground">Held under fiduciary mandate FID-2024-0917</p>
+          <p className="text-xs text-muted-foreground">
+            Assets held under fiduciary custody (approved deposits &amp; mandates)
+          </p>
         </CardHeader>
         <CardContent className="space-y-3">
           {holdings.length === 0 && (
@@ -395,41 +474,35 @@ export default function FiduciaryPage() {
               </div>
               <p className="text-sm font-medium text-foreground">No assets under custody</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Assets held under your fiduciary mandate will appear here once funded.
+                {pendingDeposits.length > 0
+                  ? "Your deposit is awaiting custody desk approval and will appear here once confirmed."
+                  : "Register an asset above. Once the custody desk approves it, it will appear here."}
               </p>
             </div>
           )}
-          {holdings.map((h) => {
-            const positive = !h.change.startsWith("-")
-            return (
-              <div
-                key={h.name}
-                className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-4"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                    <h.icon className="h-5 w-5 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">{h.name}</p>
-                    <p className="text-xs text-muted-foreground">{h.detail}</p>
-                  </div>
+          {holdings.map((h) => (
+            <div
+              key={h.id}
+              className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-4"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+                  <h.icon className="h-5 w-5 text-primary" />
                 </div>
-                <div className="text-right">
-                  <p className="text-base font-bold text-foreground">{h.value}</p>
-                  <span
-                    className={
-                      positive
-                        ? "text-xs font-medium text-green-500"
-                        : "text-xs font-medium text-red-500"
-                    }
-                  >
-                    {h.change}
-                  </span>
+                <div>
+                  <p className="text-sm font-semibold text-foreground">{h.name}</p>
+                  <p className="text-xs text-muted-foreground">{h.detail}</p>
                 </div>
               </div>
-            )
-          })}
+              <div className="text-right">
+                <p className="text-base font-bold text-foreground">{h.value}</p>
+                <span className="flex items-center justify-end gap-1 text-xs font-medium text-green-500">
+                  <ShieldCheck className="h-3 w-3" />
+                  Under custody
+                </span>
+              </div>
+            </div>
+          ))}
         </CardContent>
       </Card>
 
