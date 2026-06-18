@@ -465,8 +465,8 @@ export default function AdminPage() {
       setApproveFundingTarget(null)
       return
     }
-    toast.success("Project funding approved", {
-      description: `${request.projectName} (${formatFundingAmount(request)}) approved with risk score ${score}/10.`,
+    toast.success("Project funding approved & capital credited", {
+      description: `${request.projectName} (${formatFundingAmount(request)}) approved with risk score ${score}/10. Facility credited to the master account; 1.8% p.a. cost of capital accrues monthly.`,
     })
     logActivity({
       action: `Administrator approved project funding ${request.id} for "${request.projectName}" (${formatFundingAmount(request)})`,

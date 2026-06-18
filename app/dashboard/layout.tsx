@@ -5,6 +5,7 @@ import { BackToTop } from "@/components/dashboard/back-to-top"
 import { ActivityTracker } from "@/components/activity-tracker"
 import { SessionGuard } from "@/components/session-guard"
 import { DemoSeedGate } from "@/components/demo-seed-gate"
+import { FundingCapitalReconciler } from "@/components/funding-capital-reconciler"
 import { BeneficiariesProvider } from "@/lib/beneficiaries-store"
 import { LedgerProvider } from "@/lib/ledger-store"
 import { PaymentRequestsProvider } from "@/lib/payment-requests-store"
@@ -47,6 +48,7 @@ export default function DashboardLayout({
       <TreasuryProvider>
       <GatewayProvider>
       <SessionGuard />
+      <FundingCapitalReconciler />
       <div className="flex h-screen overflow-hidden bg-background">
         {/* Desktop Sidebar */}
         <div className="hidden md:block">

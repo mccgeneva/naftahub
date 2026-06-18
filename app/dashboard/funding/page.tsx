@@ -64,6 +64,7 @@ import {
   BANK_STATEMENT_WAIVER_FEE,
   BANK_STATEMENT_WAIVER_CURRENCY,
 } from "@/lib/funding-documents"
+import { monthlyCostOfCapital } from "@/lib/funding-capital"
 
 const SUPPORTED_CURRENCIES = ["USD", "EUR", "GBP", "CHF"] as const
 
@@ -1284,6 +1285,34 @@ export default function ProjectFundingPage() {
                             {r.waiverFeeAccepted ? "accepted (no bank statement)" : "required"}
                           </p>
                         )}
+                      </div>
+                    )}
+
+                    {r.status === "approved" && (
+                      <div className="rounded-lg border border-green-500/20 bg-green-500/5 p-3">
+                        <p className="flex items-center gap-1.5 text-xs font-medium text-green-500">
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Facility activated &amp; credited to master account
+                        </p>
+                        <div className="mt-2 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-muted-foreground">Capital credited</span>
+                            <span className="font-medium text-foreground">
+                              {formatMoney(r.facility, r.currency)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-muted-foreground">Monthly cost of capital</span>
+                            <span className="font-medium text-foreground">
+                              {formatMoney(monthlyCostOfCapital(r.facility), r.currency)}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="mt-2 text-xs text-muted-foreground text-pretty">
+                          The approved facility is credited to your master account balance. The 1.8%
+                          annual cost of capital is charged monthly (÷12) as a debit at the end of
+                          each calendar month.
+                        </p>
                       </div>
                     )}
 
