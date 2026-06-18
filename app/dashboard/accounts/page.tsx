@@ -541,6 +541,10 @@ export default function BankAccountsPage() {
                   placeholder="e.g., CH93 0027 3273 0786 5420 0"
                   value={newIban}
                   onChange={setNewIban}
+                  onResolved={(info) => {
+                    // Auto-fill the SWIFT/BIC field from the resolved IBAN.
+                    if (info?.bic && !newSwift.trim()) setNewSwift(info.bic)
+                  }}
                   inputClassName="bg-zinc-800 border-zinc-700"
                 />
                 <VerifiedBankField
