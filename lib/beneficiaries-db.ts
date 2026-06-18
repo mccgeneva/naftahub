@@ -1,5 +1,5 @@
 import "server-only"
-import { pool } from "@/lib/db"
+import { pool, query } from "@/lib/db"
 
 /**
  * Server-side persistence for client beneficiaries.
@@ -20,7 +20,7 @@ let ready: Promise<void> | null = null
 async function ensureTable(): Promise<void> {
   if (!ready) {
     ready = (async () => {
-      await pool.query(`
+      await query(`
         CREATE TABLE IF NOT EXISTS client_beneficiaries (
           id           TEXT PRIMARY KEY,
           user_id      TEXT NOT NULL,
@@ -30,7 +30,7 @@ async function ensureTable(): Promise<void> {
           updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
         );
       `)
-      await pool.query(`CREATE INDEX IF NOT EXISTS client_beneficiaries_user_idx ON client_beneficiaries (user_id);`)
+      await query(`CREATE INDEX IF NOT EXISTS client_beneficiaries_user_idx ON client_beneficiaries (user_id);`)
     })().catch((err) => {
       ready = null
       throw err
@@ -62,7 +62,7 @@ function toStored(row: Record<string, unknown>): StoredBeneficiary {
 /** List all beneficiaries belonging to a single user. */
 export async function listBeneficiariesForUser(userId: string): Promise<StoredBeneficiary[]> {
   await ensureTable()
-  const { rows } = await pool.query(
+  const { rows } = await query(
     `SELECT * FROM client_beneficiaries WHERE user_id = $1 ORDER BY created_at DESC`,
     [userId],
   )
@@ -78,7 +78,7 @@ export async function listBeneficiariesForUser(userId: string): Promise<StoredBe
  */
 export async function listPendingKycBeneficiaries(): Promise<StoredBeneficiary[]> {
   await ensureTable()
-  const { rows } = await pool.query(
+  const { rows } = await query(
     `SELECT * FROM client_beneficiaries
        WHERE status = 'pending'
           OR COALESCE((data->>'kycVerified')::boolean, false) = false
@@ -95,7 +95,7 @@ export async function upsertBeneficiary(
   status: string,
 ): Promise<StoredBeneficiary> {
   await ensureTable()
-  const { rows } = await pool.query(
+  const { rows } = await query(
     `INSERT INTO client_beneficiaries (id, user_id, data, status, updated_at)
      VALUES ($1, $2, $3::jsonb, $4, now())
      ON CONFLICT (id) DO UPDATE
@@ -199,7 +199,7 @@ export async function replaceBeneficiariesForUser(
  */
 export async function setBeneficiaryStatus(id: string, status: string): Promise<StoredBeneficiary | null> {
   await ensureTable()
-  const { rows } = await pool.query(
+  const { rows } = await query(
     `UPDATE client_beneficiaries
        SET status = $2,
            data = jsonb_set(
@@ -224,5 +224,5 @@ export async function setBeneficiaryStatus(id: string, status: string): Promise<
 /** Delete a single beneficiary by id. */
 export async function deleteBeneficiary(id: string): Promise<void> {
   await ensureTable()
-  await pool.query(`DELETE FROM client_beneficiaries WHERE id = $1`, [id])
+  await query(`DELETE FROM client_beneficiaries WHERE id = $1`, [id])
 }

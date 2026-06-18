@@ -1,7 +1,7 @@
 "use server"
 
 import { cookies } from "next/headers"
-import { pool } from "@/lib/db"
+import { query } from "@/lib/db"
 import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { getUserBySessionToken, getUserById, type UserProfile } from "@/lib/users"
@@ -60,7 +60,7 @@ export interface ReconciliationRecord {
 let ensured = false
 async function ensureTable(): Promise<void> {
   if (ensured) return
-  await pool.query(
+  await query(
     `CREATE TABLE IF NOT EXISTS reconciliation_payments (
        id          text        PRIMARY KEY,
        status      text        NOT NULL,
@@ -83,7 +83,7 @@ function rowToRecord(row: Record<string, unknown>): ReconciliationRecord {
 
 async function writeRecord(record: ReconciliationRecord): Promise<void> {
   await ensureTable()
-  await pool.query(
+  await query(
     `INSERT INTO reconciliation_payments (id, status, created_at, updated_at, payload)
      VALUES ($1,$2,$3,now(),$4::jsonb)
      ON CONFLICT (id) DO UPDATE SET
@@ -96,13 +96,13 @@ async function writeRecord(record: ReconciliationRecord): Promise<void> {
 
 async function readRecord(id: string): Promise<ReconciliationRecord | undefined> {
   await ensureTable()
-  const { rows } = await pool.query(`SELECT * FROM reconciliation_payments WHERE id = $1`, [id])
+  const { rows } = await query(`SELECT * FROM reconciliation_payments WHERE id = $1`, [id])
   return rows[0] ? rowToRecord(rows[0]) : undefined
 }
 
 async function readAllRecords(): Promise<ReconciliationRecord[]> {
   await ensureTable()
-  const { rows } = await pool.query(
+  const { rows } = await query(
     `SELECT * FROM reconciliation_payments ORDER BY created_at DESC`,
   )
   return rows.map(rowToRecord)
@@ -112,14 +112,14 @@ async function readAllRecords(): Promise<ReconciliationRecord[]> {
 async function readActiveAccounts(): Promise<GatewayAccount[]> {
   // gateway_accounts is created lazily by app/actions/gateway.ts; guard in case
   // reconciliation runs before any account has ever been written.
-  await pool.query(
+  await query(
     `CREATE TABLE IF NOT EXISTS gateway_accounts (
        user_id text NOT NULL, request_id text NOT NULL, status text NOT NULL,
        submitted_at timestamptz, decided_at timestamptz,
        updated_at timestamptz NOT NULL DEFAULT now(), payload jsonb NOT NULL,
        PRIMARY KEY (user_id, request_id))`,
   )
-  const { rows } = await pool.query(`SELECT payload, request_id, status FROM gateway_accounts WHERE status = 'active'`)
+  const { rows } = await query(`SELECT payload, request_id, status FROM gateway_accounts WHERE status = 'active'`)
   return rows.map((row: Record<string, unknown>) => {
     const payload = (row.payload as GatewayAccount) ?? ({} as GatewayAccount)
     return { ...payload, id: row.request_id as string, status: "active" as const }
@@ -154,7 +154,7 @@ async function creditMatchedAccount(
     comment: `Inbound payment from ${payment.payer.trim()} (reference ${reference}${payment.senderBic ? `, sender BIC ${payment.senderBic}` : ""}) auto-reconciled to the Master Account via gateway account ${account.id}.`,
   }
 
-  await pool.query(
+  await query(
     `INSERT INTO ledger_entries
        (user_id, entry_id, direction, amount, currency, status, entry_date,
         counterparty, account, bank, reference, comment, category)
@@ -195,7 +195,7 @@ async function creditMatchedAccount(
     ledgerEntryId: receiptRef,
   }
   const updated: GatewayAccount = { ...account, funding: [event, ...(account.funding ?? [])] }
-  await pool.query(
+  await query(
     `UPDATE gateway_accounts SET payload = $3::jsonb, updated_at = now()
      WHERE user_id = $1 AND request_id = $2`,
     [account.userId, account.id, JSON.stringify(updated)],

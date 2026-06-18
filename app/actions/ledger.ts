@@ -1,7 +1,7 @@
 "use server"
 
 import { cookies } from "next/headers"
-import { pool, isDatabaseConfigured } from "@/lib/db"
+import { query, isDatabaseConfigured } from "@/lib/db"
 import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { getUserBySessionToken, getUserById, type UserProfile } from "@/lib/users"
@@ -38,7 +38,7 @@ const DB_NOT_CONFIGURED_MSG =
  */
 async function ensureTable(): Promise<void> {
   if (ensured) return
-  await pool.query(
+  await query(
     `CREATE TABLE IF NOT EXISTS ledger_entries (
        user_id      text        NOT NULL,
        entry_id     text        NOT NULL,
@@ -80,7 +80,7 @@ function rowToEntry(row: Record<string, unknown>): LedgerEntry {
 
 async function readLedger(userId: string): Promise<LedgerEntry[]> {
   await ensureTable()
-  const { rows } = await pool.query(
+  const { rows } = await query(
     `SELECT * FROM ledger_entries WHERE user_id = $1 ORDER BY entry_date DESC`,
     [userId],
   )
@@ -89,7 +89,7 @@ async function readLedger(userId: string): Promise<LedgerEntry[]> {
 
 async function upsertEntry(userId: string, entry: LedgerEntry): Promise<void> {
   await ensureTable()
-  await pool.query(
+  await query(
     `INSERT INTO ledger_entries
        (user_id, entry_id, direction, amount, currency, status, entry_date,
         counterparty, account, bank, reference, comment, category)
@@ -157,7 +157,7 @@ export async function removeMyLedgerEntry(entryId: string): Promise<{ ok: boolea
   if (!user) return { ok: false }
   try {
     await ensureTable()
-    await pool.query(`DELETE FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [user.id, entryId])
+    await query(`DELETE FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [user.id, entryId])
     return { ok: true }
   } catch (err) {
     console.log("[v0] removeMyLedgerEntry failed:", (err as Error).message)
@@ -239,7 +239,7 @@ export async function removeLedgerEntryForUserAdmin(
   }
   try {
     await ensureTable()
-    await pool.query(`DELETE FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [userId, entryId])
+    await query(`DELETE FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [userId, entryId])
     return { ok: true, entries: await readLedger(userId) }
   } catch (err) {
     console.log("[v0] removeLedgerEntryForUserAdmin failed:", (err as Error).message)

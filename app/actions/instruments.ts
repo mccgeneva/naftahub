@@ -1,7 +1,7 @@
 "use server"
 
 import { cookies } from "next/headers"
-import { pool } from "@/lib/db"
+import { query } from "@/lib/db"
 import { SESSION_COOKIE } from "@/lib/auth"
 import { getUserBySessionToken, type UserProfile } from "@/lib/users"
 import type { Instrument } from "@/lib/instrument-requests-store"
@@ -22,7 +22,7 @@ function rowToInstrument(row: Record<string, unknown>): Instrument {
 }
 
 async function readInstruments(userId: string): Promise<Instrument[]> {
-  const { rows } = await pool.query(
+  const { rows } = await query(
     `SELECT * FROM instrument_requests WHERE user_id = $1 ORDER BY submitted_at DESC NULLS LAST`,
     [userId],
   )
@@ -46,7 +46,7 @@ export async function saveInstrumentRequest(instrument: Instrument): Promise<{ o
   const user = await getSessionUser()
   if (!user) return { ok: false }
   try {
-    await pool.query(
+    await query(
       `INSERT INTO instrument_requests
          (user_id, request_id, status, submitted_at, decided_at, updated_at, payload)
        VALUES ($1,$2,$3,$4,$5,now(),$6::jsonb)
@@ -77,7 +77,7 @@ export async function removeInstrumentRequest(requestId: string): Promise<{ ok: 
   const user = await getSessionUser()
   if (!user) return { ok: false }
   try {
-    await pool.query(`DELETE FROM instrument_requests WHERE user_id = $1 AND request_id = $2`, [
+    await query(`DELETE FROM instrument_requests WHERE user_id = $1 AND request_id = $2`, [
       user.id,
       requestId,
     ])

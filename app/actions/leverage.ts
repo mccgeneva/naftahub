@@ -1,7 +1,7 @@
 "use server"
 
 import { cookies } from "next/headers"
-import { pool } from "@/lib/db"
+import { query } from "@/lib/db"
 import { SESSION_COOKIE } from "@/lib/auth"
 import { getUserBySessionToken, type UserProfile } from "@/lib/users"
 import type { LeverageRequest } from "@/lib/leverage-requests-store"
@@ -24,7 +24,7 @@ function rowToRequest(row: Record<string, unknown>): LeverageRequest {
 }
 
 async function readRequests(userId: string): Promise<LeverageRequest[]> {
-  const { rows } = await pool.query(
+  const { rows } = await query(
     `SELECT * FROM leverage_requests WHERE user_id = $1 ORDER BY submitted_at DESC NULLS LAST`,
     [userId],
   )
@@ -48,7 +48,7 @@ export async function saveLeverageRequest(request: LeverageRequest): Promise<{ o
   const user = await getSessionUser()
   if (!user) return { ok: false }
   try {
-    await pool.query(
+    await query(
       `INSERT INTO leverage_requests
          (user_id, request_id, status, submitted_at, decided_at, closed_at, updated_at, payload)
        VALUES ($1,$2,$3,$4,$5,$6,now(),$7::jsonb)
@@ -81,7 +81,7 @@ export async function removeLeverageRequest(requestId: string): Promise<{ ok: bo
   const user = await getSessionUser()
   if (!user) return { ok: false }
   try {
-    await pool.query(`DELETE FROM leverage_requests WHERE user_id = $1 AND request_id = $2`, [
+    await query(`DELETE FROM leverage_requests WHERE user_id = $1 AND request_id = $2`, [
       user.id,
       requestId,
     ])
