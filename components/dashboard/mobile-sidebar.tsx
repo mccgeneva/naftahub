@@ -28,6 +28,7 @@ import {
   Ship,
   Gauge,
   ScrollText,
+  Award,
   LogOut,
   type LucideIcon,
 } from "lucide-react"
@@ -59,6 +60,7 @@ const navGroups: NavGroup[] = [
       { title: "Beneficiaries", href: "/dashboard/beneficiaries", icon: Users },
       { title: "Transactions", href: "/dashboard/transactions", icon: CreditCard },
       { title: "Statements", href: "/dashboard/statements", icon: ScrollText, badge: "PDF" },
+      { title: "Certificates", href: "/dashboard/certificates", icon: Award, badge: "Official" },
       { title: "Live FX Rates", href: "/dashboard/exchange", icon: DollarSign },
       { title: "Bank Accounts", href: "/dashboard/accounts", icon: Building2 },
       { title: "Payment Gateway", href: "/dashboard/gateway", icon: Globe, badge: "IBAN" },
