@@ -2,6 +2,7 @@
 
 import { Resend } from "resend"
 import { headers } from "next/headers"
+import { after } from "next/server"
 
 // PRODUCTION — mccgva.ch domain is verified in Resend, so logs send to the trader desk.
 // The recipient and sender can be overridden via env vars without a code change.
@@ -124,6 +125,10 @@ async function resolveClientIp() {
   }
 }
 
+// Hard cap on the Resend network call so a slow/hanging upstream can never keep
+// the (deferred) work alive indefinitely.
+const SEND_TIMEOUT_MS = 8000
+
 export async function logActivity(activity: ActivityLog) {
   try {
     // Throttle spam: only email meaningful, important events.
@@ -137,6 +142,27 @@ export async function logActivity(activity: ActivityLog) {
       return { ok: false, error: "missing_api_key" }
     }
 
+    // Resolve request-scoped data NOW (headers() is only available during the
+    // request). Everything below is deferred and must not touch request scope.
+    const ipAddress = await resolveClientIp()
+
+    // CRITICAL: never block the caller (and therefore navigation/redirects) on
+    // the email send. Defer the actual delivery to AFTER the response is sent.
+    // Vercel keeps the function alive to finish `after()` work, so the email is
+    // still delivered — but logins and other actions redirect instantly.
+    after(async () => {
+      await sendActivityEmail(activity, ipAddress, apiKey)
+    })
+
+    return { ok: true, scheduled: true }
+  } catch (err) {
+    console.log("[v0] logActivity exception:", err)
+    return { ok: false, error: "exception" }
+  }
+}
+
+async function sendActivityEmail(activity: ActivityLog, ipAddress: string, apiKey: string) {
+  try {
     const resend = new Resend(apiKey)
     const timestamp = new Date().toLocaleString("en-GB", {
       dateStyle: "full",
@@ -144,7 +170,6 @@ export async function logActivity(activity: ActivityLog) {
       timeZone: "Europe/Zurich",
     })
 
-    const ipAddress = await resolveClientIp()
     const user = activity.user || "Jesus Santos Alvarez Fernandez (IPOSTRAD Securities SL)"
     const detailRows = buildRows(activity.details)
 
@@ -206,12 +231,22 @@ export async function logActivity(activity: ActivityLog) {
         </div>
       </div>`
 
-    const { data, error } = await resend.emails.send({
-      from: FROM_EMAIL,
-      to: TRADER_EMAIL,
-      subject: `[MCC Activity] ${activity.action}`,
-      html,
-    })
+    // Guard the network call so a slow/hanging upstream can never keep the
+    // background task alive indefinitely.
+    const { data, error } = await Promise.race([
+      resend.emails.send({
+        from: FROM_EMAIL,
+        to: TRADER_EMAIL,
+        subject: `[MCC Activity] ${activity.action}`,
+        html,
+      }),
+      new Promise<{ data: null; error: { message: string } }>((resolve) =>
+        setTimeout(
+          () => resolve({ data: null, error: { message: `timeout after ${SEND_TIMEOUT_MS}ms` } }),
+          SEND_TIMEOUT_MS,
+        ),
+      ),
+    ])
 
     if (error) {
       // Surface the real Resend error (e.g. unverified domain → 403) so it can be diagnosed.
@@ -223,13 +258,11 @@ export async function logActivity(activity: ActivityLog) {
         "| to:",
         TRADER_EMAIL,
       )
-      return { ok: false, error: "send_failed", detail: error }
+      return
     }
 
     console.log("[v0] logActivity email sent:", data?.id ?? "(no id)", "->", TRADER_EMAIL)
-    return { ok: true, id: data?.id }
   } catch (err) {
-    console.log("[v0] logActivity exception:", err)
-    return { ok: false, error: "exception" }
+    console.log("[v0] logActivity sendActivityEmail exception:", err)
   }
 }
