@@ -417,6 +417,43 @@ export async function getMyProfile(): Promise<SerializableUserProfile | null> {
   }
 }
 
+/**
+ * The authoritative identity of whoever is signed in on THIS request, resolved
+ * strictly from the httpOnly session cookie (never the client-readable
+ * `mcc_user` cookie, which can be stale/missing/spoofed).
+ *
+ *  - Static account → `{ kind: "static", id }`. The client already has the full
+ *    profile in lib/users.ts and looks it up by this id (which is guaranteed to
+ *    exist in the static registry).
+ *  - Dynamic (admin-created) account → `{ kind: "dynamic", id, profile }` with
+ *    the serialized profile for the client to hydrate.
+ *  - No valid session → `null`.
+ *
+ * This is the single source of truth the client uses to decide who it is, so a
+ * wrong/absent `mcc_user` cookie can never cause one user to be shown — or to
+ * act — as another account. Not passcode-gated: it only returns the caller's
+ * OWN identity.
+ */
+export type MyIdentity =
+  | { kind: "static"; id: string }
+  | { kind: "dynamic"; id: string; profile: SerializableUserProfile }
+
+export async function getMyIdentity(): Promise<MyIdentity | null> {
+  try {
+    const { resolveCurrentSession } = await import("@/lib/session-user")
+    const session = await resolveCurrentSession()
+    if (!session) return null
+    if (session.kind === "static") {
+      return { kind: "static", id: session.id }
+    }
+    const rec = await getDynamicUserById(session.id)
+    if (!rec) return null
+    return { kind: "dynamic", id: session.id, profile: rec.profile }
+  } catch {
+    return null
+  }
+}
+
 // --- Shared client picker --------------------------------------------------
 
 export interface SelectableClient {
