@@ -185,14 +185,98 @@ function leverageRequests() {
   ]
 }
 
+// --- SKR Trading: safe keeping receipts held under custody ------------------
+function skrRecords() {
+  return [
+    {
+      id: "SKR-480021",
+      custodian: "Barclays Bank PLC, London",
+      beneficialOwner: "MCC Capital Demo Portfolio",
+      faceValue: 100_000_000,
+      currency: "USD",
+      issueDate: dateAgo(150),
+      expiryDate: dateAhead(215),
+      custodyAccountRef: "CUST-204417",
+      status: "active",
+      notes: "Safe keeping receipt held under custody at Barclays London. Verified and authenticated.",
+      documents: [
+        { id: "DOC-771001", name: "SKR-Certificate-Barclays-480021.pdf", docType: "SKR Certificate", uploadedAt: daysAgo(150) },
+        { id: "DOC-771002", name: "Custodian-Confirmation-480021.pdf", docType: "Custodian Confirmation", uploadedAt: daysAgo(149) },
+      ],
+      transactions: [
+        { id: "TX-900101", date: daysAgo(150), type: "Issuance", description: "SKR created and assigned to the portfolio. Custodian: Barclays Bank PLC, London.", reference: "ADM-440021" },
+        { id: "TX-900102", date: daysAgo(120), type: "Verification", description: "Instrument verified and authenticated with the issuing custodian.", reference: "REF-440088" },
+      ],
+      assignedUserId: DEMO_USER_ID,
+      createdAt: daysAgo(150),
+      updatedAt: daysAgo(120),
+    },
+    {
+      id: "SKR-480144",
+      custodian: "Deutsche Bank AG, Frankfurt",
+      beneficialOwner: "MCC Capital Demo Portfolio",
+      faceValue: 75_000_000,
+      currency: "EUR",
+      issueDate: dateAgo(90),
+      expiryDate: dateAhead(275),
+      custodyAccountRef: "CUST-205590",
+      status: "active",
+      notes: "Held under custody at Deutsche Bank Frankfurt for collateral purposes.",
+      documents: [
+        { id: "DOC-772001", name: "SKR-Certificate-Deutsche-480144.pdf", docType: "SKR Certificate", uploadedAt: daysAgo(90) },
+      ],
+      transactions: [
+        { id: "TX-901101", date: daysAgo(90), type: "Issuance", description: "SKR created and assigned to the portfolio. Custodian: Deutsche Bank AG, Frankfurt.", reference: "ADM-441044" },
+      ],
+      assignedUserId: DEMO_USER_ID,
+      createdAt: daysAgo(90),
+      updatedAt: daysAgo(90),
+    },
+    {
+      id: "SKR-480290",
+      custodian: "HSBC Holdings PLC, London",
+      beneficialOwner: "MCC Capital Demo Portfolio",
+      faceValue: 40_000_000,
+      currency: "GBP",
+      issueDate: dateAgo(30),
+      custodyAccountRef: "CUST-206710",
+      status: "pending",
+      notes: "Awaiting final custodian authentication before activation.",
+      documents: [],
+      transactions: [
+        { id: "TX-902101", date: daysAgo(30), type: "Issuance", description: "SKR created pending custodian authentication. Custodian: HSBC Holdings PLC.", reference: "ADM-442290" },
+      ],
+      assignedUserId: DEMO_USER_ID,
+      createdAt: daysAgo(30),
+      updatedAt: daysAgo(30),
+    },
+  ]
+}
+
 /**
  * Seed the demo account's data exactly once. No-op for every non-demo user and
  * on subsequent logins (guarded by a per-user marker key). Safe to call on
  * every dashboard mount.
  */
+const SKR_SEED_MARKER = "mcc.demo-seeded-skr.v1"
+
 export function ensureDemoSeed() {
   if (typeof window === "undefined") return
   if (getActiveUserId() !== DEMO_USER_ID) return
+
+  // One-time SKR backfill: seed SKR records for demo accounts that were already
+  // seeded before the SKR module existed, without re-seeding everything else.
+  try {
+    if (!window.localStorage.getItem(scopedKey(SKR_SEED_MARKER))) {
+      if (!window.localStorage.getItem(scopedKey("mcc.skr-records.v1"))) {
+        write("mcc.skr-records.v1", skrRecords())
+      }
+      write(SKR_SEED_MARKER, { seededAt: new Date().toISOString(), version: 1 })
+    }
+  } catch {
+    // ignore availability errors
+  }
+
   try {
     if (window.localStorage.getItem(scopedKey(SEED_MARKER))) return
   } catch {
@@ -208,6 +292,7 @@ export function ensureDemoSeed() {
   write("mcc.dtc-requests.v1", dtcRequests())
   write("mcc.commodity-deals.v1", commodityDeals())
   write("mcc.leverage-requests.v1", leverageRequests())
+  write("mcc.skr-records.v1", skrRecords())
 
   write(SEED_MARKER, { seededAt: new Date().toISOString(), version: 1 })
 }

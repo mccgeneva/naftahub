@@ -1,5 +1,6 @@
 "use client"
 
+import { useMemo, useState } from "react"
 import { toast } from "sonner"
 import {
   Landmark,
@@ -8,11 +9,42 @@ import {
   Eye,
   Building,
   FileText,
+  Vault,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  CalendarClock,
+  Clock,
+  Check,
+  X,
+  ChevronRight,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { useActivityLog } from "@/components/activity-tracker"
+import {
+  useFiduciaryRequests,
+  FIDUCIARY_SERVICE_LABELS,
+  type FiduciaryServiceType,
+} from "@/lib/fiduciary-requests-store"
 
 const principles = [
   {
@@ -47,8 +79,87 @@ type Holding = {
 // Holdings are populated from real custody records, never placeholder figures.
 const holdings: Holding[] = []
 
+const CURRENCIES = ["EUR", "USD", "GBP", "CHF"] as const
+
+// The interactive service catalogue. Each tile opens the request dialog and
+// raises a tracked service job for the custody desk to action.
+const services: {
+  type: FiduciaryServiceType
+  icon: typeof Vault
+  title: string
+  description: string
+  needsAsset: boolean
+  needsValue: boolean
+}[] = [
+  {
+    type: "open_mandate",
+    icon: Vault,
+    title: "Open Fiduciary Mandate",
+    description: "Establish a new segregated custody mandate held in the fiduciary's name.",
+    needsAsset: true,
+    needsValue: true,
+  },
+  {
+    type: "deposit_asset",
+    icon: ArrowDownToLine,
+    title: "Deposit Asset into Custody",
+    description: "Place cash, bullion, securities, or instruments under fiduciary custody.",
+    needsAsset: true,
+    needsValue: true,
+  },
+  {
+    type: "release_asset",
+    icon: ArrowUpFromLine,
+    title: "Release / Withdraw Asset",
+    description: "Instruct the custody desk to release or transfer a held asset.",
+    needsAsset: true,
+    needsValue: true,
+  },
+  {
+    type: "custody_review",
+    icon: CalendarClock,
+    title: "Schedule Custody Review",
+    description: "Book a confidential portfolio and mandate review with your fiduciary officer.",
+    needsAsset: false,
+    needsValue: false,
+  },
+]
+
+const statusStyles: Record<string, string> = {
+  pending: "border-yellow-500/20 bg-yellow-500/10 text-yellow-500",
+  approved: "border-green-500/20 bg-green-500/10 text-green-500",
+  rejected: "border-red-500/20 bg-red-500/10 text-red-500",
+}
+
+const statusIcon = {
+  pending: Clock,
+  approved: Check,
+  rejected: X,
+}
+
+function formatMoney(value: number, currency: string) {
+  return `${currency} ${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
 export default function FiduciaryPage() {
   const log = useActivityLog()
+  const { requests, addRequest } = useFiduciaryRequests()
+
+  // The active service being requested (drives the dialog), plus form state.
+  const [activeService, setActiveService] = useState<(typeof services)[number] | null>(null)
+  const [assetType, setAssetType] = useState("")
+  const [estimatedValue, setEstimatedValue] = useState("")
+  const [currency, setCurrency] = useState<string>("EUR")
+  const [notes, setNotes] = useState("")
+  const [formError, setFormError] = useState<string | null>(null)
+
+  const myRequests = useMemo(
+    () =>
+      [...requests].sort(
+        (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime(),
+      ),
+    [requests],
+  )
 
   // Total under custody is summed from real holdings; €0.00 when none are held.
   const totalCustody = holdings.reduce((sum, h) => {
@@ -56,19 +167,81 @@ export default function FiduciaryPage() {
     return sum + numeric
   }, 0)
 
-  const requestStatement = () => {
+  const openService = (service: (typeof services)[number]) => {
+    setActiveService(service)
+    setAssetType("")
+    setEstimatedValue("")
+    setCurrency("EUR")
+    setNotes("")
+    setFormError(null)
+  }
+
+  const submitService = () => {
+    if (!activeService) return
+    const numericValue = Number.parseFloat(estimatedValue.replace(/,/g, "")) || 0
+
+    if (activeService.needsAsset && !assetType.trim()) {
+      setFormError("Please describe the asset or instrument involved.")
+      return
+    }
+    if (activeService.needsValue && numericValue <= 0) {
+      setFormError("Please enter an indicative value greater than zero.")
+      return
+    }
+
+    const request = addRequest({
+      serviceType: activeService.type,
+      serviceLabel: activeService.title,
+      assetType: assetType.trim(),
+      estimatedValue: numericValue,
+      currency,
+      notes: notes.trim(),
+    })
+
+    const valueText =
+      activeService.needsValue && numericValue > 0 ? ` valued at ${formatMoney(numericValue, currency)}` : ""
     log({
-      action: "Requested a fiduciary asset statement",
+      action: `Raised fiduciary service job ${request.id} — ${activeService.title}`,
       category: "Fiduciary & Assets",
       details: {
-        summary:
-          "Client requested an official statement for fiduciary mandate FID-2024-0917.",
-        mandate: "FID-2024-0917",
+        summary: `Client raised a fiduciary service job (${request.id}): ${activeService.title}.${assetType.trim() ? ` Asset: ${assetType.trim()}.` : ""}${valueText ? `${valueText}.` : ""}${notes.trim() ? ` Instructions: ${notes.trim()}.` : ""} Awaiting custody desk action.`,
+        referenceId: request.id,
+        service: activeService.title,
+        asset: assetType.trim() || "(not applicable)",
+        estimatedValue: activeService.needsValue && numericValue > 0 ? formatMoney(numericValue, currency) : "(not applicable)",
+        status: "Pending custody desk action",
+        submittedAt: new Date().toLocaleString("en-GB"),
+      },
+    })
+
+    toast.success("Service job submitted", {
+      description: `${activeService.title} (${request.id}) has been sent to the custody desk for action.`,
+    })
+    setActiveService(null)
+  }
+
+  const requestStatement = () => {
+    const request = addRequest({
+      serviceType: "statement",
+      serviceLabel: FIDUCIARY_SERVICE_LABELS.statement,
+      assetType: "",
+      estimatedValue: 0,
+      currency: "EUR",
+      notes: "Official fiduciary asset statement requested.",
+    })
+    log({
+      action: `Raised fiduciary service job ${request.id} — Asset Statement`,
+      category: "Fiduciary & Assets",
+      details: {
+        summary: `Client requested an official fiduciary asset statement (service job ${request.id}). Awaiting custody desk action.`,
+        referenceId: request.id,
+        service: "Request Asset Statement",
+        status: "Pending custody desk action",
         requestedAt: new Date().toLocaleString("en-GB"),
       },
     })
     toast.success("Statement requested", {
-      description: "Your fiduciary statement will be delivered to your secure inbox.",
+      description: `Service job ${request.id} sent to the custody desk. Your statement will be delivered to your secure inbox.`,
     })
   }
 
@@ -111,6 +284,37 @@ export default function FiduciaryPage() {
         </CardContent>
       </Card>
 
+      {/* Fiduciary services — interactive */}
+      <Card className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">Fiduciary Services</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Raise a confidential service job for the custody desk to action.
+          </p>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2">
+          {services.map((s) => (
+            <button
+              key={s.type}
+              type="button"
+              onClick={() => openService(s)}
+              className="flex items-start gap-3 rounded-lg border border-border bg-secondary/30 p-4 text-left transition-colors hover:border-primary/40 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                <s.icon className="h-5 w-5 text-primary" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-foreground">{s.title}</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {s.description}
+                </p>
+              </div>
+              <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+            </button>
+          ))}
+        </CardContent>
+      </Card>
+
       {/* Privacy principles */}
       <div className="grid gap-4 md:grid-cols-3">
         {principles.map((p) => (
@@ -125,6 +329,57 @@ export default function FiduciaryPage() {
           </Card>
         ))}
       </div>
+
+      {/* Service jobs tracker */}
+      <Card className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">My Service Jobs</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Track the status of fiduciary requests raised with the custody desk.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {myRequests.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-10 text-center">
+              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
+                <FileText className="h-5 w-5 text-muted-foreground" />
+              </div>
+              <p className="text-sm font-medium text-foreground">No service jobs yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Use the services above to raise a confidential request for the custody desk.
+              </p>
+            </div>
+          )}
+          {myRequests.map((r) => {
+            const StatusIcon = statusIcon[r.status]
+            return (
+              <div
+                key={r.id}
+                className="flex flex-col gap-2 rounded-lg border border-border bg-secondary/30 p-4 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-foreground">{r.serviceLabel}</span>
+                    <span className="text-xs text-muted-foreground">{r.id}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {r.assetType ? `${r.assetType} · ` : ""}
+                    {r.estimatedValue > 0 ? `${formatMoney(r.estimatedValue, r.currency)} · ` : ""}
+                    {new Date(r.submittedAt).toLocaleString("en-GB")}
+                  </p>
+                  {r.decisionNote && (
+                    <p className="text-xs text-muted-foreground">Note: {r.decisionNote}</p>
+                  )}
+                </div>
+                <Badge variant="outline" className={statusStyles[r.status]}>
+                  <StatusIcon className="mr-1 h-3 w-3" />
+                  {r.status.charAt(0).toUpperCase() + r.status.slice(1)}
+                </Badge>
+              </div>
+            )
+          })}
+        </CardContent>
+      </Card>
 
       {/* Holdings */}
       <Card className="bg-card border-border">
@@ -177,6 +432,84 @@ export default function FiduciaryPage() {
           })}
         </CardContent>
       </Card>
+
+      {/* Service request dialog */}
+      <Dialog open={!!activeService} onOpenChange={(open) => !open && setActiveService(null)}>
+        <DialogContent className="sm:max-w-md">
+          {activeService && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{activeService.title}</DialogTitle>
+                <DialogDescription>{activeService.description}</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                {activeService.needsAsset && (
+                  <div className="space-y-2">
+                    <Label htmlFor="fid-asset">Asset / Instrument</Label>
+                    <Input
+                      id="fid-asset"
+                      placeholder="e.g. Gold bullion, SBLC, Listed equities"
+                      value={assetType}
+                      onChange={(e) => setAssetType(e.target.value)}
+                    />
+                  </div>
+                )}
+                {activeService.needsValue && (
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="col-span-2 space-y-2">
+                      <Label htmlFor="fid-value">Indicative Value</Label>
+                      <Input
+                        id="fid-value"
+                        inputMode="decimal"
+                        placeholder="e.g. 1,000,000"
+                        value={estimatedValue}
+                        onChange={(e) => setEstimatedValue(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Currency</Label>
+                      <Select value={currency} onValueChange={setCurrency}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {CURRENCIES.map((c) => (
+                            <SelectItem key={c} value={c}>
+                              {c}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <Label htmlFor="fid-notes">Instructions (optional)</Label>
+                  <Textarea
+                    id="fid-notes"
+                    placeholder="Any specific instructions for the custody desk."
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    rows={3}
+                  />
+                </div>
+                {formError && (
+                  <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400">
+                    <X className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{formError}</span>
+                  </div>
+                )}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setActiveService(null)}>
+                  Cancel
+                </Button>
+                <Button onClick={submitService}>Submit Service Job</Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

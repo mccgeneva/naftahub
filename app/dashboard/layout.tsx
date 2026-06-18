@@ -12,6 +12,8 @@ import { InstrumentRequestsProvider } from "@/lib/instrument-requests-store"
 import { MonetizationRequestsProvider } from "@/lib/monetization-requests-store"
 import { PPPRequestsProvider } from "@/lib/ppp-requests-store"
 import { ProjectFundingProvider } from "@/lib/project-funding-store"
+import { FiduciaryRequestsProvider } from "@/lib/fiduciary-requests-store"
+import { SkrProvider } from "@/lib/skr-store"
 import { DOFRequestsProvider } from "@/lib/dof-requests-store"
 import { DTCRequestsProvider } from "@/lib/dtc-requests-store"
 import { EuroclearRequestsProvider } from "@/lib/euroclear-requests-store"
@@ -35,6 +37,8 @@ export default function DashboardLayout({
       <MonetizationRequestsProvider>
       <PPPRequestsProvider>
       <ProjectFundingProvider>
+      <FiduciaryRequestsProvider>
+      <SkrProvider>
       <DOFRequestsProvider>
       <DTCRequestsProvider>
       <EuroclearRequestsProvider>
@@ -64,6 +68,8 @@ export default function DashboardLayout({
       </EuroclearRequestsProvider>
       </DTCRequestsProvider>
       </DOFRequestsProvider>
+      </SkrProvider>
+      </FiduciaryRequestsProvider>
       </ProjectFundingProvider>
       </PPPRequestsProvider>
       </MonetizationRequestsProvider>
