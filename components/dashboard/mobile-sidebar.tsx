@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
@@ -33,6 +33,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { SheetClose } from "@/components/ui/sheet"
 import { logout } from "@/app/actions/auth"
 
 type NavItem = {
@@ -98,8 +99,22 @@ const navGroups: NavGroup[] = [
   },
 ]
 
-export function MobileSidebar() {
+export function MobileSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname()
+
+  // Safety net: whenever the route changes, close the mobile menu. Without this the
+  // Sheet (and its full-screen overlay) can stay mounted after navigating, leaving the
+  // page visible but untappable. We skip the very first render so the menu doesn't
+  // close itself the instant it opens.
+  const didMount = useRef(false)
+  useEffect(() => {
+    if (!didMount.current) {
+      didMount.current = true
+      return
+    }
+    onNavigate?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname])
 
   // Open every group by default so all destinations (Send Money, Internal Transfers,
   // Treasury, Fiduciary, etc.) are immediately visible. Users can still collapse any group.
@@ -118,7 +133,7 @@ export function MobileSidebar() {
     <div className="flex h-full flex-col bg-sidebar">
       {/* Logo */}
       <div className="flex h-16 shrink-0 items-center border-b border-sidebar-border px-4">
-        <Link href="/dashboard" className="flex items-center gap-2">
+        <Link href="/dashboard" className="flex items-center gap-2" onClick={onNavigate}>
           <img
             src="/images/mcc-logo.png"
             alt="MCC Capital logo"
@@ -164,6 +179,7 @@ export function MobileSidebar() {
                       <Link
                         key={item.href}
                         href={item.href}
+                        onClick={onNavigate}
                         className={cn(
                           "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
                           pathname === item.href

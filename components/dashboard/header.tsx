@@ -57,10 +57,11 @@ function TerminalClock() {
 export function DashboardHeader() {
   const user = useCurrentUser()
   const [notifications, setNotifications] = useState(initialNotifications)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   return (
     <header className="sticky top-0 z-50 flex h-16 items-center justify-between border-b border-border bg-card px-4 md:px-6">
       {/* Mobile Menu */}
-      <Sheet>
+      <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
         <SheetTrigger asChild>
           <Button variant="ghost" size="icon" className="md:hidden">
             <Menu className="h-5 w-5" />
@@ -72,7 +73,7 @@ export function DashboardHeader() {
           <SheetDescription className="sr-only">
             Browse banking, trading, and platform sections.
           </SheetDescription>
-          <MobileSidebar />
+          <MobileSidebar onNavigate={() => setMobileMenuOpen(false)} />
         </SheetContent>
       </Sheet>
 
