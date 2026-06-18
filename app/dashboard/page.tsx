@@ -7,10 +7,14 @@ import { Instruments } from "@/components/dashboard/instruments"
 import { QuickActions } from "@/components/dashboard/quick-actions"
 import { OverviewAside } from "@/components/dashboard/overview-aside"
 import { WelcomeHeader } from "@/components/dashboard/welcome-header"
+import { PlatformTierBanner } from "@/components/dashboard/platform-tier-banner"
 
 export default function DashboardPage() {
   return (
     <div className="space-y-6">
+      {/* Platform membership — first thing the client sees on login */}
+      <PlatformTierBanner />
+
       {/* Welcome Section */}
       <WelcomeHeader />
 
