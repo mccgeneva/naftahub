@@ -20,6 +20,9 @@ import {
   Download,
   AlertTriangle,
   FileCheck2,
+  UploadCloud,
+  Paperclip,
+  X,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -40,7 +43,7 @@ import {
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { useActivityLog } from "@/components/activity-tracker"
-import { useProjectFunding } from "@/lib/project-funding-store"
+import { useProjectFunding, type UploadedFundingDoc } from "@/lib/project-funding-store"
 import {
   AES_TIERS,
   AES_MIN_FACILITY,
@@ -133,7 +136,30 @@ export default function ProjectFundingPage() {
   // whether a qualifying bank statement will be supplied (drives the waiver fee).
   const [docsAcknowledged, setDocsAcknowledged] = useState(false)
   const [bankStatement, setBankStatement] = useState<"yes" | "no" | "">("")
+  // Uploaded documents (metadata only), keyed by required-document id.
+  const [uploads, setUploads] = useState<Record<string, UploadedFundingDoc>>({})
+  const [waiverFeeAccepted, setWaiverFeeAccepted] = useState(false)
+  const fileInputs = useRef<Record<string, HTMLInputElement | null>>({})
   const [formError, setFormError] = useState<string | null>(null)
+
+  const handleFileSelected = (docId: string, title: string, file: File | undefined) => {
+    if (!file) return
+    setUploads((prev) => ({
+      ...prev,
+      [docId]: { docId, title, fileName: file.name, uploadedAt: new Date().toISOString() },
+    }))
+    setFormError(null)
+  }
+
+  const removeUpload = (docId: string) => {
+    setUploads((prev) => {
+      const next = { ...prev }
+      delete next[docId]
+      return next
+    })
+    const input = fileInputs.current[docId]
+    if (input) input.value = ""
+  }
 
   const log = useActivityLog()
   const { requests, addRequest, hydrated } = useProjectFunding()
@@ -186,6 +212,11 @@ export default function ProjectFundingPage() {
     setDescription("")
     setDocsAcknowledged(false)
     setBankStatement("")
+    setUploads({})
+    setWaiverFeeAccepted(false)
+    Object.values(fileInputs.current).forEach((input) => {
+      if (input) input.value = ""
+    })
     setFormError(null)
   }
 
@@ -218,6 +249,26 @@ export default function ProjectFundingPage() {
       )
       return
     }
+
+    const bankStatementProvided = bankStatement === "yes"
+    const waiverFeeApplies = !bankStatementProvided
+
+    // Every required document must be attached, except the bank statement when
+    // the client opts for the upfront waiver-fee path instead.
+    const missing = REQUIRED_FUNDING_DOCUMENTS.filter((doc) => {
+      if (doc.id === "bank-statement" && !bankStatementProvided) return false
+      return !uploads[doc.id]
+    })
+    if (missing.length > 0) {
+      setFormError(`Please attach all required documents. Missing: ${missing.map((d) => d.title).join(", ")}.`)
+      return
+    }
+    if (waiverFeeApplies && !waiverFeeAccepted) {
+      setFormError(
+        `Without a bank statement you must accept the upfront ${BANK_STATEMENT_WAIVER_CURRENCY} ${BANK_STATEMENT_WAIVER_FEE.toLocaleString()} evaluation fee to proceed.`,
+      )
+      return
+    }
     if (!docsAcknowledged) {
       setFormError(
         "Please confirm you will submit the complete required documentation package before applying.",
@@ -225,8 +276,7 @@ export default function ProjectFundingPage() {
       return
     }
 
-    const bankStatementProvided = bankStatement === "yes"
-    const waiverFeeApplies = !bankStatementProvided
+    const uploadedDocuments = Object.values(uploads)
 
     const request = addRequest({
       id: `PF-REQ-${new Date().getTime().toString().slice(-8)}`,
@@ -244,6 +294,10 @@ export default function ProjectFundingPage() {
       documentsAcknowledged: true,
       bankStatementProvided,
       waiverFeeApplies,
+      waiverFeeAccepted: waiverFeeApplies ? waiverFeeAccepted : false,
+      waiverFeeAmount: waiverFeeApplies ? BANK_STATEMENT_WAIVER_FEE : undefined,
+      waiverFeeCurrency: waiverFeeApplies ? BANK_STATEMENT_WAIVER_CURRENCY : undefined,
+      uploadedDocuments,
     })
 
     log({
@@ -264,9 +318,10 @@ export default function ProjectFundingPage() {
         upfrontCashCommitment: `${formatMoney(cashCommitment.min, currency)} – ${formatMoney(cashCommitment.max, currency)}`,
         annualCostOfCapital: `${formatMoney(annualCost, currency)} (1.8%)`,
         documentationAcknowledged: "Yes — full required package",
+        documentsAttached: `${uploadedDocuments.length} file(s): ${uploadedDocuments.map((d) => `${d.title} (${d.fileName})`).join("; ")}`,
         bankStatementProvided: bankStatementProvided ? "Yes" : "No",
         bankStatementWaiverFee: waiverFeeApplies
-          ? `${BANK_STATEMENT_WAIVER_CURRENCY} ${BANK_STATEMENT_WAIVER_FEE.toLocaleString()} may apply (no bank statement)`
+          ? `${BANK_STATEMENT_WAIVER_CURRENCY} ${BANK_STATEMENT_WAIVER_FEE.toLocaleString()} accepted (no bank statement)`
           : "Not applicable",
         status: "Pending Administrator Approval",
         submittedAt: new Date().toLocaleString("en-GB"),
@@ -801,7 +856,7 @@ export default function ProjectFundingPage() {
 
                 <Separator />
 
-                {/* Documentation gate */}
+                {/* Documentation upload gate */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <Label className="text-sm font-medium">Required Documentation</Label>
@@ -816,6 +871,72 @@ export default function ProjectFundingPage() {
                     </Button>
                   </div>
 
+                  {/* Always-required documents (everything except the bank statement) */}
+                  {REQUIRED_FUNDING_DOCUMENTS.filter((d) => d.id !== "bank-statement").map((doc) => {
+                    const uploaded = uploads[doc.id]
+                    return (
+                      <div key={doc.id} className="rounded-lg border border-border bg-muted/20 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-sm font-medium text-foreground">{doc.title}</p>
+                              {doc.templated && (
+                                <Badge
+                                  variant="outline"
+                                  className="border-primary/20 bg-primary/10 text-[10px] text-primary"
+                                >
+                                  MCC template
+                                </Badge>
+                              )}
+                            </div>
+                            {uploaded ? (
+                              <p className="mt-1 flex items-center gap-1.5 text-xs text-green-500">
+                                <Paperclip className="h-3 w-3 shrink-0" />
+                                <span className="truncate">{uploaded.fileName}</span>
+                              </p>
+                            ) : (
+                              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                                {doc.description}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1">
+                            {uploaded && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                onClick={() => removeUpload(doc.id)}
+                                aria-label={`Remove ${doc.title}`}
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            )}
+                            <input
+                              ref={(el) => {
+                                fileInputs.current[doc.id] = el
+                              }}
+                              type="file"
+                              className="hidden"
+                              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                              onChange={(e) => handleFileSelected(doc.id, doc.title, e.target.files?.[0])}
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => fileInputs.current[doc.id]?.click()}
+                            >
+                              <UploadCloud className="mr-1.5 h-4 w-4" />
+                              {uploaded ? "Replace" : "Upload"}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+
                   <div className="space-y-2">
                     <Label className="text-xs text-muted-foreground">
                       Will you provide a qualifying bank statement (not older than 1 month, showing
@@ -823,7 +944,12 @@ export default function ProjectFundingPage() {
                     </Label>
                     <Select
                       value={bankStatement}
-                      onValueChange={(v) => setBankStatement(v as "yes" | "no")}
+                      onValueChange={(v) => {
+                        setBankStatement(v as "yes" | "no")
+                        // Clear the opposite path's data to avoid stale state.
+                        if (v === "yes") setWaiverFeeAccepted(false)
+                        if (v === "no") removeUpload("bank-statement")
+                      }}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Select an option" />
@@ -835,15 +961,90 @@ export default function ProjectFundingPage() {
                     </Select>
                   </div>
 
+                  {/* Bank statement upload (when provided) */}
+                  {bankStatement === "yes" && (
+                    <div className="rounded-lg border border-border bg-muted/20 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground">Bank Statement</p>
+                          {uploads["bank-statement"] ? (
+                            <p className="mt-1 flex items-center gap-1.5 text-xs text-green-500">
+                              <Paperclip className="h-3 w-3 shrink-0" />
+                              <span className="truncate">{uploads["bank-statement"].fileName}</span>
+                            </p>
+                          ) : (
+                            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                              Not older than 1 month, showing at least 3 months of transactions and
+                              the current balance.
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          {uploads["bank-statement"] && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              onClick={() => removeUpload("bank-statement")}
+                              aria-label="Remove bank statement"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          )}
+                          <input
+                            ref={(el) => {
+                              fileInputs.current["bank-statement"] = el
+                            }}
+                            type="file"
+                            className="hidden"
+                            accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                            onChange={(e) =>
+                              handleFileSelected("bank-statement", "Bank Statement", e.target.files?.[0])
+                            }
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => fileInputs.current["bank-statement"]?.click()}
+                          >
+                            <UploadCloud className="mr-1.5 h-4 w-4" />
+                            {uploads["bank-statement"] ? "Replace" : "Upload"}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Waiver fee path (no bank statement) */}
                   {bankStatement === "no" && (
-                    <div className="flex items-start gap-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-3">
-                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
-                      <p className="text-xs leading-relaxed text-foreground">
-                        Without a bank statement, an upfront fee of {BANK_STATEMENT_WAIVER_CURRENCY}{" "}
-                        {BANK_STATEMENT_WAIVER_FEE.toLocaleString()} may be required prior to any
-                        evaluation. Applicants unable to provide either will not be considered, and
-                        all submitted documents will be permanently deleted for compliance.
-                      </p>
+                    <div className="space-y-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-3">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
+                        <p className="text-xs leading-relaxed text-foreground">
+                          Without a bank statement, an upfront fee of {BANK_STATEMENT_WAIVER_CURRENCY}{" "}
+                          {BANK_STATEMENT_WAIVER_FEE.toLocaleString()} is required prior to any
+                          evaluation. Applicants unable to provide either will not be considered, and
+                          all submitted documents will be permanently deleted for compliance.
+                        </p>
+                      </div>
+                      <label
+                        htmlFor="pf-waiver-fee"
+                        className="flex cursor-pointer items-start gap-3 rounded-lg border border-yellow-500/20 bg-card/40 p-2.5"
+                      >
+                        <Checkbox
+                          id="pf-waiver-fee"
+                          checked={waiverFeeAccepted}
+                          onCheckedChange={(checked) => setWaiverFeeAccepted(checked === true)}
+                          className="mt-0.5"
+                        />
+                        <span className="text-xs leading-relaxed text-foreground">
+                          I accept the upfront {BANK_STATEMENT_WAIVER_CURRENCY}{" "}
+                          {BANK_STATEMENT_WAIVER_FEE.toLocaleString()} evaluation fee in lieu of a
+                          bank statement.
+                        </span>
+                      </label>
                     </div>
                   )}
 
@@ -858,10 +1059,9 @@ export default function ProjectFundingPage() {
                       className="mt-0.5"
                     />
                     <span className="text-xs leading-relaxed text-muted-foreground">
-                      I confirm I will submit the complete required documentation package (LOI, CIS,
-                      registry certificate &amp; articles, colour passport copy, business plan, and
-                      bank statement) and acknowledge that customers not in good economic standing
-                      are automatically rejected by compliance.
+                      I confirm the attached documentation package is complete and accurate, and
+                      acknowledge that customers not in good economic standing are automatically
+                      rejected by compliance.
                     </span>
                   </label>
                 </div>
@@ -1059,6 +1259,33 @@ export default function ProjectFundingPage() {
                         ))}
                       </div>
                     </div>
+
+                    {r.uploadedDocuments && r.uploadedDocuments.length > 0 && (
+                      <div>
+                        <p className="mb-1 text-xs text-muted-foreground">
+                          Documentation package ({r.uploadedDocuments.length})
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {r.uploadedDocuments.map((d) => (
+                            <Badge
+                              key={d.docId}
+                              variant="outline"
+                              className="gap-1 border-border bg-muted/30 font-normal text-foreground"
+                            >
+                              <Paperclip className="h-3 w-3" />
+                              {d.title}
+                            </Badge>
+                          ))}
+                        </div>
+                        {r.waiverFeeApplies && (
+                          <p className="mt-2 flex items-center gap-1.5 text-xs text-yellow-500">
+                            <AlertTriangle className="h-3 w-3 shrink-0" />
+                            Upfront evaluation fee {r.waiverFeeCurrency} {(r.waiverFeeAmount ?? 0).toLocaleString()}{" "}
+                            {r.waiverFeeAccepted ? "accepted (no bank statement)" : "required"}
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                     {r.decisionNote && (
                       <div className="rounded-lg border border-border bg-muted/20 p-3">

@@ -60,6 +60,12 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
+    label: "Project Funding",
+    items: [
+      { title: "AES Project Funding", href: "/dashboard/funding", icon: Building2, badge: "AES" },
+    ],
+  },
+  {
     label: "Trading & Instruments",
     items: [
       { title: "NAFTAhub Trading", href: "/dashboard/trading", icon: Cpu, badge: "NQAi" },
