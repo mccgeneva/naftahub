@@ -22,6 +22,16 @@ export function getCountryByCode(code: string): Country | undefined {
   return COUNTRIES.find((c) => c.code === code.toUpperCase())
 }
 
+/**
+ * Resolve a country from a (case-insensitive) country name. Useful for legacy
+ * data that stores the country name rather than its ISO code.
+ */
+export function getCountryByName(name: string): Country | undefined {
+  if (!name) return undefined
+  const lower = name.trim().toLowerCase()
+  return COUNTRIES.find((c) => c.name.toLowerCase() === lower)
+}
+
 export const COUNTRIES: Country[] = [
   { name: "Afghanistan", code: "AF" },
   { name: "Åland Islands", code: "AX" },

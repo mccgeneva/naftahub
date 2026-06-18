@@ -507,6 +507,8 @@ export default function BankAccountsPage() {
                     value={newCountry}
                     onChange={setNewCountry}
                     placeholder="Search and select country"
+                    triggerClassName="bg-zinc-800 border-zinc-700 text-zinc-100 hover:bg-zinc-800 hover:text-zinc-100"
+                    contentClassName="bg-zinc-900 border-zinc-800"
                   />
                 </div>
               </div>

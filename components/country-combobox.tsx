@@ -13,16 +13,28 @@ import {
   CommandList,
 } from "@/components/ui/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { COUNTRIES, countryFlag, getCountryByCode } from "@/lib/countries"
+import { COUNTRIES, countryFlag, getCountryByCode, getCountryByName } from "@/lib/countries"
 
 type CountryComboboxProps = {
-  /** Selected ISO 3166-1 alpha-2 country code. */
+  /**
+   * Selected value. When `valueMode` is "code" (default) this is the ISO
+   * 3166-1 alpha-2 code; when "name" it is the (case-insensitive) country name.
+   */
   value?: string
-  onChange: (code: string) => void
+  onChange: (value: string) => void
   placeholder?: string
   id?: string
   className?: string
   triggerClassName?: string
+  /** Optional className applied to the popover content (dropdown panel). */
+  contentClassName?: string
+  /**
+   * Controls the format of `value` and the argument passed to `onChange`.
+   * - "code": ISO 3166-1 alpha-2 code (e.g. "CH")
+   * - "name": lowercased country name (e.g. "switzerland") — used by legacy
+   *   forms that persist country names.
+   */
+  valueMode?: "code" | "name"
 }
 
 export function CountryCombobox({
@@ -31,9 +43,18 @@ export function CountryCombobox({
   placeholder = "Select country",
   id,
   triggerClassName,
+  contentClassName,
+  valueMode = "code",
 }: CountryComboboxProps) {
   const [open, setOpen] = useState(false)
-  const selected = value ? getCountryByCode(value) : undefined
+  const selected = value
+    ? valueMode === "name"
+      ? getCountryByName(value)
+      : getCountryByCode(value)
+    : undefined
+
+  const emit = (code: string, name: string) =>
+    onChange(valueMode === "name" ? name : code)
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -45,7 +66,7 @@ export function CountryCombobox({
           role="combobox"
           aria-expanded={open}
           className={cn(
-            "w-full justify-between bg-zinc-800 border-zinc-700 font-normal hover:bg-zinc-800",
+            "w-full justify-between font-normal",
             !selected && "text-muted-foreground",
             triggerClassName,
           )}
@@ -62,11 +83,11 @@ export function CountryCombobox({
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-[var(--radix-popover-trigger-width)] p-0 bg-zinc-900 border-zinc-800"
+        className={cn("w-[var(--radix-popover-trigger-width)] p-0", contentClassName)}
         align="start"
       >
-        <Command className="bg-zinc-900">
-          <CommandInput placeholder="Search countries..." className="text-foreground" />
+        <Command>
+          <CommandInput placeholder="Search countries..." />
           <CommandList>
             <CommandEmpty>No country found.</CommandEmpty>
             <CommandGroup>
@@ -76,17 +97,17 @@ export function CountryCombobox({
                   // Include the code so search also matches ISO codes (e.g. "CH").
                   value={`${country.name} ${country.code}`}
                   onSelect={() => {
-                    onChange(country.code)
+                    emit(country.code, country.name)
                     setOpen(false)
                   }}
-                  className="gap-2 text-foreground aria-selected:bg-zinc-800"
+                  className="gap-2"
                 >
                   <span aria-hidden="true">{countryFlag(country.code)}</span>
                   <span className="truncate">{country.name}</span>
                   <Check
                     className={cn(
                       "ml-auto h-4 w-4",
-                      value === country.code ? "opacity-100" : "opacity-0",
+                      selected?.code === country.code ? "opacity-100" : "opacity-0",
                     )}
                   />
                 </CommandItem>
