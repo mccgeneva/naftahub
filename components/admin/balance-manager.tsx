@@ -35,7 +35,7 @@ import {
 } from "@/app/actions/ledger"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
-import { USERS, getUserById } from "@/lib/users"
+import { USERS } from "@/lib/users"
 import { getActiveUserId } from "@/lib/user-scope"
 import { useActivityLog } from "@/components/activity-tracker"
 
@@ -64,7 +64,12 @@ export function BalanceManager() {
   const { refresh: refreshLiveLedger } = useLedger()
   const logActivity = useActivityLog()
 
-  const [targetUserId, setTargetUserId] = useState(USERS[0]?.id ?? "u1")
+  // CRITICAL: never default to a real account. If this started on a real user
+  // (e.g. the first registry user), an admin who posted a payment without first
+  // changing the dropdown would silently credit/debit THAT account — which is
+  // exactly how payments were landing on the wrong client (mesa@ipostrad.com).
+  // Start empty so a client must be explicitly chosen before anything can post.
+  const [targetUserId, setTargetUserId] = useState("")
   // The full set of accounts the admin can manage: static registry users plus
   // active dynamic (admin-created) users, fetched once on mount.
   const [clients, setClients] = useState<SelectableClient[]>(
@@ -107,12 +112,24 @@ export function BalanceManager() {
   const [editBusy, setEditBusy] = useState(false)
   const [reversingId, setReversingId] = useState<string | null>(null)
 
-  const targetUser = clients.find((c) => c.id === targetUserId) ?? getUserById(targetUserId)
+  // A client is "selected" only when targetUserId matches a real account in the
+  // list. When nothing is selected we use a neutral placeholder rather than
+  // silently falling back to a real user — so no label, balance, or write can
+  // ever be attributed to an account the admin did not explicitly choose.
+  const selectedClient = clients.find((c) => c.id === targetUserId)
+  const hasTarget = !!targetUserId && !!selectedClient
+  const targetUser = selectedClient ?? { fullName: "No client selected", company: "—", email: "" }
   const isIncoming = direction === "credit"
 
   // Load the selected client's ledger from the server whenever the target
   // changes. The admin passcode is verified server-side.
   useEffect(() => {
+    // Nothing to load until a real client is explicitly selected.
+    if (!targetUserId) {
+      setEntries([])
+      setLoading(false)
+      return
+    }
     let active = true
     setLoading(true)
     getLedgerForUserAdmin(ADMIN_PASSCODE, targetUserId)
@@ -158,6 +175,10 @@ export function BalanceManager() {
   }
 
   const handleSubmit = async () => {
+    if (!hasTarget) {
+      toast.error("Select the client account to post this payment to first.")
+      return
+    }
     const numeric = Number(amount)
     if (!Number.isFinite(numeric) || numeric <= 0) {
       toast.error("Enter a valid amount greater than zero.")
@@ -221,6 +242,7 @@ export function BalanceManager() {
   }
 
   const handleDelete = async (entryId: string) => {
+    if (!hasTarget) return
     const res = await removeLedgerEntryForUserAdmin(ADMIN_PASSCODE, targetUserId, entryId)
     if (!res.ok) {
       toast.error(res.error)
@@ -252,7 +274,7 @@ export function BalanceManager() {
   }
 
   const handleSaveEdit = async () => {
-    if (!editEntry) return
+    if (!editEntry || !hasTarget) return
     const numeric = Number(editAmount)
     if (!Number.isFinite(numeric) || numeric <= 0) {
       toast.error("Enter a valid amount greater than zero.")
@@ -290,6 +312,7 @@ export function BalanceManager() {
   }
 
   const handleReverse = async (entryId: string) => {
+    if (!hasTarget) return
     setReversingId(entryId)
     const res = await reverseLedgerEntryForUserAdmin(ADMIN_PASSCODE, targetUserId, entryId)
     setReversingId(null)
@@ -512,10 +535,16 @@ export function BalanceManager() {
           />
         </div>
 
-        <Button onClick={handleSubmit} disabled={saving || loading} className="w-full sm:w-auto">
+        <Button onClick={handleSubmit} disabled={saving || loading || !hasTarget} className="w-full sm:w-auto">
           {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
           {isIncoming ? "Credit incoming payment" : "Debit outgoing payment"}
         </Button>
+        {!hasTarget && (
+          <p className="text-xs text-amber-500">
+            Select a client account above before posting a payment. No account is selected by default
+            to prevent funds being posted to the wrong client.
+          </p>
+        )}
 
         {/* Recent entries with delete */}
         <div className="space-y-2 border-t border-border pt-4">
