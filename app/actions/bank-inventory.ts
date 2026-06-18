@@ -1,7 +1,7 @@
 "use server"
 
 import { cookies } from "next/headers"
-import { pool } from "@/lib/db"
+import { query } from "@/lib/db"
 import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { getUserBySessionToken, type UserProfile } from "@/lib/users"
@@ -61,7 +61,7 @@ async function requireAdmin(passcode: string): Promise<UserProfile> {
 let ensured = false
 async function ensureTable(): Promise<void> {
   if (ensured) return
-  await pool.query(
+  await query(
     `CREATE TABLE IF NOT EXISTS gateway_bank_inventory (
        bank_key   text        NOT NULL,
        currency   text        NOT NULL,
@@ -88,7 +88,7 @@ function rowToInventory(row: Record<string, unknown>): BankInventoryRow {
 /** Read every explicit inventory row (admin panel). Sparse by design. */
 async function readInventory(): Promise<Map<string, BankInventoryRow>> {
   await ensureTable()
-  const { rows } = await pool.query(`SELECT * FROM gateway_bank_inventory`)
+  const { rows } = await query(`SELECT * FROM gateway_bank_inventory`)
   const map = new Map<string, BankInventoryRow>()
   for (const r of rows) {
     const row = rowToInventory(r)
@@ -205,7 +205,7 @@ export async function setBankAvailabilityAdmin(
     await ensureTable()
     // Read the current (possibly defaulted) state so we can preserve fields the
     // caller didn't change and validate capacity against what's allocated.
-    const { rows: existingRows } = await pool.query(
+    const { rows: existingRows } = await query(
       `SELECT * FROM gateway_bank_inventory WHERE bank_key = $1 AND currency = $2`,
       [bankKey, currency],
     )
@@ -221,7 +221,7 @@ export async function setBankAvailabilityAdmin(
       }
     }
 
-    await pool.query(
+    await query(
       `INSERT INTO gateway_bank_inventory (bank_key, currency, enabled, capacity, allocated, updated_at)
        VALUES ($1, $2, $3, $4, $5, now())
        ON CONFLICT (bank_key, currency) DO UPDATE SET
@@ -286,7 +286,7 @@ export async function allocateBankSlotAdmin(
     // explicit row yet (allocated starts at 1); the UPDATE path only fires when
     // the pool is enabled and has spare capacity, so an exhausted/disabled pool
     // yields zero rows and no mutation.
-    const { rows } = await pool.query(
+    const { rows } = await query(
       `INSERT INTO gateway_bank_inventory (bank_key, currency, enabled, capacity, allocated, updated_at)
        VALUES ($1, $2, true, ${DEFAULT_BANK_CAPACITY}, 1, now())
        ON CONFLICT (bank_key, currency) DO UPDATE SET
@@ -326,7 +326,7 @@ export async function releaseBankSlotAdmin(
   try {
     await requireAdmin(passcode)
     await ensureTable()
-    await pool.query(
+    await query(
       `UPDATE gateway_bank_inventory
          SET allocated = GREATEST(0, allocated - 1), updated_at = now()
        WHERE bank_key = $1 AND currency = $2`,

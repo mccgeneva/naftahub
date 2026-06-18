@@ -1,7 +1,7 @@
 "use server"
 
 import { cookies } from "next/headers"
-import { pool } from "@/lib/db"
+import { query } from "@/lib/db"
 import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { getUserBySessionToken, getUserById, type UserProfile } from "@/lib/users"
@@ -32,7 +32,7 @@ async function requireAdmin(passcode: string): Promise<UserProfile> {
 let ensured = false
 async function ensureTable(): Promise<void> {
   if (ensured) return
-  await pool.query(
+  await query(
     `CREATE TABLE IF NOT EXISTS gateway_accounts (
        user_id     text        NOT NULL,
        request_id  text        NOT NULL,
@@ -58,7 +58,7 @@ function rowToAccount(row: Record<string, unknown>): GatewayAccount {
 
 async function readAccounts(userId: string): Promise<GatewayAccount[]> {
   await ensureTable()
-  const { rows } = await pool.query(
+  const { rows } = await query(
     `SELECT * FROM gateway_accounts WHERE user_id = $1 ORDER BY submitted_at DESC NULLS LAST`,
     [userId],
   )
@@ -68,7 +68,7 @@ async function readAccounts(userId: string): Promise<GatewayAccount[]> {
 /** Read every user's gateway accounts (admin queue). */
 async function readAllAccounts(): Promise<GatewayAccount[]> {
   await ensureTable()
-  const { rows } = await pool.query(
+  const { rows } = await query(
     `SELECT * FROM gateway_accounts ORDER BY submitted_at DESC NULLS LAST`,
   )
   return rows.map(rowToAccount)
@@ -77,7 +77,7 @@ async function readAllAccounts(): Promise<GatewayAccount[]> {
 /** Insert or update a single account row for a given user. */
 async function writeAccount(userId: string, account: GatewayAccount): Promise<void> {
   await ensureTable()
-  await pool.query(
+  await query(
     `INSERT INTO gateway_accounts
        (user_id, request_id, status, submitted_at, decided_at, updated_at, payload)
      VALUES ($1,$2,$3,$4,$5,now(),$6::jsonb)
@@ -101,7 +101,7 @@ async function writeAccount(userId: string, account: GatewayAccount): Promise<vo
 /** Read a single account by user + request id. */
 async function readAccount(userId: string, requestId: string): Promise<GatewayAccount | undefined> {
   await ensureTable()
-  const { rows } = await pool.query(
+  const { rows } = await query(
     `SELECT * FROM gateway_accounts WHERE user_id = $1 AND request_id = $2`,
     [userId, requestId],
   )
@@ -139,7 +139,7 @@ export async function removeGatewayAccount(requestId: string): Promise<{ ok: boo
   if (!user) return { ok: false }
   try {
     await ensureTable()
-    await pool.query(`DELETE FROM gateway_accounts WHERE user_id = $1 AND request_id = $2`, [
+    await query(`DELETE FROM gateway_accounts WHERE user_id = $1 AND request_id = $2`, [
       user.id,
       requestId,
     ])
@@ -309,7 +309,7 @@ export async function recordGatewayFundingAdmin(
       category: "Gateway Collection",
       comment: `Inbound collection received via ${account.type} ${account.id}${bankName ? ` at ${bankName}` : ""} (reference ${reference}) and reconciled to the Master Account.`,
     }
-    await pool.query(
+    await query(
       `INSERT INTO ledger_entries
          (user_id, entry_id, direction, amount, currency, status, entry_date,
           counterparty, account, bank, reference, comment, category)

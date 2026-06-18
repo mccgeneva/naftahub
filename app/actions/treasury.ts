@@ -1,7 +1,7 @@
 "use server"
 
 import { cookies } from "next/headers"
-import { pool } from "@/lib/db"
+import { query } from "@/lib/db"
 import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { getUserBySessionToken, getUserById, type UserProfile } from "@/lib/users"
@@ -78,7 +78,7 @@ function rowToAccount(row: Record<string, unknown>): TreasuryAccount {
 }
 
 async function readAccount(userId: string): Promise<TreasuryAccount> {
-  const { rows } = await pool.query(`SELECT * FROM treasury_accounts WHERE user_id = $1`, [userId])
+  const { rows } = await query(`SELECT * FROM treasury_accounts WHERE user_id = $1`, [userId])
   if (rows.length === 0) return emptyAccount()
   return rowToAccount(rows[0])
 }
@@ -176,7 +176,7 @@ export async function saveTreasuryRecordAdmin(
     // Stamp securedAt the first time the deposit becomes secured (fee accrual start).
     const securedAt = status === "secured" ? prev.securedAt ?? now : prev.securedAt ?? null
 
-    const { rows } = await pool.query(
+    const { rows } = await query(
       `INSERT INTO treasury_accounts
          (user_id, profile, currency, required_deposit, customer_contribution,
           leverage_enabled, leverage_ratio, financed_amount, transaction_exposure,
@@ -273,7 +273,7 @@ export async function postTreasuryTxnAdmin(
       note: input.note?.toString().trim() || undefined,
     }
     const transactions = [txn, ...prev.transactions]
-    const { rows } = await pool.query(
+    const { rows } = await query(
       `UPDATE treasury_accounts
           SET transactions = $2::jsonb, updated_at = $3
         WHERE user_id = $1
@@ -317,7 +317,7 @@ export async function deleteTreasuryTxnAdmin(
   try {
     const prev = await readAccount(userId)
     const transactions = prev.transactions.filter((t) => t.id !== txnId)
-    const { rows } = await pool.query(
+    const { rows } = await query(
       `UPDATE treasury_accounts
           SET transactions = $2::jsonb, updated_at = $3
         WHERE user_id = $1
