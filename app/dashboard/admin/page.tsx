@@ -87,6 +87,7 @@ import { AdminGatewaySection } from "@/components/dashboard/admin-gateway-sectio
 import { AdminReconciliationSection } from "@/components/dashboard/admin-reconciliation-section"
 import { TreasuryManager } from "@/components/admin/treasury-manager"
 import { UserManager } from "@/components/admin/user-manager"
+import { MembershipManager } from "@/components/admin/membership-manager"
 import { BeneficiaryManager } from "@/components/admin/beneficiary-manager"
 import { adminListPendingKyc } from "@/app/actions/beneficiaries"
 import { BalanceManager } from "@/components/admin/balance-manager"
@@ -4022,6 +4023,9 @@ export default function AdminPage() {
 
       {/* Client account administration: create, edit, suspend, reset credentials */}
       <UserManager />
+
+      {/* Membership upgrades: approve requests, then validate the security deposit */}
+      <MembershipManager />
 
       {/* Balance & transaction management: credit, debit, adjust, reverse */}
       <BalanceManager />

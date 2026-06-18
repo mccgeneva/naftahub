@@ -1,21 +1,32 @@
 "use client"
 
 import Link from "next/link"
-import { ArrowUpRight, ShieldCheck } from "lucide-react"
+import { ArrowUpRight, ShieldCheck, Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { useCurrentUser } from "@/lib/use-current-user"
-import { resolvePlatformTier } from "@/lib/platform-tier"
+import { useMembership } from "@/lib/use-membership"
+import { effectivePlatformTier } from "@/lib/membership"
 
 /**
  * The first thing a client sees on the dashboard overview: which platform
- * membership they are on (PRO or Avant-Garde). Derived from the signed-in
- * user's account badge so it always matches whoever is logged in.
+ * membership they are on (PRO or Avant-Garde). The EFFECTIVE tier comes from
+ * the membership grant first (so a newly activated upgrade reflects
+ * immediately) and falls back to the signed-in user's account badge. An
+ * in-flight upgrade (pending approval / awaiting deposit validation) is shown
+ * as a status chip instead of "Active".
  */
 export function PlatformTierBanner() {
   const user = useCurrentUser()
-  const tier = resolvePlatformTier(user.accountBadge)
+  const { membership } = useMembership()
+  const tier = effectivePlatformTier(user.accountBadge, membership)
   const TierIcon = tier.icon
+
+  const upgradeInFlight =
+    membership?.tier === "avantgarde" &&
+    (membership.status === "pending" || membership.status === "approved")
+  const upgradeLabel =
+    membership?.status === "approved" ? "Upgrade approved — securing deposit" : "Upgrade pending"
 
   return (
     <section
@@ -45,10 +56,17 @@ export function PlatformTierBanner() {
               <h2 className="text-2xl font-bold leading-tight text-foreground sm:text-3xl">
                 {tier.label}
               </h2>
-              <span className="inline-flex items-center gap-1 rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-success">
-                <ShieldCheck className="h-3 w-3" />
-                Active
-              </span>
+              {upgradeInFlight ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-amber-500">
+                  <Clock className="h-3 w-3" />
+                  {upgradeLabel}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-success">
+                  <ShieldCheck className="h-3 w-3" />
+                  Active
+                </span>
+              )}
             </div>
             <p className="mt-1 text-sm text-muted-foreground text-pretty">{tier.tagline}</p>
           </div>
@@ -61,7 +79,11 @@ export function PlatformTierBanner() {
             className="w-full sm:w-auto"
           >
             <Link href="/dashboard/plans">
-              {tier.id === "pro" ? "Upgrade to Avant-Garde" : "Manage membership"}
+              {upgradeInFlight
+                ? "View upgrade status"
+                : tier.id === "pro"
+                  ? "Upgrade to Avant-Garde"
+                  : "Manage membership"}
               <ArrowUpRight className="ml-1 h-4 w-4" />
             </Link>
           </Button>
