@@ -20,7 +20,7 @@ export function ActivityTracker({ children }: { children: React.ReactNode }) {
     // by passing their own `user` field.
     const current = getUserById(getActiveUserId())
     const user = activity.user ?? `${current.fullName} (${current.company})`
-    const payload: ActivityLog = {
+    const payload = {
       ...activity,
       user,
       path: activity.path ?? window.location.pathname,
