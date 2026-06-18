@@ -1,7 +1,6 @@
 "use server"
 
 import { headers } from "next/headers"
-import { after } from "next/server"
 import { deliverActivityEmail, type ActivityLog } from "@/lib/activity-email"
 
 async function resolveClientIp() {
@@ -27,16 +26,17 @@ async function resolveClientIp() {
  * Origin/CSRF checks and therefore works on every domain. This action remains
  * for server-to-server callers where origin is irrelevant.
  *
- * Email delivery is deferred with `after()` so it never blocks redirects.
+ * Email delivery is awaited directly (NOT via `after()`): in a serverless
+ * environment `after()` background callbacks are not reliably executed across all
+ * runtimes/regions, which made login/logout emails send on one domain but silently
+ * drop on another. `deliverActivityEmail` has a hard 8s timeout and never throws,
+ * so awaiting guarantees delivery without risking an indefinite hang.
  */
 export async function logActivity(activity: ActivityLog) {
   try {
-    // Resolve request-scoped data NOW; the deferred work must not touch headers().
     const ipAddress = await resolveClientIp()
-    after(async () => {
-      await deliverActivityEmail(activity, ipAddress)
-    })
-    return { ok: true, scheduled: true }
+    const result = await deliverActivityEmail(activity, ipAddress)
+    return result
   } catch (err) {
     console.log("[v0] logActivity exception:", err)
     return { ok: false, error: "exception" }
