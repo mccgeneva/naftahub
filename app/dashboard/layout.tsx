@@ -23,11 +23,7 @@ import { LeverageRequestsProvider } from "@/lib/leverage-requests-store"
 import { TreasuryProvider } from "@/lib/treasury-store"
 import { GatewayProvider } from "@/lib/gateway-store"
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <ActivityTracker>
       <DemoSeedGate>
