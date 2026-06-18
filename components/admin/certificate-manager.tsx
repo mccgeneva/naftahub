@@ -31,6 +31,7 @@ import { listSelectableClients, type SelectableClient } from "@/app/actions/admi
 import { CERTIFICATE_TYPE_LABELS, type CertificateRequest } from "@/lib/certificates-store"
 import {
   adminListCertificateRequests,
+  adminListPendingCertificates,
   adminDecideCertificate,
   adminReissueCertificate,
 } from "@/app/actions/certificates"
@@ -69,6 +70,11 @@ export function CertificateManager() {
   const [loading, setLoading] = useState(false)
   const [working, setWorking] = useState(false)
 
+  // Pending requests across ALL clients, so the administrator never has to guess
+  // which client account filed a request before it can be reviewed.
+  const [pendingAll, setPendingAll] = useState<{ id: string; userId: string; request: CertificateRequest }[]>([])
+  const [pendingLoading, setPendingLoading] = useState(false)
+
   // Decision dialog
   const [decision, setDecision] = useState<{ req: CertificateRequest; mode: "approve" | "reject" } | null>(null)
   const [note, setNote] = useState("")
@@ -103,10 +109,34 @@ export function CertificateManager() {
       })
   }
 
+  const reloadPending = () => {
+    setPendingLoading(true)
+    return adminListPendingCertificates(ADMIN_PASSCODE)
+      .then((res) => {
+        if (res.ok) setPendingAll(res.requests)
+      })
+      .catch(() => {})
+      .finally(() => setPendingLoading(false))
+  }
+
   useEffect(() => {
     reload(targetUserId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetUserId])
+
+  useEffect(() => {
+    reloadPending()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Resolve a friendly client label for a pending row whose owner may be a
+  // static or dynamically-created account.
+  const clientLabel = (userId: string) => {
+    const c = clients.find((x) => x.id === userId)
+    if (c) return `${c.fullName} — ${c.company}`
+    const u = getUserById(userId)
+    return u ? `${u.fullName} — ${u.company}` : userId
+  }
 
   const pending = useMemo(() => requests.filter((r) => r.status === "pending"), [requests])
   const decided = useMemo(() => requests.filter((r) => r.status !== "pending"), [requests])
@@ -126,7 +156,7 @@ export function CertificateManager() {
       toast.error("Action failed", { description: res.error })
       return
     }
-    await reload(targetUserId)
+    await Promise.all([reload(targetUserId), reloadPending()])
     toast.success(mode === "approve" ? "Certificate issued" : "Request declined", {
       description: `${CERTIFICATE_TYPE_LABELS[req.type]} (${req.reference}) for ${targetUser.fullName}.`,
     })
@@ -151,7 +181,7 @@ export function CertificateManager() {
       toast.error("Re-issue failed", { description: res.error })
       return
     }
-    await reload(targetUserId)
+    await Promise.all([reload(targetUserId), reloadPending()])
     const nextVersion = res.request?.version ?? req.version + 1
     toast.success("Certificate re-issued", {
       description: `${req.reference} is now revision ${nextVersion}.`,
@@ -180,6 +210,60 @@ export function CertificateManager() {
         </p>
       </CardHeader>
       <CardContent className="space-y-5">
+        {/* Cross-client pending overview — surfaces every request awaiting a
+            decision regardless of which client account is currently selected,
+            so the administrator never misses a submission. */}
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+          <div className="flex items-center justify-between gap-2">
+            <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+              <Clock className="h-4 w-4 text-amber-400" />
+              Awaiting your approval ({pendingAll.length})
+            </p>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={reloadPending}
+              disabled={pendingLoading}
+              className="h-8 gap-1.5 text-xs"
+            >
+              {pendingLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Refresh
+            </Button>
+          </div>
+          {pendingAll.length === 0 ? (
+            <p className="mt-2 text-sm italic text-muted-foreground">
+              No certificate requests are awaiting approval across any client account.
+            </p>
+          ) : (
+            <ul className="mt-3 flex flex-col gap-2">
+              {pendingAll.map((p) => (
+                <li
+                  key={p.id}
+                  className="flex flex-col gap-2 rounded-md border border-border bg-card p-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {CERTIFICATE_TYPE_LABELS[p.request.type]}
+                      <span className="ml-2 font-mono text-xs text-muted-foreground">{p.request.reference}</span>
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {clientLabel(p.userId)} · requested {fmt(p.request.submittedAt)}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant={p.userId === targetUserId ? "secondary" : "default"}
+                    className="shrink-0"
+                    onClick={() => setTargetUserId(p.userId)}
+                  >
+                    {p.userId === targetUserId ? "Selected below" : "Review"}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
         {/* Client selector */}
         <div className="space-y-1.5">
           <Label className="text-xs text-muted-foreground">Client account</Label>
