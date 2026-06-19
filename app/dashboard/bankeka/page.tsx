@@ -2,7 +2,13 @@
 
 import { MessageSquareText, ShieldCheck } from "lucide-react"
 import { Messenger } from "@/components/bankeka/messenger"
-import { listConversations, getThread, sendMessage, listContacts } from "@/app/actions/bankeka"
+import {
+  listConversations,
+  getThread,
+  sendMessage,
+  findRecipientByEmail,
+  getSupportContact,
+} from "@/app/actions/bankeka"
 
 export default function BankekaPage() {
   return (
@@ -32,8 +38,9 @@ export default function BankekaPage() {
         fetchConversations={listConversations}
         fetchThread={getThread}
         send={sendMessage}
-        fetchContacts={listContacts}
-        emptyHint="Start a private conversation with another account or message MCC Capital support."
+        findByEmail={findRecipientByEmail}
+        fetchSupportContact={getSupportContact}
+        emptyHint="Message MCC Capital support, or start a private conversation with someone by entering their email address."
       />
     </div>
   )
