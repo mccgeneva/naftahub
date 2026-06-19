@@ -129,6 +129,54 @@ export function BeneficiaryManager() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetUserId])
 
+  // Load the cross-client KYC queue (every "pending" beneficiary, any client).
+  const refreshPending = () => {
+    setPendingLoading(true)
+    adminListPendingKyc(ADMIN_PASSCODE)
+      .then((res) => {
+        if (!res.ok) {
+          setPendingAll([])
+          return
+        }
+        setPendingAll(res.beneficiaries.filter((r) => r.status === "pending"))
+      })
+      .finally(() => setPendingLoading(false))
+  }
+
+  useEffect(() => {
+    refreshPending()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Friendly owner label for a pending record, resolved from the client list.
+  const ownerLabel = (userId: string) => {
+    const c = clients.find((x) => x.id === userId)
+    return c ? `${c.fullName}${c.company ? ` · ${c.company}` : ""}` : userId
+  }
+
+  // Inline KYC decision from the cross-client queue, then refresh both lists.
+  const decidePending = async (rec: BeneficiaryRecord, status: BeneficiaryStatus) => {
+    setActingId(rec.id)
+    const res = await adminSetBeneficiaryStatus(ADMIN_PASSCODE, rec.id, status, "Administrator")
+    setActingId(null)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    const name = (rec.data as unknown as Beneficiary).name
+    toast.success(status === "active" ? `Approved ${name}.` : `Rejected ${name}.`)
+    logActivity({
+      action: `Administrator ${status === "active" ? "approved" : "rejected"} beneficiary ${name}`,
+      category: "Administration / Beneficiaries",
+      details: {
+        summary: `Administrator ${status === "active" ? "approved" : "rejected"} KYC for beneficiary ${name} (owner: ${ownerLabel(rec.userId)}).`,
+        targetAccount: ownerLabel(rec.userId),
+      },
+    })
+    refreshPending()
+    if (rec.userId === targetUserId) refresh(targetUserId)
+  }
+
   const openCreate = () => {
     setForm(emptyForm)
     setEditing(false)
@@ -222,6 +270,7 @@ export function BeneficiaryManager() {
     })
     setDialogOpen(false)
     refresh(targetUserId)
+    refreshPending()
   }
 
   const changeStatus = async (rec: BeneficiaryRecord, status: BeneficiaryStatus) => {
@@ -241,6 +290,7 @@ export function BeneficiaryManager() {
       },
     })
     refresh(targetUserId)
+    refreshPending()
   }
 
   const remove = async (rec: BeneficiaryRecord) => {
@@ -260,6 +310,7 @@ export function BeneficiaryManager() {
       },
     })
     refresh(targetUserId)
+    refreshPending()
   }
 
   const pendingCount = records.filter((r) => r.status === "pending").length
@@ -283,6 +334,76 @@ export function BeneficiaryManager() {
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
+        {/* Cross-client KYC queue — the beneficiaries the admin command center
+            counts as "awaiting a decision", regardless of which client owns
+            them. Without this, a pending beneficiary belonging to a client
+            other than the one selected below would be invisible. */}
+        {pendingAll.length > 0 && (
+          <div className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-amber-600" />
+              <span className="text-sm font-semibold text-foreground">
+                {pendingAll.length} beneficiar{pendingAll.length === 1 ? "y" : "ies"} awaiting KYC approval
+              </span>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Across all clients. Approve or reject here, or jump to the owning client to review full details.
+            </p>
+            <ul className="divide-y divide-amber-500/15">
+              {pendingAll.map((rec) => {
+                const d = rec.data as unknown as Beneficiary
+                const busy = actingId === rec.id
+                return (
+                  <li
+                    key={rec.id}
+                    className="flex flex-col gap-2 py-2.5 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-foreground">{d.name}</span>
+                        <Badge variant="outline" className="text-[10px]">
+                          {d.currency}
+                        </Badge>
+                      </div>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {d.bankName} · {d.swiftBic}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setTargetUserId(rec.userId)}
+                        className="mt-0.5 truncate text-[11px] text-primary underline-offset-2 hover:underline"
+                      >
+                        Owner: {ownerLabel(rec.userId)}
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 gap-1 text-emerald-600"
+                        disabled={busy}
+                        onClick={() => decidePending(rec, "active")}
+                      >
+                        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                        Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 gap-1 text-destructive"
+                        disabled={busy}
+                        onClick={() => decidePending(rec, "blocked")}
+                      >
+                        <Ban className="h-3.5 w-3.5" /> Reject
+                      </Button>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        )}
+
         {/* Client picker */}
         <div className="space-y-2">
           <Label>Client account</Label>
