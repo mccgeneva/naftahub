@@ -1,21 +1,29 @@
 // ---------------------------------------------------------------------------
-// Client-only helper that renders every page of a PDF File into a PNG Blob
+// Client-only helper that renders every page of a PDF File into a JPEG Blob
 // using pdf.js. Running in the browser (where a real <canvas> exists) keeps the
 // server free of native canvas dependencies. The resulting page images are
-// uploaded to the KYC analyze endpoint for storage + AI extraction.
+// uploaded directly to Vercel Blob (client upload) and then analysed by the
+// KYC endpoint.
+//
+// JPEG (not PNG) is used deliberately: the page images are uploaded over the
+// network, so the ~5-10x smaller JPEG payload keeps uploads fast and well under
+// any per-file size limits, while remaining more than sharp enough for the
+// model to read passport / document text.
 // ---------------------------------------------------------------------------
 
 /** Hard ceiling so a huge PDF can't lock up the browser or blow past limits. */
 const MAX_PAGES = 20
 /** Target longest-edge pixel size — high enough for OCR-quality text reading. */
-const TARGET_MAX_EDGE = 2000
+const TARGET_MAX_EDGE = 1700
+/** JPEG quality — high enough for crisp document text, small enough to upload. */
+const JPEG_QUALITY = 0.82
 
 export interface RenderedPdf {
   pages: Blob[]
   totalPages: number
 }
 
-/** Render a PDF File to an ordered array of PNG Blobs (one per page). */
+/** Render a PDF File to an ordered array of JPEG Blobs (one per page). */
 export async function renderPdfToPngBlobs(file: File): Promise<RenderedPdf> {
   if (typeof window === "undefined") {
     throw new Error("renderPdfToPngBlobs must run in the browser.")
@@ -51,7 +59,7 @@ export async function renderPdfToPngBlobs(file: File): Promise<RenderedPdf> {
     await page.render({ canvasContext: ctx, viewport }).promise
 
     const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob((b) => resolve(b), "image/png"),
+      canvas.toBlob((b) => resolve(b), "image/jpeg", JPEG_QUALITY),
     )
     if (blob) pages.push(blob)
 
