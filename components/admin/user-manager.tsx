@@ -197,33 +197,63 @@ export function UserManager() {
       const prefix = `kyc/${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
       const clientPayload = JSON.stringify({ passcode: ADMIN_PASSCODE })
 
-      const pdfUpload = await upload(`${prefix}/original.pdf`, file, {
-        access: "private",
-        handleUploadUrl: "/api/kyc/blob-upload",
-        contentType: "application/pdf",
-        clientPayload,
-      })
+      // Guard every upload so a stalled mobile connection can't spin forever.
+      const withTimeout = <T,>(p: Promise<T>, ms: number, label: string) =>
+        Promise.race([
+          p,
+          new Promise<T>((_, reject) =>
+            setTimeout(() => reject(new Error(`${label} timed out. Check your connection and try again.`)), ms),
+          ),
+        ])
+
+      const pdfUpload = await withTimeout(
+        upload(`${prefix}/original.pdf`, file, {
+          access: "private",
+          handleUploadUrl: "/api/kyc/blob-upload",
+          contentType: "application/pdf",
+          clientPayload,
+        }),
+        60_000,
+        "Uploading the PDF",
+      )
 
       const pagePathnames: string[] = []
       for (let i = 0; i < pages.length; i++) {
-        const uploaded = await upload(`${prefix}/page-${i + 1}.jpg`, pages[i], {
-          access: "private",
-          handleUploadUrl: "/api/kyc/blob-upload",
-          contentType: "image/jpeg",
-          clientPayload,
-        })
+        const uploaded = await withTimeout(
+          upload(`${prefix}/page-${i + 1}.jpg`, pages[i], {
+            access: "private",
+            handleUploadUrl: "/api/kyc/blob-upload",
+            contentType: "image/jpeg",
+            clientPayload,
+          }),
+          60_000,
+          `Uploading page ${i + 1}`,
+        )
         pagePathnames.push(uploaded.pathname)
       }
 
-      const res = await fetch("/api/kyc/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          passcode: ADMIN_PASSCODE,
-          pdfPathname: pdfUpload.pathname,
-          pagePathnames,
-        }),
-      })
+      const controller = new AbortController()
+      const analyzeTimer = setTimeout(() => controller.abort(), 90_000)
+      let res: Response
+      try {
+        res = await fetch("/api/kyc/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            passcode: ADMIN_PASSCODE,
+            pdfPathname: pdfUpload.pathname,
+            pagePathnames,
+          }),
+          signal: controller.signal,
+        })
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") {
+          throw new Error("Analysis timed out. Please try again.")
+        }
+        throw e
+      } finally {
+        clearTimeout(analyzeTimer)
+      }
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         throw new Error(body.error || "Analysis failed.")

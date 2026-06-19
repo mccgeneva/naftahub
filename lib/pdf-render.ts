@@ -23,6 +23,26 @@ export interface RenderedPdf {
   totalPages: number
 }
 
+/** Reject if a promise takes longer than `ms`, so the UI can never hang forever. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s.`)),
+      ms,
+    )
+    promise.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer)
+        reject(e)
+      },
+    )
+  })
+}
+
 /** Render a PDF File to an ordered array of JPEG Blobs (one per page). */
 export async function renderPdfToPngBlobs(file: File): Promise<RenderedPdf> {
   if (typeof window === "undefined") {
@@ -31,14 +51,14 @@ export async function renderPdfToPngBlobs(file: File): Promise<RenderedPdf> {
 
   // Import pdf.js lazily so it never ends up in the server bundle.
   const pdfjs = await import("pdfjs-dist")
-  // Resolve the worker from the bundled package (handled by Turbopack/webpack 5).
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    "pdfjs-dist/build/pdf.worker.min.mjs",
-    import.meta.url,
-  ).toString()
+  // Load the worker from a stable public path. Resolving it via import.meta.url
+  // is unreliable across bundlers/mobile Safari and can leave getDocument()
+  // hanging forever when the worker never loads; a fixed /public URL avoids that.
+  pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs"
 
   const data = await file.arrayBuffer()
-  const pdf = await pdfjs.getDocument({ data }).promise
+  const loadingTask = pdfjs.getDocument({ data })
+  const pdf = await withTimeout(loadingTask.promise, 30_000, "Reading the PDF")
   const totalPages = pdf.numPages
   const pageCount = Math.min(totalPages, MAX_PAGES)
 
@@ -56,7 +76,11 @@ export async function renderPdfToPngBlobs(file: File): Promise<RenderedPdf> {
     const ctx = canvas.getContext("2d")
     if (!ctx) throw new Error("Unable to get a 2D canvas context.")
 
-    await page.render({ canvasContext: ctx, viewport }).promise
+    await withTimeout(
+      page.render({ canvasContext: ctx, viewport }).promise,
+      30_000,
+      `Rendering page ${i}`,
+    )
 
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob((b) => resolve(b), "image/jpeg", JPEG_QUALITY),
