@@ -54,11 +54,13 @@ export const TRADINGVIEW_SYMBOLS: Record<string, string> = {
   BRENT: "TVC:UKOIL",
   WTI: "TVC:USOIL",
   NG: "NYMEX:NG1!",
-  // Indices
-  SPX: "SP:SPX",
-  NDX: "NASDAQ:NDX",
-  UKX: "TVC:UKX",
-  DAX: "TVC:DAX",
+  // Indices — use FOREXCOM CFD index symbols, which render with delayed data
+  // in free TradingView widgets (the native SP:/NASDAQ: feeds require a paid
+  // real-time data agreement and otherwise show an error in the widget).
+  SPX: "FOREXCOM:SPXUSD",
+  NDX: "FOREXCOM:NSXUSD",
+  UKX: "FOREXCOM:UKXGBP",
+  DAX: "FOREXCOM:DEUIDXEUR",
   // Rates / volatility
   US10Y: "TVC:US10Y",
   VIX: "TVC:VIX",
