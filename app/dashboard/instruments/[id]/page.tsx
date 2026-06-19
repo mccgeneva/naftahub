@@ -1,0 +1,173 @@
+"use client"
+
+import { useMemo } from "react"
+import Link from "next/link"
+import { useParams, useRouter } from "next/navigation"
+import { ArrowLeft, Download, FileText, CheckCircle2, Clock, XCircle, AlertCircle, Ban } from "lucide-react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { cn } from "@/lib/utils"
+import { toast } from "sonner"
+import { useInstrumentRequests, type Instrument } from "@/lib/instrument-requests-store"
+import { generateInstrumentCertificate } from "@/lib/certificate-pdf"
+
+const typeColors: Record<string, string> = {
+  SBLC: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+  MTN: "bg-green-500/10 text-green-400 border-green-500/20",
+  BG: "bg-orange-500/10 text-orange-400 border-orange-500/20",
+}
+
+const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; bg: string }> = {
+  active: { icon: CheckCircle2, color: "text-green-500", bg: "bg-green-500/10" },
+  pending: { icon: Clock, color: "text-yellow-500", bg: "bg-yellow-500/10" },
+  rejected: { icon: XCircle, color: "text-red-500", bg: "bg-red-500/10" },
+  expired: { icon: AlertCircle, color: "text-red-500", bg: "bg-red-500/10" },
+  cancelled: { icon: Ban, color: "text-muted-foreground", bg: "bg-muted" },
+}
+
+const formatCurrency = (value: number, currency: string) => {
+  const symbols: Record<string, string> = { EUR: "€", USD: "$", GBP: "£", CHF: "CHF " }
+  return `${symbols[currency] ?? `${currency} `}${value.toLocaleString()}`
+}
+
+export default function InstrumentDetailPage() {
+  const params = useParams<{ id: string }>()
+  const router = useRouter()
+  const { instruments, hydrated } = useInstrumentRequests()
+
+  const id = decodeURIComponent(params.id)
+  const instrument = useMemo(() => instruments.find((i) => i.id === id), [instruments, id])
+
+  if (hydrated && !instrument) {
+    return (
+      <div className="mx-auto max-w-2xl">
+        <Button variant="ghost" size="sm" asChild className="mb-4">
+          <Link href="/dashboard/instruments">
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Instruments
+          </Link>
+        </Button>
+        <Card className="bg-card border-border">
+          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary mb-3">
+              <FileText className="h-5 w-5 text-muted-foreground" />
+            </div>
+            <p className="text-sm font-medium text-foreground">Instrument not found</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              No instrument matches <code className="text-foreground">{id}</code>.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  if (!instrument) {
+    return (
+      <div className="mx-auto max-w-2xl">
+        <div className="h-9 w-40 animate-pulse rounded-md bg-secondary" />
+        <div className="mt-4 h-64 animate-pulse rounded-xl bg-secondary" />
+      </div>
+    )
+  }
+
+  const downloadCertificate = (inst: Instrument) => {
+    generateInstrumentCertificate({
+      id: inst.id,
+      type: inst.type,
+      typeFull: inst.typeFull,
+      issuer: inst.issuer,
+      faceValue: formatCurrency(inst.faceValue, inst.currency),
+      currency: inst.currency,
+      status: inst.status,
+      rating: inst.rating,
+      purpose: inst.purpose,
+      issuedDate: inst.issuedDate,
+      expiryDate: inst.expiryDate,
+      assignable: inst.assignable,
+      monetizable: inst.monetizable,
+    })
+    toast.success("Certificate downloaded", {
+      description: `The certificate for ${inst.id} has been generated as a PDF.`,
+    })
+  }
+
+  const status = statusConfig[instrument.status] ?? statusConfig.pending
+  const StatusIcon = status.icon
+
+  const fields: [string, string][] = [
+    ["Issuing Bank", instrument.issuer],
+    ["Credit Rating", instrument.rating],
+    ["Purpose", instrument.purpose],
+    ["Status", instrument.status.charAt(0).toUpperCase() + instrument.status.slice(1)],
+    ["Issued Date", instrument.issuedDate],
+    ["Expiry Date", instrument.expiryDate],
+    ["Days Remaining", `${instrument.daysRemaining} days`],
+    ["Assignable", instrument.assignable ? "Yes" : "No"],
+    ["Monetizable", instrument.monetizable ? "Yes" : "No"],
+  ]
+  if (instrument.decisionNote) fields.push(["Administrator Note", instrument.decisionNote])
+
+  return (
+    <div className="mx-auto max-w-2xl">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <Button variant="ghost" size="sm" onClick={() => router.back()}>
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => downloadCertificate(instrument)}>
+          <Download className="mr-2 h-4 w-4" />
+          Certificate
+        </Button>
+      </div>
+
+      <Card className="bg-card border-border">
+        <CardHeader className="border-b border-border">
+          <div className="flex items-center gap-3">
+            <div className={cn("flex h-10 w-10 items-center justify-center rounded-full", status.bg)}>
+              <StatusIcon className={cn("h-5 w-5", status.color)} />
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className={cn("text-[10px]", typeColors[instrument.type] ?? "")}
+                >
+                  {instrument.type}
+                </Badge>
+                <CardTitle className="text-lg font-bold text-foreground break-all">
+                  {instrument.id}
+                </CardTitle>
+              </div>
+              <p className="text-xs text-muted-foreground">{instrument.typeFull}</p>
+            </div>
+          </div>
+        </CardHeader>
+
+        <CardContent className="space-y-4 pt-6">
+          <div className="rounded-lg border border-border bg-secondary/30 p-4 text-center">
+            <p className="text-xs text-muted-foreground">Face Value</p>
+            <p className="mt-1 text-3xl font-bold text-foreground">
+              {formatCurrency(instrument.faceValue, instrument.currency)}
+            </p>
+          </div>
+
+          <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2">
+            {fields.map(([label, value]) => (
+              <div key={label} className="bg-card p-3">
+                <p className="text-xs text-muted-foreground">{label}</p>
+                <p className="mt-0.5 text-sm font-medium text-foreground break-words">{value}</p>
+              </div>
+            ))}
+          </div>
+
+          <Button className="w-full" onClick={() => downloadCertificate(instrument)}>
+            <Download className="mr-2 h-4 w-4" />
+            Download Certificate
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}

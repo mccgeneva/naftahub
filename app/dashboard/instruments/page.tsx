@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import {
   FileText,
   Plus,
@@ -205,6 +206,7 @@ export default function InstrumentsPage() {
   })
 
   const logActivity = useActivityLog()
+  const router = useRouter()
 
   const handleCopyBankingDetails = () => {
     const text = BANKING_DETAILS.map((r) => `${r.label}: ${r.value}`).join("\n")
@@ -333,7 +335,7 @@ export default function InstrumentsPage() {
   }
 
   const viewInstrument = (instrument: Instrument) => {
-    setViewTarget(instrument)
+    router.push(`/dashboard/instruments/${encodeURIComponent(instrument.id)}`)
     logActivity({
       action: `Viewed details for ${instrument.type} ${instrument.id}`,
       category: "Bank Instruments",
@@ -1005,7 +1007,16 @@ export default function InstrumentsPage() {
                   return (
                     <div
                       key={instrument.id}
-                      className="rounded-lg border border-border bg-secondary/30 p-4"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => router.push(`/dashboard/instruments/${encodeURIComponent(instrument.id)}`)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault()
+                          router.push(`/dashboard/instruments/${encodeURIComponent(instrument.id)}`)
+                        }
+                      }}
+                      className="cursor-pointer rounded-lg border border-border bg-secondary/30 p-4 transition-colors hover:border-primary/40 hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex items-center gap-3">
@@ -1035,12 +1046,12 @@ export default function InstrumentsPage() {
                           </div>
                         </div>
                         <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
+                          <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
                             <Button variant="ghost" size="icon" className="h-8 w-8">
                               <MoreHorizontal className="h-4 w-4" />
                             </Button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
+                          <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
                             <DropdownMenuItem onClick={() => viewInstrument(instrument)}>
                               <ExternalLink className="mr-2 h-4 w-4" />
                               View Details
@@ -1198,7 +1209,16 @@ export default function InstrumentsPage() {
                   return (
                     <div
                       key={instrument.id}
-                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-lg border border-border bg-secondary/30"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => router.push(`/dashboard/instruments/${encodeURIComponent(instrument.id)}`)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault()
+                          router.push(`/dashboard/instruments/${encodeURIComponent(instrument.id)}`)
+                        }
+                      }}
+                      className="flex cursor-pointer flex-col justify-between gap-4 rounded-lg border border-border bg-secondary/30 p-4 transition-colors hover:border-primary/40 hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:flex-row sm:items-center"
                     >
                       <div className="flex items-center gap-4">
                         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
@@ -1250,12 +1270,12 @@ export default function InstrumentsPage() {
                           {instrument.status}
                         </Badge>
                         <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
+                          <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
                             <Button variant="ghost" size="sm">
                               <MoreHorizontal className="h-4 w-4" />
                             </Button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
+                          <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
                             <DropdownMenuItem onClick={() => viewInstrument(instrument)}>
                               <ExternalLink className="mr-2 h-4 w-4" />
                               View Details

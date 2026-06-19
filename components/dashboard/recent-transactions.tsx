@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { ArrowUpRight, ArrowDownLeft, MoreHorizontal, ExternalLink, Download } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -45,6 +46,7 @@ const statusColors = {
 
 export function RecentTransactions() {
   const { entries } = useLedger()
+  const router = useRouter()
   const [selected, setSelected] = useState<LedgerEntry | null>(null)
 
   // Derive the latest activity from the persisted ledger so recorded incoming
@@ -137,7 +139,16 @@ export function RecentTransactions() {
           {transactions.map((txn) => (
             <div
               key={txn.id}
-              className="flex items-center justify-between py-3 border-b border-border last:border-0"
+              role="button"
+              tabIndex={0}
+              onClick={() => router.push(`/dashboard/transactions/${encodeURIComponent(txn.id)}`)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault()
+                  router.push(`/dashboard/transactions/${encodeURIComponent(txn.id)}`)
+                }
+              }}
+              className="flex cursor-pointer items-center justify-between rounded-lg border-b border-border px-2 py-3 transition-colors last:border-0 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <div className="flex items-center gap-3">
                 <div
@@ -184,13 +195,17 @@ export function RecentTransactions() {
                   </Badge>
                 </div>
                 <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
+                  <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
                     <Button variant="ghost" size="icon" className="h-8 w-8">
                       <MoreHorizontal className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onSelect={() => setSelected(txn.entry)}>
+                  <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        router.push(`/dashboard/transactions/${encodeURIComponent(txn.id)}`)
+                      }
+                    >
                       <ExternalLink className="mr-2 h-4 w-4" />
                       View Details
                     </DropdownMenuItem>

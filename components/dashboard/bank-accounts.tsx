@@ -1,7 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { Building2, Copy, ExternalLink, CheckCircle2 } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { Copy, CheckCircle2, ChevronRight } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -104,6 +105,7 @@ const CORE_CURRENCIES = ["EUR", "USD", "GBP", "CHF"]
 export function BankAccounts() {
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const { balanceFor, currencies } = useLedger()
+  const router = useRouter()
 
   // Always show the core multi-currency accounts, then any other currency the
   // client holds (e.g. proceeds from a less common currency exchange).
@@ -156,7 +158,22 @@ export function BankAccounts() {
           {accounts.map((account) => (
             <div
               key={account.id}
-              className="rounded-lg border border-border bg-secondary/30 p-4"
+              role="button"
+              tabIndex={0}
+              onClick={() =>
+                router.push(
+                  `/dashboard/accounts/${account.currency === "EUR" ? "ACC-001" : `ACC-${account.currency}`}`,
+                )
+              }
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault()
+                  router.push(
+                    `/dashboard/accounts/${account.currency === "EUR" ? "ACC-001" : `ACC-${account.currency}`}`,
+                  )
+                }
+              }}
+              className="group cursor-pointer rounded-lg border border-border bg-secondary/30 p-4 transition-colors hover:border-primary/40 hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
@@ -181,14 +198,17 @@ export function BankAccounts() {
                     <p className="text-[11px] text-muted-foreground">{account.holder}</p>
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-lg font-bold text-foreground">{account.balance}</p>
-                  <Badge
-                    variant="outline"
-                    className="bg-green-500/10 text-green-500 border-green-500/20 text-[10px]"
-                  >
-                    Active
-                  </Badge>
+                <div className="flex items-start gap-1">
+                  <div className="text-right">
+                    <p className="text-lg font-bold text-foreground">{account.balance}</p>
+                    <Badge
+                      variant="outline"
+                      className="bg-green-500/10 text-green-500 border-green-500/20 text-[10px]"
+                    >
+                      Active
+                    </Badge>
+                  </div>
+                  <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-primary" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4 pt-3 border-t border-border">
@@ -204,7 +224,10 @@ export function BankAccounts() {
                       variant="ghost"
                       size="icon"
                       className="h-6 w-6"
-                      onClick={() => copyToClipboard(account.iban, `iban-${account.id}`)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        copyToClipboard(account.iban, `iban-${account.id}`)
+                      }}
                     >
                       {copiedId === `iban-${account.id}` ? (
                         <CheckCircle2 className="h-3 w-3 text-green-500" />
@@ -226,7 +249,10 @@ export function BankAccounts() {
                       variant="ghost"
                       size="icon"
                       className="h-6 w-6"
-                      onClick={() => copyToClipboard(account.swift, `swift-${account.id}`)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        copyToClipboard(account.swift, `swift-${account.id}`)
+                      }}
                     >
                       {copiedId === `swift-${account.id}` ? (
                         <CheckCircle2 className="h-3 w-3 text-green-500" />
