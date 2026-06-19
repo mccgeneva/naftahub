@@ -4,6 +4,7 @@
 // cross-user data. Shares the brand styling used by lib/receipt-pdf.ts.
 
 import { jsPDF } from "jspdf"
+import type { GeneratedPdf } from "@/lib/pdf-core"
 
 export interface StatementEntry {
   id: string
@@ -73,9 +74,7 @@ function formatDate(value: string | Date): string {
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
 }
 
-export function generateStatementPdf(input: StatementInput): void {
-  if (typeof window === "undefined") return
-
+export function generateStatementPdf(input: StatementInput): GeneratedPdf {
   const doc = new jsPDF({ unit: "pt", format: "a4" })
   const pageWidth = doc.internal.pageSize.getWidth()
   const pageHeight = doc.internal.pageSize.getHeight()
@@ -240,8 +239,7 @@ export function generateStatementPdf(input: StatementInput): void {
     doc.setFontSize(10.5)
     doc.setTextColor(...BRAND.slate)
     doc.text("No transactions are recorded for this account.", margin, y)
-    doc.save(`MCC-Statement-${statementNo}.pdf`)
-    return
+    return { doc, filename: `MCC-Statement-${statementNo}.pdf`, title: "Account Statement" }
   }
 
   // Column layout for the ledger table.
@@ -390,5 +388,5 @@ export function generateStatementPdf(input: StatementInput): void {
     y += 58 + 26
   })
 
-  doc.save(`MCC-Statement-${statementNo}.pdf`)
+  return { doc, filename: `MCC-Statement-${statementNo}.pdf`, title: "Account Statement" }
 }

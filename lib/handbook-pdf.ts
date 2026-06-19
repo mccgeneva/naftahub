@@ -3,6 +3,7 @@
 // page via lib/handbook-content.ts so the two never drift apart.
 
 import { jsPDF } from "jspdf"
+import type { GeneratedPdf } from "@/lib/pdf-core"
 import { HANDBOOK_META, HANDBOOK_SECTIONS, type HandbookSection } from "./handbook-content"
 
 const BRAND = {

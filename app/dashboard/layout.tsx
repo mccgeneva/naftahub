@@ -6,6 +6,7 @@ import { MarketTicker } from "@/components/dashboard/market-ticker"
 import { BackToTop } from "@/components/dashboard/back-to-top"
 import { ActivityTracker } from "@/components/activity-tracker"
 import { CurrentUserProvider } from "@/lib/use-current-user"
+import { PdfViewerProvider } from "@/lib/pdf-viewer"
 import { SessionGuard } from "@/components/session-guard"
 import { PointerEventsGuard } from "@/components/pointer-events-guard"
 import { DemoSeedGate } from "@/components/demo-seed-gate"
@@ -43,6 +44,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   return (
     <CurrentUserProvider initialIdentity={identity}>
+    <PdfViewerProvider>
     <ActivityTracker>
       <DemoSeedGate>
       <BeneficiariesProvider>
@@ -98,6 +100,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </BeneficiariesProvider>
       </DemoSeedGate>
     </ActivityTracker>
+    </PdfViewerProvider>
     </CurrentUserProvider>
   )
 }
