@@ -71,17 +71,25 @@ export async function listBeneficiariesForUser(userId: string): Promise<StoredBe
 
 /**
  * List every beneficiary still awaiting a KYC decision, across all clients.
- * A beneficiary is "pending KYC" when its status is "pending" OR its stored
- * data has not been marked kycVerified. Used by the administrator panel's
- * Pending Decisions command center so KYC reviews surface alongside the other
- * approval queues.
+ *
+ * A beneficiary is "awaiting a decision" only while its status is "pending" —
+ * this is the exact figure the BeneficiaryManager surfaces to the admin as
+ * "N beneficiaries awaiting approval" and the only state that exposes an
+ * approve/reject control. Once the admin decides (active = approved, or
+ * suspended/blocked = rejected) it is no longer actionable.
+ *
+ * NOTE: we deliberately do NOT also count `kycVerified = false`. An already
+ * active beneficiary that happens to lack a `kycVerified: true` flag (legacy or
+ * edge-case data) is shown as "active" in the UI with nothing to approve, so
+ * counting it created a phantom "awaiting a decision" item the admin could
+ * never clear. Matching the UI's definition keeps the command-center count and
+ * the section in lock step.
  */
 export async function listPendingKycBeneficiaries(): Promise<StoredBeneficiary[]> {
   await ensureTable()
   const { rows } = await query(
     `SELECT * FROM client_beneficiaries
        WHERE status = 'pending'
-          OR COALESCE((data->>'kycVerified')::boolean, false) = false
      ORDER BY created_at ASC`,
   )
   return rows.map(toStored)
