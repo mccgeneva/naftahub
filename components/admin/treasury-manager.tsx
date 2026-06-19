@@ -17,8 +17,9 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import { USERS, getUserById } from "@/lib/users"
+import { USERS } from "@/lib/users"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
+import { listUsers, type AdminUserView } from "@/app/actions/admin-users"
 import {
   TREASURY_PROFILES,
   TREASURY_CURRENCY,
@@ -63,14 +64,51 @@ const TXN_OPTIONS: { value: TreasuryTxnType; label: string }[] = [
   { value: "settlement", label: "Settlement / Repayment" },
 ]
 
+type ClientOption = { id: string; fullName: string; company: string; email: string }
+
 export function TreasuryManager() {
   const [targetUserId, setTargetUserId] = useState(USERS[0]?.id ?? "u1")
   const [stored, setStored] = useState<TreasuryAccount>(() => emptyTreasuryAccount())
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [posting, setPosting] = useState(false)
+  // Dynamically-created client accounts (from the admin User Manager). These
+  // must appear in the picker alongside the built-in accounts, otherwise the
+  // desk can only manage treasury for the 3 seeded users.
+  const [dynamicUsers, setDynamicUsers] = useState<AdminUserView[]>([])
 
-  const targetUser = getUserById(targetUserId)
+  // Load all admin-created client accounts once on mount.
+  useEffect(() => {
+    let active = true
+    listUsers(ADMIN_PASSCODE)
+      .then((res) => {
+        if (active && res.ok) setDynamicUsers(res.users)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
+
+  // One combined, de-duplicated client list (built-in + dynamic) used by both
+  // the picker and the display labels.
+  const clients: ClientOption[] = (() => {
+    const map = new Map<string, ClientOption>()
+    for (const u of USERS) {
+      map.set(u.id, { id: u.id, fullName: u.fullName, company: u.company, email: u.email })
+    }
+    for (const u of dynamicUsers) {
+      map.set(u.id, { id: u.id, fullName: u.fullName, company: u.company || "—", email: u.email })
+    }
+    return Array.from(map.values())
+  })()
+
+  const targetUser = clients.find((c) => c.id === targetUserId) ?? {
+    id: targetUserId,
+    fullName: "Selected client",
+    company: "—",
+    email: "",
+  }
 
   // --- Record editor state -------------------------------------------------
   const [profile, setProfile] = useState<TreasuryProfileKey>("pro")
@@ -235,9 +273,10 @@ export function TreasuryManager() {
               <SelectValue placeholder="Select a client" />
             </SelectTrigger>
             <SelectContent>
-              {USERS.map((u) => (
+              {clients.map((u) => (
                 <SelectItem key={u.id} value={u.id}>
-                  {u.fullName} — {u.company} ({u.email})
+                  {u.fullName} — {u.company}
+                  {u.email ? ` (${u.email})` : ""}
                 </SelectItem>
               ))}
             </SelectContent>
