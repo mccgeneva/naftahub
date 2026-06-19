@@ -2,6 +2,19 @@
 
 import { createContext, useContext, useEffect, useState } from "react"
 import { scopedKey } from "@/lib/user-scope"
+import { buildInstrumentIdentifiers } from "@/lib/instrument-identifiers"
+
+/**
+ * Ensure an instrument carries the full identifier set. Records created before
+ * identifiers existed (or seeded demo data) are enriched once on load so every
+ * instrument — old or new — exposes a valid ISIN, Common Code, serial, issuing
+ * BIC and governing rules.
+ */
+function ensureIdentifiers(inst: Instrument): Instrument {
+  if (inst.isin) return inst
+  const ids = buildInstrumentIdentifiers(inst.issuer, inst.type, new Date(inst.issuedDate || Date.now()))
+  return { ...inst, ...ids }
+}
 
 export type InstrumentStatus = "pending" | "active" | "rejected" | "cancelled" | "expired"
 
@@ -24,6 +37,30 @@ export interface Instrument {
   submittedAt?: string // ISO timestamp of the client request
   decidedAt?: string // ISO timestamp of approval/rejection
   decisionNote?: string // administrator note (e.g. rejection reason)
+
+  // ---- Securities / settlement identifiers (optional for legacy records) ----
+  /** International Securities Identification Number (valid check digit). */
+  isin?: string
+  /** Euroclear / Clearstream 9-digit Common Code. */
+  commonCode?: string
+  /** US CUSIP, present only for US-domiciled issuers. */
+  cusip?: string
+  /** Unique instrument serial / SWIFT documentary reference. */
+  serialNumber?: string
+  /** Issuing bank SWIFT/BIC. */
+  issuerBic?: string
+  /** Issuing bank registered office address. */
+  issuerAddress?: string
+  /** Issuing bank country of incorporation. */
+  issuerCountry?: string
+  /** Place of issuance (city/country). */
+  placeOfIssue?: string
+  /** Governing rules (ISP98 / URDG 758 / English Law, etc.). */
+  governingLaw?: string
+  /** Delivery method (SWIFT MT760 / book-entry). */
+  deliveryMethod?: string
+  /** Instrument form (documentary, global note, etc.). */
+  form?: string
 }
 
 const KEY_BASE = "mcc.instruments.v1"
@@ -57,7 +94,8 @@ export function InstrumentRequestsProvider({ children }: { children: React.React
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(storageKey())
-      setInstruments(stored ? (JSON.parse(stored) as Instrument[]) : [])
+      const parsed = stored ? (JSON.parse(stored) as Instrument[]) : []
+      setInstruments(parsed.map(ensureIdentifiers))
     } catch {
       setInstruments([])
     }
@@ -82,7 +120,8 @@ export function InstrumentRequestsProvider({ children }: { children: React.React
     const resync = () => {
       try {
         const stored = window.localStorage.getItem(storageKey())
-        setInstruments(stored ? (JSON.parse(stored) as Instrument[]) : [])
+        const parsed = stored ? (JSON.parse(stored) as Instrument[]) : []
+        setInstruments(parsed.map(ensureIdentifiers))
       } catch {
         // ignore parse/availability errors
       }

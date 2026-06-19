@@ -19,6 +19,18 @@ export interface InstrumentCertificateData {
   expiryDate: string
   assignable: boolean
   monetizable: boolean
+  // Securities / settlement identifiers (optional for legacy records)
+  isin?: string
+  commonCode?: string
+  cusip?: string
+  serialNumber?: string
+  issuerBic?: string
+  issuerAddress?: string
+  issuerCountry?: string
+  placeOfIssue?: string
+  governingLaw?: string
+  deliveryMethod?: string
+  form?: string
 }
 
 const BRAND = {
@@ -59,75 +71,105 @@ export function generateInstrumentCertificate(data: InstrumentCertificateData): 
 
   let y = margin + 28
 
-  // Header
+  // Letterhead — lead with the ISSUING BANK's brand (the instrument is issued by
+  // them); MCC Capital appears below as the registrar/platform.
   doc.setTextColor(...BRAND.ink)
   doc.setFont("helvetica", "bold")
-  doc.setFontSize(22)
-  doc.text(BRAND.name, pageWidth / 2, y, { align: "center" })
+  doc.setFontSize(20)
+  doc.text(data.issuer || BRAND.name, pageWidth / 2, y, { align: "center" })
+
+  y += 14
+  doc.setFont("helvetica", "normal")
+  doc.setFontSize(9)
+  doc.setTextColor(...BRAND.slate)
+  if (data.issuerAddress) {
+    doc.text(data.issuerAddress + (data.issuerCountry ? `, ${data.issuerCountry}` : ""), pageWidth / 2, y, {
+      align: "center",
+    })
+    y += 11
+  }
+  if (data.issuerBic) {
+    doc.text(`SWIFT/BIC: ${data.issuerBic}`, pageWidth / 2, y, { align: "center" })
+    y += 11
+  }
+  doc.setFontSize(8)
+  doc.text(`Registered & held via ${BRAND.name} — ${BRAND.tagline}`, pageWidth / 2, y, { align: "center" })
 
   y += 18
-  doc.setFont("helvetica", "normal")
-  doc.setFontSize(10)
-  doc.setTextColor(...BRAND.slate)
-  doc.text(BRAND.tagline, pageWidth / 2, y, { align: "center" })
-
-  y += 30
   doc.setDrawColor(...BRAND.gold)
   doc.setLineWidth(1)
   doc.line(margin + 60, y, pageWidth - margin - 60, y)
 
-  y += 36
+  y += 30
   doc.setTextColor(...BRAND.gold)
   doc.setFont("helvetica", "bold")
   doc.setFontSize(16)
   doc.text("CERTIFICATE OF BANK INSTRUMENT", pageWidth / 2, y, { align: "center" })
 
-  y += 22
+  y += 20
   doc.setTextColor(...BRAND.ink)
   doc.setFont("helvetica", "bold")
   doc.setFontSize(13)
   doc.text(data.typeFull, pageWidth / 2, y, { align: "center" })
 
-  y += 16
+  y += 15
   doc.setFont("helvetica", "normal")
-  doc.setFontSize(10)
+  doc.setFontSize(9)
   doc.setTextColor(...BRAND.slate)
   doc.text(`Reference: ${data.id}`, pageWidth / 2, y, { align: "center" })
+  if (data.serialNumber) {
+    y += 11
+    doc.text(`Serial / SWIFT Ref: ${data.serialNumber}`, pageWidth / 2, y, { align: "center" })
+  }
 
-  // Face value highlight
-  y += 40
+  // Face value highlight (with the ISIN printed underneath)
+  y += 24
   doc.setFillColor(255, 247, 237)
   doc.setDrawColor(...BRAND.line)
-  doc.roundedRect(margin, y, contentWidth, 64, 6, 6, "FD")
+  doc.roundedRect(margin, y, contentWidth, 70, 6, 6, "FD")
   doc.setTextColor(...BRAND.slate)
   doc.setFont("helvetica", "normal")
   doc.setFontSize(9)
-  doc.text("FACE VALUE", pageWidth / 2, y + 22, { align: "center" })
+  doc.text("FACE VALUE", pageWidth / 2, y + 20, { align: "center" })
   doc.setTextColor(...BRAND.ink)
   doc.setFont("helvetica", "bold")
-  doc.setFontSize(24)
-  doc.text(data.faceValue, pageWidth / 2, y + 48, { align: "center" })
+  doc.setFontSize(23)
+  doc.text(data.faceValue, pageWidth / 2, y + 44, { align: "center" })
+  if (data.isin) {
+    doc.setFont("helvetica", "normal")
+    doc.setFontSize(9)
+    doc.setTextColor(...BRAND.slate)
+    doc.text(`ISIN  ${data.isin}`, pageWidth / 2, y + 60, { align: "center" })
+  }
 
-  // Details table
+  // Details table — instrument particulars + securities/settlement identifiers.
   y += 92
   const rows: [string, string][] = [
     ["Instrument Type", `${data.type} — ${data.typeFull}`],
     ["Issuing Bank", data.issuer],
+    ...(data.issuerBic ? ([["SWIFT / BIC", data.issuerBic]] as [string, string][]) : []),
+    ...(data.isin ? ([["ISIN", data.isin]] as [string, string][]) : []),
+    ...(data.commonCode ? ([["Common Code", data.commonCode]] as [string, string][]) : []),
+    ...(data.cusip ? ([["CUSIP", data.cusip]] as [string, string][]) : []),
+    ...(data.form ? ([["Form", data.form]] as [string, string][]) : []),
+    ...(data.governingLaw ? ([["Governing Rules", data.governingLaw]] as [string, string][]) : []),
+    ...(data.deliveryMethod ? ([["Delivery", data.deliveryMethod]] as [string, string][]) : []),
+    ...(data.placeOfIssue ? ([["Place of Issue", data.placeOfIssue]] as [string, string][]) : []),
     ["Credit Rating", data.rating],
     ["Purpose", data.purpose],
     ["Status", data.status.charAt(0).toUpperCase() + data.status.slice(1)],
     ["Issued Date", formatDate(data.issuedDate)],
     ["Expiry Date", formatDate(data.expiryDate)],
-    ["Assignable", data.assignable ? "Yes" : "No"],
-    ["Monetizable", data.monetizable ? "Yes" : "No"],
+    ["Assignable / Monetizable", `${data.assignable ? "Yes" : "No"} / ${data.monetizable ? "Yes" : "No"}`],
   ]
 
-  doc.setFontSize(10)
+  const rowH = 20
+  doc.setFontSize(9)
   rows.forEach((row, i) => {
-    const rowY = y + i * 26
+    const rowY = y + i * rowH
     if (i % 2 === 0) {
       doc.setFillColor(250, 250, 251)
-      doc.rect(margin, rowY - 16, contentWidth, 26, "F")
+      doc.rect(margin, rowY - 13, contentWidth, rowH, "F")
     }
     doc.setTextColor(...BRAND.slate)
     doc.setFont("helvetica", "normal")
@@ -137,7 +179,7 @@ export function generateInstrumentCertificate(data: InstrumentCertificateData): 
     doc.text(row[1], pageWidth - margin - 12, rowY, { align: "right" })
   })
 
-  y += rows.length * 26 + 30
+  y += rows.length * rowH + 18
   doc.setDrawColor(...BRAND.line)
   doc.setLineWidth(0.5)
   doc.line(margin, y, pageWidth - margin, y)
@@ -147,11 +189,12 @@ export function generateInstrumentCertificate(data: InstrumentCertificateData): 
   doc.setTextColor(...BRAND.slate)
   doc.setFont("helvetica", "normal")
   doc.setFontSize(8)
+  const issuerName = data.issuer || BRAND.name
   const disclaimer =
-    "This certificate is issued by MCC Capital as a record of the above bank instrument held on the MCC Banking & Trade Platform. It is generated electronically and is valid without signature. Verify authenticity through your relationship manager."
+    `This certificate evidences the above bank instrument issued by ${issuerName}${data.issuerBic ? ` (SWIFT/BIC ${data.issuerBic})` : ""}, registered and held via the ${BRAND.tagline}. The instrument is identified by ISIN ${data.isin || "—"}${data.serialNumber ? ` and serial reference ${data.serialNumber}` : ""} and governed by ${data.governingLaw || "applicable ICC rules"}. It is generated electronically and is valid without signature. Verify authenticity by quoting the reference to your ${BRAND.name} relationship manager.`
   const lines = doc.splitTextToSize(disclaimer, contentWidth)
   doc.text(lines, margin, y)
-
+  
   // Signature line
   const sigY = pageHeight - margin - 36
   doc.setDrawColor(...BRAND.ink)
@@ -159,7 +202,7 @@ export function generateInstrumentCertificate(data: InstrumentCertificateData): 
   doc.line(margin, sigY, margin + 180, sigY)
   doc.setTextColor(...BRAND.slate)
   doc.setFontSize(8)
-  doc.text("Authorised Signatory — MCC Capital", margin, sigY + 14)
+  doc.text(`For and on behalf of ${issuerName}`, margin, sigY + 14)
 
   doc.setTextColor(...BRAND.slate)
   doc.text(

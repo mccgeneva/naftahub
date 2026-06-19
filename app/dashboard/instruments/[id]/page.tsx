@@ -87,6 +87,17 @@ export default function InstrumentDetailPage() {
       expiryDate: inst.expiryDate,
       assignable: inst.assignable,
       monetizable: inst.monetizable,
+      isin: inst.isin,
+      commonCode: inst.commonCode,
+      cusip: inst.cusip,
+      serialNumber: inst.serialNumber,
+      issuerBic: inst.issuerBic,
+      issuerAddress: inst.issuerAddress,
+      issuerCountry: inst.issuerCountry,
+      placeOfIssue: inst.placeOfIssue,
+      governingLaw: inst.governingLaw,
+      deliveryMethod: inst.deliveryMethod,
+      form: inst.form,
     })
     toast.success("Certificate downloaded", {
       description: `The certificate for ${inst.id} has been generated as a PDF.`,
@@ -96,8 +107,24 @@ export default function InstrumentDetailPage() {
   const status = statusConfig[instrument.status] ?? statusConfig.pending
   const StatusIcon = status.icon
 
+  // Securities / settlement identifiers (ISIN, Common Code, serial, etc.).
+  const identifierFields: [string, string][] = []
+  if (instrument.isin) identifierFields.push(["ISIN", instrument.isin])
+  if (instrument.commonCode) identifierFields.push(["Common Code", instrument.commonCode])
+  if (instrument.cusip) identifierFields.push(["CUSIP", instrument.cusip])
+  if (instrument.serialNumber) identifierFields.push(["Serial / Reference", instrument.serialNumber])
+  if (instrument.form) identifierFields.push(["Form", instrument.form])
+  if (instrument.governingLaw) identifierFields.push(["Governing Rules", instrument.governingLaw])
+  if (instrument.deliveryMethod) identifierFields.push(["Delivery", instrument.deliveryMethod])
+  if (instrument.placeOfIssue) identifierFields.push(["Place of Issue", instrument.placeOfIssue])
+
+  // Issuing-bank particulars (verified BIC + registered address).
+  const bankFields: [string, string][] = [["Issuing Bank", instrument.issuer]]
+  if (instrument.issuerBic) bankFields.push(["SWIFT / BIC", instrument.issuerBic])
+  if (instrument.issuerAddress) bankFields.push(["Registered Office", instrument.issuerAddress])
+  if (instrument.issuerCountry) bankFields.push(["Country", instrument.issuerCountry])
+
   const fields: [string, string][] = [
-    ["Issuing Bank", instrument.issuer],
     ["Credit Rating", instrument.rating],
     ["Purpose", instrument.purpose],
     ["Status", instrument.status.charAt(0).toUpperCase() + instrument.status.slice(1)],
@@ -151,15 +178,55 @@ export default function InstrumentDetailPage() {
             <p className="mt-1 text-3xl font-bold text-foreground">
               {formatCurrency(instrument.faceValue, instrument.currency)}
             </p>
+            {instrument.isin && (
+              <p className="mt-1 font-mono text-xs tracking-wider text-muted-foreground">
+                ISIN {instrument.isin}
+              </p>
+            )}
           </div>
 
-          <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2">
-            {fields.map(([label, value]) => (
-              <div key={label} className="bg-card p-3">
-                <p className="text-xs text-muted-foreground">{label}</p>
-                <p className="mt-0.5 text-sm font-medium text-foreground break-words">{value}</p>
+          {identifierFields.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Securities Identifiers
+              </p>
+              <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2">
+                {identifierFields.map(([label, value]) => (
+                  <div key={label} className="bg-card p-3">
+                    <p className="text-xs text-muted-foreground">{label}</p>
+                    <p className="mt-0.5 font-mono text-sm font-medium text-foreground break-words">{value}</p>
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+          )}
+
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Issuing Bank
+            </p>
+            <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2">
+              {bankFields.map(([label, value]) => (
+                <div key={label} className="bg-card p-3">
+                  <p className="text-xs text-muted-foreground">{label}</p>
+                  <p className="mt-0.5 text-sm font-medium text-foreground break-words">{value}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Instrument Terms
+            </p>
+            <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2">
+              {fields.map(([label, value]) => (
+                <div key={label} className="bg-card p-3">
+                  <p className="text-xs text-muted-foreground">{label}</p>
+                  <p className="mt-0.5 text-sm font-medium text-foreground break-words">{value}</p>
+                </div>
+              ))}
+            </div>
           </div>
 
           <Button className="w-full" onClick={() => downloadCertificate(instrument)}>
