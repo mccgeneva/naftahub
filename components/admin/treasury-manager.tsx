@@ -17,9 +17,8 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import { USERS } from "@/lib/users"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
-import { listUsers, type AdminUserView } from "@/app/actions/admin-users"
+import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
 import {
   TREASURY_PROFILES,
   TREASURY_CURRENCY,
@@ -64,44 +63,30 @@ const TXN_OPTIONS: { value: TreasuryTxnType; label: string }[] = [
   { value: "settlement", label: "Settlement / Repayment" },
 ]
 
-type ClientOption = { id: string; fullName: string; company: string; email: string }
-
 export function TreasuryManager() {
-  const [targetUserId, setTargetUserId] = useState(USERS[0]?.id ?? "u1")
+  const [targetUserId, setTargetUserId] = useState("")
   const [stored, setStored] = useState<TreasuryAccount>(() => emptyTreasuryAccount())
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [posting, setPosting] = useState(false)
-  // Dynamically-created client accounts (from the admin User Manager). These
-  // must appear in the picker alongside the built-in accounts, otherwise the
-  // desk can only manage treasury for the 3 seeded users.
-  const [dynamicUsers, setDynamicUsers] = useState<AdminUserView[]>([])
+  // Every client account (including the seeded core accounts) is a database
+  // record, loaded once on mount via the passcode-gated admin action.
+  const [clients, setClients] = useState<SelectableClient[]>([])
 
-  // Load all admin-created client accounts once on mount.
   useEffect(() => {
     let active = true
-    listUsers(ADMIN_PASSCODE)
-      .then((res) => {
-        if (active && res.ok) setDynamicUsers(res.users)
+    listSelectableClients(ADMIN_PASSCODE)
+      .then((list) => {
+        if (!active || !list.length) return
+        setClients(list)
+        // Default to the first client once the list loads.
+        setTargetUserId((cur) => cur || list[0].id)
       })
       .catch(() => {})
     return () => {
       active = false
     }
   }, [])
-
-  // One combined, de-duplicated client list (built-in + dynamic) used by both
-  // the picker and the display labels.
-  const clients: ClientOption[] = (() => {
-    const map = new Map<string, ClientOption>()
-    for (const u of USERS) {
-      map.set(u.id, { id: u.id, fullName: u.fullName, company: u.company, email: u.email })
-    }
-    for (const u of dynamicUsers) {
-      map.set(u.id, { id: u.id, fullName: u.fullName, company: u.company || "—", email: u.email })
-    }
-    return Array.from(map.values())
-  })()
 
   const targetUser = clients.find((c) => c.id === targetUserId) ?? {
     id: targetUserId,
@@ -121,6 +106,7 @@ export function TreasuryManager() {
 
   // Load the selected client's record from the server (passcode-verified).
   useEffect(() => {
+    if (!targetUserId) return
     let active = true
     setLoading(true)
     getTreasuryForUserAdmin(ADMIN_PASSCODE, targetUserId)

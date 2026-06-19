@@ -1,11 +1,9 @@
 "use server"
 
-import { cookies } from "next/headers"
 import { query } from "@/lib/db"
-import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
-import { getUserBySessionToken, type UserProfile } from "@/lib/users"
-import { resolveAccountProfileById } from "@/lib/session-user"
+import { type UserProfile } from "@/lib/users"
+import { resolveAccountProfileById, resolveCurrentSession } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import type { GatewayAccount, FundingEvent } from "@/lib/gateway-store"
 import type { LedgerEntry } from "@/lib/ledger-store"
@@ -23,9 +21,8 @@ import { parseSwiftMessage, toReconciliationInput } from "@/lib/swift-mt"
 // ---------------------------------------------------------------------------
 
 async function getSessionUser(): Promise<UserProfile | undefined> {
-  const cookieStore = await cookies()
-  const token = cookieStore.get(SESSION_COOKIE)?.value
-  return getUserBySessionToken(token)
+  const session = await resolveCurrentSession()
+  return session?.profile
 }
 
 async function requireAdmin(passcode: string): Promise<UserProfile> {

@@ -1,15 +1,13 @@
 "use server"
 
-import { cookies } from "next/headers"
 import { query } from "@/lib/db"
-import { SESSION_COOKIE } from "@/lib/auth"
-import { getUserBySessionToken, type UserProfile } from "@/lib/users"
+import { type UserProfile } from "@/lib/users"
+import { resolveCurrentSession } from "@/lib/session-user"
 import type { Instrument } from "@/lib/instrument-requests-store"
 
 async function getSessionUser(): Promise<UserProfile | undefined> {
-  const cookieStore = await cookies()
-  const token = cookieStore.get(SESSION_COOKIE)?.value
-  return getUserBySessionToken(token)
+  const session = await resolveCurrentSession()
+  return session?.profile
 }
 
 function rowToInstrument(row: Record<string, unknown>): Instrument {

@@ -351,7 +351,7 @@ export async function editUser(input: EditUserInput): Promise<AdminUserMutation>
     let email = existing.email
     if (input.email?.trim() && input.email.trim().toLowerCase() !== existing.email.toLowerCase()) {
       email = input.email.trim().toLowerCase()
-      if (findUserByEmail(email) || (await getDynamicUserByEmail(email))) {
+      if (await getDynamicUserByEmail(email)) {
         return { ok: false, error: `The email ${email} is already in use.` }
       }
       profile.email = email

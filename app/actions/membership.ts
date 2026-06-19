@@ -20,11 +20,9 @@
 // and audit trail stay in one place.
 // ---------------------------------------------------------------------------
 
-import { cookies } from "next/headers"
 import { query } from "@/lib/db"
-import { SESSION_COOKIE } from "@/lib/auth"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
-import { getUserBySessionToken, type UserProfile } from "@/lib/users"
+import { type UserProfile } from "@/lib/users"
 import { resolveCurrentSession, resolveAccountProfileById } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import { saveTreasuryRecordAdmin } from "@/app/actions/treasury"
@@ -44,9 +42,8 @@ import {
 // --- Session / admin helpers ------------------------------------------------
 
 async function requireAdmin(passcode: string): Promise<UserProfile> {
-  const cookieStore = await cookies()
-  const token = cookieStore.get(SESSION_COOKIE)?.value
-  const user = getUserBySessionToken(token)
+  const session = await resolveCurrentSession()
+  const user = session?.profile
   if (!user) throw new Error("Your session has expired. Please sign in again.")
   if (String(passcode) !== ADMIN_PASSCODE) throw new Error("Administrator authorization failed.")
   return user
