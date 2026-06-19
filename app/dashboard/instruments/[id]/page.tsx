@@ -229,10 +229,18 @@ export default function InstrumentDetailPage() {
             </div>
           </div>
 
-          <Button className="w-full" onClick={() => downloadCertificate(instrument)}>
-            <Download className="mr-2 h-4 w-4" />
-            Download Certificate
-          </Button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button className="w-full" onClick={() => downloadCertificate(instrument)}>
+              <Download className="mr-2 h-4 w-4" />
+              Download Certificate
+            </Button>
+            <Button variant="outline" className="w-full bg-transparent" asChild>
+              <Link href={`/dashboard/instruments/${encodeURIComponent(instrument.id)}/document`}>
+                <FileText className="mr-2 h-4 w-4" />
+                View Hard Copy
+              </Link>
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>
