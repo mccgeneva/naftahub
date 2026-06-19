@@ -17,7 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import { resolveCurrentSession } from "@/lib/session-user"
-import { getDynamicUserById, listDynamicUsers } from "@/lib/admin-users-db"
+import { getDynamicUserById, getDynamicUserByEmail, listDynamicUsers } from "@/lib/admin-users-db"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { logActivity } from "@/app/actions/log-activity"
 import {
@@ -54,6 +54,12 @@ const adminParticipant: BankekaParticipant = {
   isAdmin: true,
 }
 
+/**
+ * FULL identity resolver — exposes the real name & company. This is used ONLY
+ * for the administrator console and the compliance audit trail, both of which
+ * are legitimately authorised to see who an account belongs to. It must NEVER
+ * be used to build anything returned to an ordinary client.
+ */
 async function resolveParticipant(id: string): Promise<BankekaParticipant> {
   if (id === BANKEKA_ADMIN_ID) return adminParticipant
   try {
@@ -64,6 +70,34 @@ async function resolveParticipant(id: string): Promise<BankekaParticipant> {
         name: rec.profile.fullName || rec.profile.shortName || rec.email,
         company: rec.profile.company || "",
         initials: rec.profile.initials || rec.email.slice(0, 2).toUpperCase(),
+        isAdmin: false,
+      }
+    }
+  } catch {
+    // fall through to placeholder
+  }
+  return { id, name: "Unknown account", company: "", initials: "??", isAdmin: false }
+}
+
+/**
+ * PRIVACY-PRESERVING resolver for everything shown to an ordinary client.
+ *
+ * A client must never learn another account's real name, company, or any other
+ * profile data — they are only ever allowed to know the email address they
+ * already had (which is how they reached the person in the first place). So a
+ * counterpart is identified strictly by their email address; no names, no
+ * companies, no account details are disclosed.
+ */
+async function resolveClientParticipant(id: string): Promise<BankekaParticipant> {
+  if (id === BANKEKA_ADMIN_ID) return adminParticipant
+  try {
+    const rec = await getDynamicUserById(id)
+    if (rec) {
+      return {
+        id,
+        name: rec.email, // identify by email only — never the real name
+        company: "", // never disclose company / account data
+        initials: rec.email.slice(0, 2).toUpperCase(),
         isAdmin: false,
       }
     }
@@ -99,7 +133,10 @@ async function requireSessionId(): Promise<string | null> {
 
 // --- Conversation building (shared between client & admin) -----------------
 
-async function buildConversations(viewerId: string): Promise<BankekaConversation[]> {
+async function buildConversations(
+  viewerId: string,
+  resolve: (id: string) => Promise<BankekaParticipant>,
+): Promise<BankekaConversation[]> {
   const rows = await getMessagesForParticipant(viewerId)
 
   // Group by counterpart; rows arrive newest-first so the first row per
@@ -118,7 +155,7 @@ async function buildConversations(viewerId: string): Promise<BankekaConversation
 
   const conversations = await Promise.all(
     Array.from(byCounterpart.entries()).map(async ([counterpart, { last, unread }]) => {
-      const participant = await resolveParticipant(counterpart)
+      const participant = await resolve(counterpart)
       const conv: BankekaConversation = {
         participant,
         lastMessage: last.body,
@@ -148,7 +185,7 @@ export async function listConversations(): Promise<BankekaConversation[]> {
   if (!me) return []
   try {
     await markAllDelivered(me)
-    return await buildConversations(me)
+    return await buildConversations(me, resolveClientParticipant)
   } catch {
     return []
   }
@@ -161,7 +198,7 @@ export async function getThread(otherId: string): Promise<ThreadResult | null> {
   try {
     await markThreadRead(me, otherId)
     const rows = await getThreadMessages(me, otherId)
-    const participant = await resolveParticipant(otherId)
+    const participant = await resolveClientParticipant(otherId)
     return { participant, messages: rows.map((r) => toMessage(r, me)) }
   } catch {
     return null
@@ -180,11 +217,16 @@ export async function sendMessage(otherId: string, body: string): Promise<SendRe
   if (!otherId || otherId === me) return { ok: false, error: "Invalid recipient." }
 
   try {
-    // Confirm the recipient exists & is reachable (a real account or the admin).
-    const recipient = await resolveParticipant(otherId)
-    if (recipient.name === "Unknown account") {
-      return { ok: false, error: "Recipient not found." }
+    // Confirm the recipient is reachable: either the reserved admin contact or
+    // an ACTIVE real account. We never message suspended/inactive/unknown ids.
+    if (otherId !== BANKEKA_ADMIN_ID) {
+      const rec = await getDynamicUserById(otherId)
+      if (!rec || rec.status !== "active") {
+        return { ok: false, error: "Recipient not found." }
+      }
     }
+    // Real identity is resolved ONLY for the compliance audit trail (admin-only).
+    const recipient = await resolveParticipant(otherId)
     const row = await insertMessage({ senderId: me, recipientId: otherId, body: trimmed })
     const sender = await resolveParticipant(me)
     await recordAudit({
@@ -214,29 +256,60 @@ export async function getMyUnreadCount(): Promise<number> {
   }
 }
 
-/**
- * The directory of contacts the signed-in user can start a conversation with:
- * every other active account, plus the pinned MCC Capital administration
- * contact. Secrets-free.
- */
-export async function listContacts(): Promise<BankekaParticipant[]> {
+/** The pinned MCC Capital · Administration contact, so support is always
+ *  reachable without needing to know an email address. */
+export async function getSupportContact(): Promise<BankekaParticipant | null> {
   const me = await requireSessionId()
-  if (!me) return []
+  if (!me) return null
+  return adminParticipant
+}
+
+export type FindRecipientResult =
+  | { ok: true; participant: BankekaParticipant }
+  | { ok: false; error: string }
+
+/**
+ * Look up a single recipient by their EXACT email address.
+ *
+ * This is the ONLY way a client can start a new conversation: there is no
+ * browsable directory, so a user can only reach someone whose email address
+ * they already know. The match is exact (no partial/prefix search) to prevent
+ * enumeration of the client base, and the result is identified by the email
+ * address alone — no real name, company, or account data is ever returned.
+ */
+export async function findRecipientByEmail(email: string): Promise<FindRecipientResult> {
+  const me = await requireSessionId()
+  if (!me) return { ok: false, error: "Your session has expired. Please sign in again." }
+
+  const normalized = (email ?? "").trim().toLowerCase()
+  if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+    return { ok: false, error: "Enter the full, exact email address." }
+  }
+
   try {
-    const users = (await listDynamicUsers())
-      .filter((u) => u.status === "active" && u.id !== me)
-      .map<BankekaParticipant>((u) => ({
-        id: u.id,
-        name: u.profile.fullName || u.profile.shortName || u.email,
-        company: u.profile.company || "",
-        initials: u.profile.initials || u.email.slice(0, 2).toUpperCase(),
+    const rec = await getDynamicUserByEmail(normalized)
+    // Self lookup: tell the user plainly (they already know it's their own email).
+    if (rec && rec.id === me) {
+      return { ok: false, error: "That is your own email address." }
+    }
+    // Unknown or non-active accounts return a single generic message so the
+    // response can't be used to probe which emails belong to real accounts
+    // beyond a plain "reachable / not reachable" needed to actually message.
+    if (!rec || rec.status !== "active") {
+      return { ok: false, error: "No reachable account matches that email address." }
+    }
+    return {
+      ok: true,
+      participant: {
+        id: rec.id,
+        name: rec.email, // identify by email only — never the real name
+        company: "", // never disclose company / account data
+        initials: rec.email.slice(0, 2).toUpperCase(),
         isAdmin: false,
-      }))
-    users.sort((a, b) => a.name.localeCompare(b.name))
-    // Pin the administration contact to the top so support is always reachable.
-    return [adminParticipant, ...users]
+      },
+    }
   } catch {
-    return []
+    return { ok: false, error: "Could not complete the search. Please try again." }
   }
 }
 
@@ -311,7 +384,7 @@ export async function adminListConversations(passcode: string): Promise<BankekaC
   if (!adminOk(passcode)) return []
   try {
     await markAllDelivered(BANKEKA_ADMIN_ID)
-    return await buildConversations(BANKEKA_ADMIN_ID)
+    return await buildConversations(BANKEKA_ADMIN_ID, resolveParticipant)
   } catch {
     return []
   }

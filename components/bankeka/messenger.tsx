@@ -10,6 +10,8 @@ import {
   ShieldCheck,
   MessagesSquare,
   Loader2,
+  Mail,
+  Lock,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -40,6 +42,9 @@ interface ThreadResult {
   messages: BankekaMessage[]
 }
 type SendResult = { ok: true; message: BankekaMessage } | { ok: false; error: string }
+type FindRecipientResult =
+  | { ok: true; participant: BankekaParticipant }
+  | { ok: false; error: string }
 
 export interface MessengerProps {
   /** Unique cache namespace so the client and admin messengers never collide. */
@@ -47,8 +52,15 @@ export interface MessengerProps {
   fetchConversations: () => Promise<BankekaConversation[]>
   fetchThread: (otherId: string) => Promise<ThreadResult | null>
   send: (otherId: string, body: string) => Promise<SendResult>
-  /** Optional contact directory enabling the "new conversation" picker. */
-  fetchContacts?: () => Promise<BankekaParticipant[]>
+  /**
+   * Enables the private "new conversation" picker. There is deliberately NO
+   * browsable directory: a user can only start a thread with someone whose
+   * EXACT email address they already know, and the lookup never reveals names
+   * or account data.
+   */
+  findByEmail?: (email: string) => Promise<FindRecipientResult>
+  /** Optional pinned support contact (MCC Capital · Administration). */
+  fetchSupportContact?: () => Promise<BankekaParticipant | null>
   /** Shown in the empty-state panel of the conversation list. */
   emptyHint?: string
 }
@@ -71,7 +83,8 @@ export function Messenger({
   fetchConversations,
   fetchThread,
   send,
-  fetchContacts,
+  findByEmail,
+  fetchSupportContact,
   emptyHint = "Select a conversation to start messaging.",
 }: MessengerProps) {
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -81,6 +94,12 @@ export function Messenger({
   const [pending, setPending] = useState<Record<string, BankekaMessage[]>>({})
   const [search, setSearch] = useState("")
   const [contactsOpen, setContactsOpen] = useState(false)
+  // Private "new conversation" lookup state (exact email only).
+  const [emailQuery, setEmailQuery] = useState("")
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [foundParticipant, setFoundParticipant] = useState<BankekaParticipant | null>(null)
+  const [supportContact, setSupportContact] = useState<BankekaParticipant | null>(null)
   const scrollEndRef = useRef<HTMLDivElement | null>(null)
 
   // Conversation list — polled for near-real-time delivery & unread updates.
@@ -97,11 +116,16 @@ export function Messenger({
     { refreshInterval: 3000, revalidateOnFocus: true },
   )
 
-  // Contact directory for starting a new conversation.
-  const { data: contacts = [] } = useSWR(
-    fetchContacts && contactsOpen ? [scope, "contacts"] : null,
-    () => (fetchContacts ? fetchContacts() : []),
-  )
+  // Pinned support contact (loaded lazily when the picker opens).
+  useEffect(() => {
+    if (contactsOpen && fetchSupportContact && !supportContact) {
+      fetchSupportContact()
+        .then((c) => {
+          if (c) setSupportContact(c)
+        })
+        .catch(() => {})
+    }
+  }, [contactsOpen, fetchSupportContact, supportContact])
 
   const serverMessages = thread?.messages ?? []
   const pendingForActive = activeId ? pending[activeId] ?? [] : []
@@ -124,8 +148,39 @@ export function Messenger({
     setActiveId(participant.id)
     setActiveParticipant(participant)
     setContactsOpen(false)
+    // Clear the private lookup so the next open starts fresh.
+    setEmailQuery("")
+    setSearchError(null)
+    setFoundParticipant(null)
     // Opening reads incoming messages → refresh unread counts shortly after.
     setTimeout(() => mutateConversations(), 400)
+  }
+
+  const handleDialogOpenChange = (open: boolean) => {
+    setContactsOpen(open)
+    if (!open) {
+      setEmailQuery("")
+      setSearchError(null)
+      setFoundParticipant(null)
+    }
+  }
+
+  const handleFindByEmail = async () => {
+    if (!findByEmail) return
+    const email = emailQuery.trim()
+    if (!email || searching) return
+    setSearching(true)
+    setSearchError(null)
+    setFoundParticipant(null)
+    try {
+      const res = await findByEmail(email)
+      if (res.ok) setFoundParticipant(res.participant)
+      else setSearchError(res.error)
+    } catch {
+      setSearchError("Could not complete the search. Please try again.")
+    } finally {
+      setSearching(false)
+    }
   }
 
   const handleSend = async () => {
@@ -192,8 +247,8 @@ export function Messenger({
               aria-label="Search conversations"
             />
           </div>
-          {fetchContacts && (
-            <Dialog open={contactsOpen} onOpenChange={setContactsOpen}>
+          {findByEmail && (
+            <Dialog open={contactsOpen} onOpenChange={handleDialogOpenChange}>
               <DialogTrigger asChild>
                 <Button size="icon" variant="secondary" className="h-9 w-9 shrink-0" aria-label="New conversation">
                   <MessageSquarePlus className="h-4 w-4" />
@@ -202,45 +257,101 @@ export function Messenger({
               <DialogContent className="max-w-md">
                 <DialogHeader>
                   <DialogTitle>New conversation</DialogTitle>
-                  <DialogDescription>
-                    Choose a contact to start a private, encrypted-in-transit thread.
+                  <DialogDescription className="text-pretty">
+                    Enter the exact email address of the person you want to message. For everyone&apos;s
+                    privacy, accounts can&apos;t be browsed — you can only reach someone whose email
+                    address you already know.
                   </DialogDescription>
                 </DialogHeader>
-                <ScrollArea className="max-h-80 pr-2">
-                  <div className="space-y-1">
-                    {contacts.length === 0 ? (
-                      <p className="py-6 text-center text-sm text-muted-foreground">
-                        No other contacts available yet.
-                      </p>
-                    ) : (
-                      contacts.map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          onClick={() => openThread(p)}
-                          className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-secondary"
-                        >
-                          <Avatar className="h-9 w-9">
-                            <AvatarFallback
-                              className={cn(
-                                "text-xs",
-                                p.isAdmin ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground",
-                              )}
-                            >
-                              {p.isAdmin ? <ShieldCheck className="h-4 w-4" /> : p.initials}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-foreground">{p.name}</p>
-                            {p.company && (
-                              <p className="truncate text-xs text-muted-foreground">{p.company}</p>
-                            )}
-                          </div>
-                        </button>
-                      ))
-                    )}
+
+                {/* Always-reachable support contact */}
+                {supportContact && (
+                  <button
+                    type="button"
+                    onClick={() => openThread(supportContact)}
+                    className="flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:bg-secondary"
+                  >
+                    <Avatar className="h-9 w-9">
+                      <AvatarFallback className="bg-primary text-primary-foreground">
+                        <ShieldCheck className="h-4 w-4" />
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">{supportContact.name}</p>
+                      <p className="truncate text-xs text-muted-foreground">Official support channel</p>
+                    </div>
+                  </button>
+                )}
+
+                {supportContact && (
+                  <div className="flex items-center gap-3 py-0.5">
+                    <span className="h-px flex-1 bg-border" />
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                      or message by email
+                    </span>
+                    <span className="h-px flex-1 bg-border" />
                   </div>
-                </ScrollArea>
+                )}
+
+                {/* Exact email lookup */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    handleFindByEmail()
+                  }}
+                  className="space-y-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <Mail className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        type="email"
+                        inputMode="email"
+                        autoComplete="off"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        value={emailQuery}
+                        onChange={(e) => setEmailQuery(e.target.value)}
+                        placeholder="name@example.com"
+                        className="h-10 pl-8 text-base md:text-sm"
+                        aria-label="Recipient email address"
+                      />
+                    </div>
+                    <Button type="submit" disabled={searching || !emailQuery.trim()} className="h-10 shrink-0">
+                      {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : "Find"}
+                    </Button>
+                  </div>
+                </form>
+
+                {searchError && (
+                  <p className="text-xs text-destructive" role="alert">
+                    {searchError}
+                  </p>
+                )}
+
+                {foundParticipant && (
+                  <button
+                    type="button"
+                    onClick={() => openThread(foundParticipant)}
+                    className="flex w-full items-center gap-3 rounded-lg border border-success/40 bg-success/5 px-3 py-2.5 text-left transition-colors hover:bg-success/10"
+                  >
+                    <Avatar className="h-9 w-9">
+                      <AvatarFallback className="bg-secondary text-xs text-foreground">
+                        {foundParticipant.initials}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-foreground">{foundParticipant.name}</p>
+                      <p className="truncate text-xs text-muted-foreground">Tap to start a private conversation</p>
+                    </div>
+                    <Send className="h-4 w-4 shrink-0 text-success" />
+                  </button>
+                )}
+
+                <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Lock className="h-3 w-3" />
+                  We never reveal other members&apos; names or account details.
+                </p>
               </DialogContent>
             </Dialog>
           )}
