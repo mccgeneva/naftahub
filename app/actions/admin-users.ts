@@ -15,6 +15,7 @@
 
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { findUserByEmail } from "@/lib/users"
+import { normalizeAccountBadge } from "@/lib/account-tier"
 import { logActivity } from "@/app/actions/log-activity"
 import {
   listDynamicUsers,
@@ -44,17 +45,6 @@ export interface AdminUserView {
   createdAt: string
   updatedAt: string
   createdBy: string
-}
-
-// Client accounts can only ever be one of two membership tiers. Anything else
-// (legacy "Client Account", a blank value, etc.) is normalised to PRO so a
-// client never sees an account type the platform does not offer.
-export const ACCOUNT_TIERS = ["PRO Account", "Avant-garde Account"] as const
-
-export function normalizeAccountBadge(badge: string | undefined | null): string {
-  const v = (badge ?? "").trim().toLowerCase()
-  if (v.includes("avant") || v.includes("institutional")) return "Avant-garde Account"
-  return "PRO Account"
 }
 
 export type AdminUsersResult =
