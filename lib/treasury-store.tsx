@@ -144,9 +144,32 @@ export function emptyTreasuryAccount(): TreasuryAccount {
 
 // --- Derived calculations ---------------------------------------------------
 
+/**
+ * Maximum amount the approved leverage facility can finance, given the client's
+ * actual contribution. A 1:N facility amplifies the client's own funds up to N×
+ * the total — i.e. it can finance at most (N − 1)× the contribution. With no
+ * contribution there is nothing to amplify, so the facility finances nothing.
+ */
+export function maxFinanceable(contribution: number, ratio: number = MAX_LEVERAGE_RATIO): number {
+  const cap = Math.max(1, ratio) - 1
+  return Math.max(0, contribution * cap)
+}
+
+/**
+ * The amount actually financed by MCC HOLDING SA: the gap between the required
+ * deposit and the client's contribution, but never more than the approved
+ * leverage allows on that contribution. This is derived (not the stored value)
+ * so legacy records and any contribution change cascade correctly.
+ */
+export function financedAmountFor(account: TreasuryAccount): number {
+  if (!account.leverageEnabled) return 0
+  const gap = Math.max(0, account.requiredDeposit - account.customerContribution)
+  return Math.min(gap, maxFinanceable(account.customerContribution, MAX_LEVERAGE_RATIO))
+}
+
 /** Total credited to treasury = customer contribution + financed (leveraged) amount. */
 export function treasurySecured(account: TreasuryAccount): number {
-  return account.customerContribution + (account.leverageEnabled ? account.financedAmount : 0)
+  return account.customerContribution + financedAmountFor(account)
 }
 
 /** Remaining shortfall against the required deposit (0 if fully secured). */
@@ -154,10 +177,26 @@ export function treasuryShortfall(account: TreasuryAccount): number {
   return Math.max(0, account.requiredDeposit - treasurySecured(account))
 }
 
+/**
+ * The deposit status that the actual coverage implies, regardless of any stale
+ * stored value. "none" (not established) and "closed" remain authoritative; the
+ * rest are derived from real coverage so a client can never appear "Fully
+ * Secured" while the deposit is in fact uncovered.
+ */
+export function effectiveTreasuryStatus(account: TreasuryAccount): TreasuryStatus {
+  if (account.status === "none") return "none"
+  if (account.status === "closed") return "closed"
+  if (account.requiredDeposit <= 0) return "pending"
+  const secured = treasurySecured(account)
+  if (secured >= account.requiredDeposit) return "secured"
+  if (secured > 0) return "shortfall"
+  return "pending"
+}
+
 /** Annual debit cycle fee = 1.8% of (financed amount + transaction exposure). */
 export function annualCycleFee(account: TreasuryAccount): number {
   if (!account.leverageEnabled) return 0
-  return (account.financedAmount + account.transactionExposure) * account.feeRate
+  return (financedAmountFor(account) + account.transactionExposure) * account.feeRate
 }
 
 /**

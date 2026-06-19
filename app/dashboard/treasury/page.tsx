@@ -26,6 +26,8 @@ import {
   getProfile,
   treasurySecured,
   treasuryShortfall,
+  financedAmountFor,
+  effectiveTreasuryStatus,
   annualCycleFee,
   accruedCycleFee,
   type TreasuryAccount,
@@ -108,11 +110,17 @@ export default function TreasuryPage() {
   const profile = getProfile(account.profile)
   const secured = treasurySecured(account)
   const shortfall = treasuryShortfall(account)
+  // Financed amount is derived from the current contribution (a 1:10 facility
+  // can only amplify the funds the client actually provided), so it always
+  // reflects reality even if a stale value was stored.
+  const financed = financedAmountFor(account)
   const accrued = accruedCycleFee(account, now)
   const annualFee = annualCycleFee(account)
   const coverage = account.requiredDeposit > 0 ? Math.min(100, (secured / account.requiredDeposit) * 100) : 0
 
-  const status = statusConfig[account.status] ?? statusConfig.none
+  // Show the status the actual coverage implies, never a stale "secured".
+  const effectiveStatus = effectiveTreasuryStatus(account)
+  const status = statusConfig[effectiveStatus] ?? statusConfig.none
   const StatusIcon = status.icon
 
   const sortedTxns = useMemo(
@@ -252,7 +260,7 @@ export default function TreasuryPage() {
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <Metric label="Applied Leverage" value={`1:${account.leverageRatio}`} sub="Approved by MCC CAPITAL" />
                     <Metric label="Your Contribution" value={fmt0(account.customerContribution, account.currency)} tone="positive" />
-                    <Metric label="Financed by MCC HOLDING SA" value={fmt0(account.financedAmount, account.currency)} tone="negative" sub="Debit exposure" />
+                    <Metric label="Financed by MCC HOLDING SA" value={fmt0(financed, account.currency)} tone="negative" sub="Debit exposure" />
                     <Metric label="Treasury Received" value={fmt0(secured, account.currency)} tone="positive" sub="Full security deposit" />
                   </div>
                   <div className="flex items-start gap-2 rounded-lg border border-border bg-secondary/40 p-3 text-sm text-muted-foreground">
@@ -260,7 +268,7 @@ export default function TreasuryPage() {
                     <span className="text-pretty">
                       Under the approved 1:10 leveraged security deposit mechanism, your contribution of{" "}
                       {fmt0(account.customerContribution, account.currency)} is amplified at 1:{account.leverageRatio}.
-                      The remaining {fmt0(account.financedAmount, account.currency)} is financed by{" "}
+                      The remaining {fmt0(financed, account.currency)} is financed by{" "}
                       <span className="font-medium text-foreground">MCC HOLDING SA, Switzerland</span> and recorded
                       as a debit exposure on your treasury record.
                     </span>
@@ -288,7 +296,7 @@ export default function TreasuryPage() {
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <Metric label="Leveraged Amount" value={fmt0(account.financedAmount, account.currency)} tone="negative" />
+                  <Metric label="Leveraged Amount" value={fmt0(financed, account.currency)} tone="negative" />
                   <Metric label="Transaction Exposure" value={fmt0(account.transactionExposure, account.currency)} tone="negative" sub="Tied to the facility" />
                   <Metric label="Annual Cycle Fee" value={`${(account.feeRate * 100).toFixed(1)}%`} sub={`${fmt0(annualFee, account.currency)} / year`} />
                   <Metric label="Accrued To Date" value={fmt(accrued, account.currency)} tone="negative" />
@@ -300,7 +308,7 @@ export default function TreasuryPage() {
                   </div>
                   <p className="text-pretty">
                     A debit cycle fee of {(account.feeRate * 100).toFixed(1)}% per year is applied to the
-                    leveraged amount used for the security deposit ({fmt0(account.financedAmount, account.currency)})
+                    leveraged amount used for the security deposit ({fmt0(financed, account.currency)})
                     plus any financial transaction exposure associated with the leverage facility (
                     {fmt0(account.transactionExposure, account.currency)}). It accrues continuously
                     {account.securedAt ? ` from ${fmtDate(account.securedAt)}` : ""}.

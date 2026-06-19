@@ -111,13 +111,19 @@ export function TreasuryManager() {
   const numRequired = Number(requiredDeposit) || 0
   const numContribution = Number(contribution) || 0
   const numExposure = Number(transactionExposure) || 0
-  const financed = leverageEnabled ? Math.max(0, numRequired - numContribution) : 0
+  // The 1:10 facility can finance at most (10 − 1)× the client's contribution,
+  // so a low/zero contribution leaves the deposit uncovered (a real shortfall)
+  // rather than being silently topped up to fully secured.
+  const maxFinanceable = leverageEnabled ? numContribution * (MAX_LEVERAGE_RATIO - 1) : 0
+  const financed = leverageEnabled ? Math.min(Math.max(0, numRequired - numContribution), maxFinanceable) : 0
   const ratio = leverageEnabled && numContribution > 0 ? numRequired / numContribution : 1
   const secured = numContribution + financed
   const shortfall = Math.max(0, numRequired - secured)
   const annualFee = leverageEnabled ? (financed + numExposure) * DEBIT_CYCLE_FEE_RATE : 0
 
-  // Approved leverage is capped at 1:10 — contribution must be ≥ 10% of the deposit.
+  // For a fully-secured 1:10 position the contribution must be ≥ 10% of the
+  // deposit. Below that the deposit is simply under-secured — we warn but allow
+  // it, so the desk can record a client withdrawal / uncovered position.
   const minContribution = leverageMinContribution(numRequired)
   const leverageBreached = leverageEnabled && numContribution < minContribution
 
@@ -131,12 +137,6 @@ export function TreasuryManager() {
   const handleSaveRecord = async () => {
     if (numRequired <= 0) {
       toast.error("Enter a valid required security deposit.")
-      return
-    }
-    if (leverageBreached) {
-      toast.error(
-        `Leverage is capped at 1:${MAX_LEVERAGE_RATIO}. Contribution must be at least ${fmt0(minContribution)} (10%).`,
-      )
       return
     }
     setSaving(true)
@@ -155,8 +155,13 @@ export function TreasuryManager() {
       return
     }
     setStored(res.account)
+    // The server derives the authoritative status from real coverage — reflect
+    // it back in the editor so the admin sees what the client will see.
+    setStatus(res.account.status === "none" ? "pending" : res.account.status)
     toast.success("Treasury record updated", {
-      description: `${getProfile(profile).label} · ${targetUser.fullName}. Treasury received ${fmt0(secured)}.`,
+      description: `${getProfile(profile).label} · ${targetUser.fullName}. Treasury received ${fmt0(secured)}${
+        shortfall > 0 ? ` · shortfall ${fmt0(shortfall)}` : " · fully secured"
+      }.`,
     })
   }
 
@@ -323,8 +328,9 @@ export function TreasuryManager() {
               {leverageBreached && (
                 <p className="flex items-start gap-1.5 text-[11px] text-orange-400">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  Contribution {fmt0(numContribution)} is below the {fmt0(minContribution)} minimum for a 1:
-                  {MAX_LEVERAGE_RATIO} facility. Increase the contribution or lower the required deposit.
+                  Contribution {fmt0(numContribution)} is below the {fmt0(minContribution)} minimum to fully
+                  secure a 1:{MAX_LEVERAGE_RATIO} facility. This will be recorded as a shortfall of {fmt0(shortfall)} —
+                  the deposit will show as under-secured on the client&apos;s Treasury page.
                 </p>
               )}
 
