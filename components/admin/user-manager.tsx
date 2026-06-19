@@ -54,6 +54,7 @@ import {
   type AdminUserView,
 } from "@/app/actions/admin-users"
 import type { UserStatus } from "@/lib/profile-types"
+import { upload } from "@vercel/blob/client"
 import { renderPdfToPngBlobs } from "@/lib/pdf-render"
 import {
   type KycAnalysisResult,
@@ -174,8 +175,9 @@ export function UserManager() {
     if (kycInputRef.current) kycInputRef.current.value = ""
   }
 
-  // Render the uploaded PDF to page images in the browser, then send them to the
-  // server for Blob storage + AI extraction, and pre-fill the form.
+  // Render the uploaded PDF to page images in the browser, upload them directly
+  // to Blob (bypassing the serverless request-body limit), then ask the server
+  // to analyse them and pre-fill the form.
   const handleKycUpload = async (file: File | null) => {
     if (!file) return
     if (file.type !== "application/pdf") {
@@ -189,12 +191,39 @@ export function UserManager() {
       const { pages } = await renderPdfToPngBlobs(file)
       if (pages.length === 0) throw new Error("Could not read any pages from the PDF.")
 
-      const fd = new FormData()
-      fd.append("passcode", ADMIN_PASSCODE)
-      fd.append("pdf", file)
-      pages.forEach((blob, i) => fd.append("pages", blob, `page-${i + 1}.png`))
+      // Upload the original PDF + each page image straight to Blob from the
+      // browser. This keeps the large image payload out of our API function,
+      // which would otherwise reject it (serverless body limit ~4.5 MB).
+      const prefix = `kyc/${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+      const clientPayload = JSON.stringify({ passcode: ADMIN_PASSCODE })
 
-      const res = await fetch("/api/kyc/analyze", { method: "POST", body: fd })
+      const pdfUpload = await upload(`${prefix}/original.pdf`, file, {
+        access: "private",
+        handleUploadUrl: "/api/kyc/blob-upload",
+        contentType: "application/pdf",
+        clientPayload,
+      })
+
+      const pagePathnames: string[] = []
+      for (let i = 0; i < pages.length; i++) {
+        const uploaded = await upload(`${prefix}/page-${i + 1}.jpg`, pages[i], {
+          access: "private",
+          handleUploadUrl: "/api/kyc/blob-upload",
+          contentType: "image/jpeg",
+          clientPayload,
+        })
+        pagePathnames.push(uploaded.pathname)
+      }
+
+      const res = await fetch("/api/kyc/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          passcode: ADMIN_PASSCODE,
+          pdfPathname: pdfUpload.pathname,
+          pagePathnames,
+        }),
+      })
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         throw new Error(body.error || "Analysis failed.")

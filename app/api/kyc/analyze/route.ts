@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { put } from "@vercel/blob"
+import { get } from "@vercel/blob"
 import { generateText, Output } from "ai"
 import * as z from "zod"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
@@ -62,53 +62,46 @@ const analysisSchema = z.object({
     .describe("One entry per page of the PDF, in order."),
 })
 
-function uniquePrefix(): string {
-  const rand = Math.random().toString(36).slice(2, 10)
-  return `kyc/${Date.now()}-${rand}`
+interface AnalyzeRequestBody {
+  passcode?: string
+  pdfPathname?: string
+  pagePathnames?: string[]
+}
+
+/** Read a private Blob into a Buffer for the multimodal model call. */
+async function readBlobBuffer(pathname: string): Promise<Buffer> {
+  const result = await get(pathname, { access: "private" })
+  if (!result || result.statusCode !== 200 || !result.stream) {
+    throw new Error(`Could not read uploaded page: ${pathname}`)
+  }
+  const arrayBuffer = await new Response(result.stream).arrayBuffer()
+  return Buffer.from(arrayBuffer)
 }
 
 export async function POST(request: NextRequest) {
+  let stage = "parse"
   try {
-    const form = await request.formData()
+    const body = (await request.json()) as AnalyzeRequestBody
 
     // Gate behind the admin passcode — same secret used by the admin actions.
-    if ((form.get("passcode") as string) !== ADMIN_PASSCODE) {
+    if (body.passcode !== ADMIN_PASSCODE) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const pdf = form.get("pdf") as File | null
-    const pageFiles = form.getAll("pages").filter((p): p is File => p instanceof File)
+    const pdfPathname = body.pdfPathname
+    const pagePathnames = Array.isArray(body.pagePathnames) ? body.pagePathnames : []
 
-    if (!pdf) return NextResponse.json({ error: "No PDF provided" }, { status: 400 })
-    if (pageFiles.length === 0) {
-      return NextResponse.json({ error: "No rendered pages provided" }, { status: 400 })
+    if (!pdfPathname) return NextResponse.json({ error: "No PDF was uploaded." }, { status: 400 })
+    if (pagePathnames.length === 0) {
+      return NextResponse.json({ error: "No rendered pages were uploaded." }, { status: 400 })
     }
 
-    const prefix = uniquePrefix()
+    // 1) Read the already-uploaded page images back from Blob.
+    stage = "read-blobs"
+    const pageBuffers = await Promise.all(pagePathnames.map((p) => readBlobBuffer(p)))
 
-    // 1) Store the original PDF (private).
-    const pdfBuffer = Buffer.from(await pdf.arrayBuffer())
-    const pdfBlob = await put(`${prefix}/original.pdf`, pdfBuffer, {
-      access: "private",
-      contentType: "application/pdf",
-      addRandomSuffix: false,
-    })
-
-    // 2) Store each rendered page image (private) and keep its buffer for the model.
-    const pageBuffers: Buffer[] = []
-    const pagePathnames: string[] = []
-    for (let i = 0; i < pageFiles.length; i++) {
-      const buf = Buffer.from(await pageFiles[i].arrayBuffer())
-      pageBuffers.push(buf)
-      const blob = await put(`${prefix}/page-${i + 1}.png`, buf, {
-        access: "private",
-        contentType: "image/png",
-        addRandomSuffix: false,
-      })
-      pagePathnames.push(blob.pathname)
-    }
-
-    // 3) Analyse all pages in a single multimodal call.
+    // 2) Analyse all pages in a single multimodal call.
+    stage = "ai-analyze"
     const { output } = await generateText({
       model: "google/gemini-3-flash",
       output: Output.object({ schema: analysisSchema }),
@@ -132,7 +125,8 @@ export async function POST(request: NextRequest) {
       ],
     })
 
-    // 4) Map the model's per-page classifications back to stored blob pathnames.
+    // 3) Map the model's per-page classifications back to stored blob pathnames.
+    stage = "map-documents"
     const documents: KycDocument[] = []
     for (const page of output.pages) {
       const idx = page.pageNumber - 1
@@ -159,12 +153,16 @@ export async function POST(request: NextRequest) {
       passportMeta: output.passport,
       passportImagePathname: passportDoc ? passportDoc.pathname : null,
       documents,
-      pdfPathname: pdfBlob.pathname,
+      pdfPathname,
     }
 
     return NextResponse.json(result)
   } catch (error) {
-    console.error("[v0] KYC analyze error:", error)
-    return NextResponse.json({ error: "Failed to analyze the KYC document." }, { status: 500 })
+    const detail = error instanceof Error ? error.message : String(error)
+    console.error(`[v0] KYC analyze error (stage=${stage}):`, detail)
+    return NextResponse.json(
+      { error: `Failed to analyze the KYC document (${stage}): ${detail}` },
+      { status: 500 },
+    )
   }
 }
