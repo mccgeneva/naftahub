@@ -19,6 +19,7 @@ import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetDescription } from 
 import { MobileSidebar } from "./mobile-sidebar"
 import { logout } from "@/app/actions/auth"
 import { useCurrentUser } from "@/lib/use-current-user"
+import { BankekaHeaderButton } from "@/components/bankeka/bankeka-header-button"
 
 const initialNotifications: {
   id: number
@@ -84,6 +85,9 @@ export function DashboardHeader() {
       <div className="flex items-center gap-2">
         {/* Live UTC clock + market status */}
         <TerminalClock />
+
+        {/* Bankeka Messenger */}
+        <BankekaHeaderButton />
 
         {/* Notifications */}
         <DropdownMenu>

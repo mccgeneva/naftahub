@@ -28,6 +28,7 @@ import {
   BadgeCheck,
   Repeat,
   ScrollText,
+  MessageSquareText,
   Settings,
   ChevronRight,
   ArrowLeft,
@@ -102,6 +103,7 @@ import { adminListPendingKyc } from "@/app/actions/beneficiaries"
 import { BalanceManager } from "@/components/admin/balance-manager"
 import { SkrManager } from "@/components/admin/skr-manager"
 import { CertificateManager } from "@/components/admin/certificate-manager"
+import { BankekaBroadcastManager } from "@/components/admin/bankeka-broadcast-manager"
 import { toast } from "sonner"
 
 const MASTER_ACCOUNT_CURRENCY = "EUR"
@@ -1644,6 +1646,7 @@ export default function AdminPage() {
         { id: "reconciliation", label: "Reconciliation", description: "Automated payment reconciliation engine.", icon: Repeat, count: 0 },
         { id: "treasury", label: "Treasury Services", description: "Security deposits and 1:10 leverage.", icon: Landmark, count: 0 },
         { id: "certificates", label: "Certificates", description: "Issue and re-issue official certificates.", icon: ScrollText, count: 0 },
+        { id: "bankeka", label: "Bankeka Messenger", description: "Broadcast secure messages and reply to clients.", icon: MessageSquareText, count: 0 },
       ],
     },
     {
@@ -4254,6 +4257,13 @@ export default function AdminPage() {
       {activeView === "certificates" && (
       <div className="space-y-6">
         <CertificateManager />
+      </div>
+      )}
+
+      {/* Bankeka Messenger: broadcast secure bank messages and reply to client threads */}
+      {activeView === "bankeka" && (
+      <div className="space-y-6">
+        <BankekaBroadcastManager />
       </div>
       )}
 
