@@ -5,7 +5,6 @@ import {
   Send,
   ArrowUpRight,
   ArrowDownLeft,
-  Users,
   Wallet,
   ShieldCheck,
   Clock,
@@ -53,7 +52,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { resolveTransferRecipient, listTransferDirectory } from "@/app/actions/transfers"
+import { resolveTransferRecipient } from "@/app/actions/transfers"
 import { toast } from "sonner"
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "JPY", "AUD", "CAD", "SGD"]
@@ -126,24 +125,10 @@ export default function SendMoneyPage() {
   // attributed to, or sent from, the wrong account.
   const self = useCurrentUser()
   const activeUserId = self.id
-  // The platform directory is fetched from the server (every account is a
-  // database record now). Exclude the signed-in account from the quick-pick.
-  const [allDirectory, setAllDirectory] = useState<TransferDirectoryEntry[]>([])
-  useEffect(() => {
-    let cancelled = false
-    listTransferDirectory()
-      .then((list) => {
-        if (!cancelled) setAllDirectory(list)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [])
-  const directory = useMemo<TransferDirectoryEntry[]>(
-    () => allDirectory.filter((d) => d.id !== activeUserId),
-    [allDirectory, activeUserId],
-  )
+  // NOTE: We deliberately do NOT fetch or render a list of platform accounts
+  // here. Exposing other clients' names and emails to any sender is a privacy
+  // leak. Recipients must be entered by their registered email and are resolved
+  // privately on the server via `resolveTransferRecipient`.
 
   const [method, setMethod] = useState<SendMethod>("instant")
   const [recipientEmail, setRecipientEmail] = useState("")
@@ -728,39 +713,6 @@ export default function SendMoneyPage() {
               </Button>
             )}
 
-            {/* Quick directory — useful for both methods */}
-            {directory.length > 0 && (
-              <div className="space-y-2 border-t border-border pt-3">
-                <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                  <Users className="h-3.5 w-3.5" />
-                  Platform accounts
-                </p>
-                <div className="space-y-1">
-                  {directory.map((d) => (
-                    <button
-                      key={d.id}
-                      type="button"
-                      onClick={() =>
-                        method === "instant" ? setRecipientEmail(d.email) : setRecipientName(d.email)
-                      }
-                      className="flex w-full items-center gap-2 rounded-lg p-2 text-left transition-colors hover:bg-secondary/60"
-                    >
-                      <Avatar className="h-7 w-7">
-                        <AvatarFallback className="bg-secondary text-[10px] text-foreground">
-                          {d.initials}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-xs font-medium text-foreground">
-                          {d.displayName}
-                        </p>
-                        <p className="truncate text-[11px] text-muted-foreground">{d.email}</p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
           </CardContent>
         </Card>
 
