@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useRef, useMemo } from "react"
 import {
   Activity,
   TrendingUp,
@@ -45,6 +45,7 @@ import { toast } from "sonner"
 import { useActivityLog } from "@/components/activity-tracker"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { useLedger } from "@/lib/ledger-store"
+import { useMarketQuotes } from "@/lib/use-market"
 
 type Signal = "BUY" | "SELL" | "HOLD"
 
@@ -59,7 +60,10 @@ type Instrument = {
   confidence: number
 }
 
-const INSTRUMENTS: Instrument[] = [
+// Instrument metadata + analyst signal/confidence. Live price and change are
+// merged in from the market-data feed at render time (see useMarketQuotes);
+// the seed price/change here are only fallbacks until quotes load.
+const INSTRUMENT_META: Instrument[] = [
   { symbol: "XAU/USD", name: "Gold Spot", category: "Commodities", price: 2331.4, decimals: 2, change: 0.62, signal: "BUY", confidence: 91 },
   { symbol: "WTI", name: "Crude Oil", category: "Commodities", price: 78.34, decimals: 2, change: -0.41, signal: "HOLD", confidence: 64 },
   { symbol: "NG", name: "Natural Gas", category: "Commodities", price: 2.61, decimals: 3, change: 1.27, signal: "BUY", confidence: 78 },
@@ -73,6 +77,8 @@ const INSTRUMENTS: Instrument[] = [
   { symbol: "NDX", name: "NASDAQ 100", category: "Indices", price: 19743, decimals: 0, change: 0.46, signal: "BUY", confidence: 80 },
   { symbol: "SPX", name: "S&P 500", category: "Indices", price: 5471, decimals: 0, change: 0.31, signal: "HOLD", confidence: 66 },
 ]
+
+const INSTRUMENT_SYMBOLS = INSTRUMENT_META.map((m) => m.symbol)
 
 type Position = {
   id: string
@@ -176,10 +182,20 @@ export default function TradingPage() {
   const { totalIn } = useLedger()
   // Real funds available to the client, aggregated from the ledger (EUR equiv.).
   const availableCapital = totalIn("EUR")
-  const [instruments, setInstruments] = useState<Instrument[]>(INSTRUMENTS)
+  // Live market prices for every instrument, refreshed automatically.
+  const { quotes, updatedAt, isLoading: isRefreshing, refresh } = useMarketQuotes(INSTRUMENT_SYMBOLS)
+  const lastTick = updatedAt ?? new Date()
+  // Merge live price + change onto the instrument metadata; analyst signal and
+  // confidence are kept as-is, only the market price/change come from the feed.
+  const instruments = useMemo<Instrument[]>(
+    () =>
+      INSTRUMENT_META.map((m) => {
+        const q = quotes[m.symbol]
+        return q ? { ...m, price: q.price, change: q.changePct } : m
+      }),
+    [quotes],
+  )
   const [autoExecute, setAutoExecute] = useState(true)
-  const [lastTick, setLastTick] = useState(new Date())
-  const [isRefreshing, setIsRefreshing] = useState(false)
   const [tradeTarget, setTradeTarget] = useState<Instrument | null>(null)
   const [tradeSide, setTradeSide] = useState<"LONG" | "SHORT">("LONG")
   const [lots, setLots] = useState("0.10")
@@ -229,32 +245,6 @@ export default function TradingPage() {
     setApplyOpen(false)
     setApplicantName("")
     setApplicantEmail("")
-  }
-
-  // Simulate live price ticks from the NQAi feed.
-  const tick = () => {
-    setInstruments((prev) =>
-      prev.map((it) => {
-        const drift = (Math.random() - 0.5) * (it.price * 0.0006)
-        const nextPrice = Math.max(0.0001, it.price + drift)
-        const nextChange = parseFloat((it.change + (Math.random() - 0.5) * 0.08).toFixed(2))
-        return { ...it, price: nextPrice, change: nextChange }
-      }),
-    )
-    setLastTick(new Date())
-  }
-
-  useEffect(() => {
-    const interval = setInterval(tick, 4000)
-    return () => clearInterval(interval)
-  }, [])
-
-  const refresh = () => {
-    setIsRefreshing(true)
-    setTimeout(() => {
-      tick()
-      setIsRefreshing(false)
-    }, 500)
   }
 
   const toggleAutoExecute = (next: boolean) => {

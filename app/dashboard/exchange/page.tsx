@@ -1,9 +1,10 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { toast } from "sonner"
 import { useActivityLog } from "@/components/activity-tracker"
 import { useLedger } from "@/lib/ledger-store"
+import { useMarketQuotes } from "@/lib/use-market"
 import {
   ArrowDownUp,
   RefreshCw,
@@ -50,44 +51,42 @@ const currencies = [
   { code: "SGD", name: "Singapore Dollar", symbol: "S$", flag: "🇸🇬" },
 ]
 
-// USD value of 1 unit of each currency, used to derive any cross-rate.
-const usdPerUnit: Record<string, number> = {
+// Fallback USD value of 1 unit of each currency, used only until live quotes
+// arrive. Live values override these from the market-data feed.
+const FALLBACK_USD_PER_UNIT: Record<string, number> = {
   USD: 1,
   EUR: 1.0892,
   GBP: 1.2645,
-  CHF: 1.1303, // 1 / 0.8847
-  JPY: 0.006688, // 1 / 149.52
+  CHF: 1.1303,
+  JPY: 0.006688,
   AUD: 0.6542,
-  CAD: 0.7416, // 1 / 1.3485
+  CAD: 0.7416,
   SGD: 0.7407,
 }
 
-// Rate to convert 1 unit of `from` into `to`.
-function getRate(from: string, to: string): number {
-  const fromUsd = usdPerUnit[from] ?? 1
-  const toUsd = usdPerUnit[to] ?? 1
-  return fromUsd / toUsd
-}
-
-const liveRates = [
-  { pair: "EUR/USD", rate: 1.0892, change: 0.15, trend: "up" },
-  { pair: "GBP/USD", rate: 1.2645, change: -0.08, trend: "down" },
-  { pair: "USD/CHF", rate: 0.8847, change: 0.22, trend: "up" },
-  { pair: "EUR/GBP", rate: 0.8613, change: 0.05, trend: "up" },
-  { pair: "USD/JPY", rate: 149.52, change: -0.12, trend: "down" },
-  { pair: "AUD/USD", rate: 0.6542, change: 0.18, trend: "up" },
-  { pair: "USD/CAD", rate: 1.3485, change: -0.05, trend: "down" },
-  { pair: "EUR/CHF", rate: 0.9642, change: 0.08, trend: "up" },
+// FX pairs displayed in the "Live Rates" panel, with display precision.
+const FX_PAIRS: { pair: string; decimals: number }[] = [
+  { pair: "EUR/USD", decimals: 4 },
+  { pair: "GBP/USD", decimals: 4 },
+  { pair: "USD/CHF", decimals: 4 },
+  { pair: "EUR/GBP", decimals: 4 },
+  { pair: "USD/JPY", decimals: 2 },
+  { pair: "AUD/USD", decimals: 4 },
+  { pair: "USD/CAD", decimals: 4 },
+  { pair: "EUR/CHF", decimals: 4 },
 ]
 
-const chartData = [
-  { time: "00:00", rate: 1.0875 },
-  { time: "04:00", rate: 1.0882 },
-  { time: "08:00", rate: 1.0890 },
-  { time: "12:00", rate: 1.0885 },
-  { time: "16:00", rate: 1.0895 },
-  { time: "20:00", rate: 1.0888 },
-  { time: "Now", rate: 1.0892 },
+// Display symbols whose live quotes we need to derive every cross-rate above.
+const FX_SYMBOLS = [
+  "EUR/USD",
+  "GBP/USD",
+  "USD/CHF",
+  "USD/JPY",
+  "AUD/USD",
+  "USD/CAD",
+  "USD/SGD",
+  "EUR/GBP",
+  "EUR/CHF",
 ]
 
 export default function ExchangePage() {
@@ -95,11 +94,53 @@ export default function ExchangePage() {
   const [toCurrency, setToCurrency] = useState("USD")
   const [fromAmount, setFromAmount] = useState("1000")
   const [toAmount, setToAmount] = useState("1089.20")
-  const [isRefreshing, setIsRefreshing] = useState(false)
-  const [lastUpdate, setLastUpdate] = useState(new Date())
   const [isExecuting, setIsExecuting] = useState(false)
   const logActivity = useActivityLog()
   const { addReceipt, addDebit, balanceFor, entries } = useLedger()
+
+  // Live FX quotes drive both the conversion calculator and the rates panel.
+  const { quotes, updatedAt, isLoading: isRefreshing, refresh } = useMarketQuotes(FX_SYMBOLS)
+  const lastUpdate = updatedAt ?? new Date()
+
+  // USD value of 1 unit of each currency, derived from live cross-rates
+  // (falling back to seed values until the first quotes load).
+  const usdPerUnit = useMemo<Record<string, number>>(() => {
+    const px = (s: string) => quotes[s]?.price
+    const inv = (s: string) => {
+      const p = quotes[s]?.price
+      return p && p > 0 ? 1 / p : undefined
+    }
+    return {
+      USD: 1,
+      EUR: px("EUR/USD") ?? FALLBACK_USD_PER_UNIT.EUR,
+      GBP: px("GBP/USD") ?? FALLBACK_USD_PER_UNIT.GBP,
+      CHF: inv("USD/CHF") ?? FALLBACK_USD_PER_UNIT.CHF,
+      JPY: inv("USD/JPY") ?? FALLBACK_USD_PER_UNIT.JPY,
+      AUD: px("AUD/USD") ?? FALLBACK_USD_PER_UNIT.AUD,
+      CAD: inv("USD/CAD") ?? FALLBACK_USD_PER_UNIT.CAD,
+      SGD: inv("USD/SGD") ?? FALLBACK_USD_PER_UNIT.SGD,
+    }
+  }, [quotes])
+
+  // Rate to convert 1 unit of `from` into `to`.
+  const getRate = (from: string, to: string): number => {
+    const fromUsd = usdPerUnit[from] ?? 1
+    const toUsd = usdPerUnit[to] ?? 1
+    return fromUsd / toUsd
+  }
+
+  // Live rates panel: real price + percentage change per pair.
+  const liveRates = FX_PAIRS.map(({ pair, decimals }) => {
+    const q = quotes[pair]
+    return {
+      pair,
+      decimals,
+      rate: q?.price ?? 0,
+      change: q?.changePct ?? 0,
+      trend: (q?.changePct ?? 0) >= 0 ? "up" : "down",
+      hasQuote: Boolean(q),
+    }
+  })
 
   // Derive the on-page "Recent Exchanges" list directly from the ledger so every
   // executed conversion shows up here in real time. Each conversion posts a
@@ -131,6 +172,31 @@ export default function ExchangePage() {
 
   const currentRate = getRate(fromCurrency, toCurrency)
   const conversionFee = 0.004 // 0.4%
+
+  // Percentage change for the selected pair, taken from the directly-quoted
+  // pair when available (e.g. EUR/USD), otherwise derived from the two legs.
+  const pairChangePct = (() => {
+    const direct = quotes[`${fromCurrency}/${toCurrency}`]?.changePct
+    if (typeof direct === "number") return direct
+    const fromUsd = quotes[`${fromCurrency}/USD`]?.changePct ?? 0
+    const toUsd = quotes[`${toCurrency}/USD`]?.changePct ?? 0
+    return Number((fromUsd - toUsd).toFixed(2))
+  })()
+
+  // Build a coherent intraday curve anchored on the real current rate so the
+  // chart never contradicts the live quote.
+  const chartData = useMemo(() => {
+    const labels = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "Now"]
+    const drift = currentRate * (pairChangePct / 100)
+    return labels.map((time, i) => {
+      if (i === labels.length - 1) return { time, rate: currentRate }
+      // Walk backwards from the current rate along the day's net move, with a
+      // small deterministic wave so the line reads naturally.
+      const stepsBack = labels.length - 1 - i
+      const wave = Math.sin(i * 1.3) * currentRate * 0.0006
+      return { time, rate: currentRate - (drift / (labels.length - 1)) * stepsBack + wave }
+    })
+  }, [currentRate, pairChangePct])
 
   const numericFrom = parseFloat(fromAmount.replace(/,/g, "")) || 0
   const feeAmount = numericFrom * conversionFee
@@ -228,9 +294,11 @@ export default function ExchangePage() {
 
   useEffect(() => {
     const numericAmount = parseFloat(fromAmount.replace(/,/g, "")) || 0
-    const converted = (numericAmount * getRate(fromCurrency, toCurrency)).toFixed(2)
+    const converted = (numericAmount * currentRate).toFixed(2)
     setToAmount(parseFloat(converted).toLocaleString())
-  }, [fromAmount, fromCurrency, toCurrency])
+    // currentRate moves whenever live quotes update, so the receive amount
+    // stays in sync with the market in real time.
+  }, [fromAmount, currentRate])
 
   const handleSwap = () => {
     setFromCurrency(toCurrency)
@@ -239,11 +307,7 @@ export default function ExchangePage() {
   }
 
   const refreshRates = () => {
-    setIsRefreshing(true)
-    setTimeout(() => {
-      setLastUpdate(new Date())
-      setIsRefreshing(false)
-    }, 500)
+    refresh()
   }
 
   const handleSetAlert = () => {
@@ -450,10 +514,19 @@ export default function ExchangePage() {
               <div className="flex items-center gap-2">
                 <Badge
                   variant="outline"
-                  className="bg-green-500/10 text-green-500 border-green-500/20"
+                  className={cn(
+                    pairChangePct >= 0
+                      ? "bg-green-500/10 text-green-500 border-green-500/20"
+                      : "bg-red-500/10 text-red-500 border-red-500/20",
+                  )}
                 >
-                  <TrendingUp className="mr-1 h-3 w-3" />
-                  +0.15%
+                  {pairChangePct >= 0 ? (
+                    <TrendingUp className="mr-1 h-3 w-3" />
+                  ) : (
+                    <TrendingDown className="mr-1 h-3 w-3" />
+                  )}
+                  {pairChangePct >= 0 ? "+" : ""}
+                  {pairChangePct.toFixed(2)}%
                 </Badge>
               </div>
             </CardHeader>
@@ -552,15 +625,17 @@ export default function ExchangePage() {
                     </span>
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-mono text-foreground">
-                        {rate.rate.toFixed(4)}
+                        {rate.hasQuote ? rate.rate.toFixed(rate.decimals) : "—"}
                       </span>
                       <Badge
                         variant="outline"
                         className={cn(
                           "text-[10px]",
-                          rate.trend === "up"
-                            ? "bg-green-500/10 text-green-500 border-green-500/20"
-                            : "bg-red-500/10 text-red-500 border-red-500/20"
+                          !rate.hasQuote
+                            ? "bg-secondary text-muted-foreground border-border"
+                            : rate.trend === "up"
+                              ? "bg-green-500/10 text-green-500 border-green-500/20"
+                              : "bg-red-500/10 text-red-500 border-red-500/20"
                         )}
                       >
                         {rate.trend === "up" ? (
@@ -568,7 +643,7 @@ export default function ExchangePage() {
                         ) : (
                           <TrendingDown className="mr-1 h-3 w-3" />
                         )}
-                        {Math.abs(rate.change)}%
+                        {Math.abs(rate.change).toFixed(2)}%
                       </Badge>
                     </div>
                   </div>
