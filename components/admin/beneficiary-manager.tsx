@@ -29,6 +29,7 @@ import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
 import {
   adminListBeneficiaries,
+  adminListPendingKyc,
   adminUpsertBeneficiary,
   adminSetBeneficiaryStatus,
   adminDeleteBeneficiary,
@@ -83,6 +84,12 @@ export function BeneficiaryManager() {
   const [records, setRecords] = useState<BeneficiaryRecord[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  // Cross-client KYC queue: every beneficiary still "pending", regardless of
+  // which client owns it. This is what the admin command-center count reflects,
+  // so it must be visible here even when the selected client has none.
+  const [pendingAll, setPendingAll] = useState<BeneficiaryRecord[]>([])
+  const [pendingLoading, setPendingLoading] = useState(false)
+  const [actingId, setActingId] = useState<string | null>(null)
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [form, setForm] = useState<FormState>(emptyForm)
