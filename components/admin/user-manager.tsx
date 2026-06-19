@@ -98,6 +98,11 @@ export function UserManager() {
   const [editBadge, setEditBadge] = useState("")
   const [savingEdit, setSavingEdit] = useState(false)
 
+  // Reset password dialog
+  const [resetTarget, setResetTarget] = useState<AdminUserView | null>(null)
+  const [resetPassword, setResetPassword] = useState("")
+  const [resetting, setResetting] = useState(false)
+
   // Credential reveal dialog (shown after create / reset)
   const [reveal, setReveal] = useState<CredentialReveal | null>(null)
   const [copied, setCopied] = useState<"email" | "password" | "both" | null>(null)
@@ -241,24 +246,40 @@ export function UserManager() {
     })
   }
 
-  const handleReset = async (u: AdminUserView) => {
-    const res = await resetUserPassword(ADMIN_PASSCODE, u.id, undefined, "Administrator")
+  const openReset = (u: AdminUserView) => {
+    setResetTarget(u)
+    setResetPassword("")
+  }
+
+  const handleReset = async () => {
+    const u = resetTarget
+    if (!u) return
+    const custom = resetPassword.trim()
+    if (custom && custom.length < 6) {
+      toast.error("Password must be at least 6 characters.")
+      return
+    }
+    setResetting(true)
+    // Pass the typed password to assign it directly; leave blank to auto-generate.
+    const res = await resetUserPassword(ADMIN_PASSCODE, u.id, custom || undefined, "Administrator")
+    setResetting(false)
     if (!res.ok) {
       toast.error(res.error)
       return
     }
     setUsers((prev) => prev.map((x) => (x.id === res.user.id ? res.user : x)))
+    setResetTarget(null)
     setReveal({
       email: res.user.email,
       password: res.tempPassword ?? res.user.password,
       title: "Credentials reset",
     })
-    toast.success("Temporary password generated")
+    toast.success(custom ? "Password updated" : "Temporary password generated")
     logActivity({
       action: `Administrator reset credentials for ${u.fullName}`,
       category: "Administration / User Management",
       details: {
-        summary: `Administrator generated a new temporary password for ${u.fullName} (${u.company}).`,
+        summary: `Administrator ${custom ? "set a new password" : "generated a new temporary password"} for ${u.fullName} (${u.company}).`,
         account: `${u.fullName} — ${u.email}`,
       },
     })
@@ -385,7 +406,7 @@ export function UserManager() {
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <Button variant="outline" size="sm" onClick={() => handleReset(u)}>
+                    <Button variant="outline" size="sm" onClick={() => openReset(u)}>
                       <KeyRound className="mr-1.5 h-3.5 w-3.5" /> Reset
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => openEdit(u)}>
@@ -608,6 +629,50 @@ export function UserManager() {
             <Button onClick={handleEdit} disabled={savingEdit}>
               {savingEdit && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset password dialog */}
+      <Dialog open={!!resetTarget} onOpenChange={(o) => !o && setResetTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reset password</DialogTitle>
+            <DialogDescription>
+              Set a new password for{" "}
+              <span className="font-medium text-foreground">{resetTarget?.fullName}</span> (
+              {resetTarget?.email}). Type the exact password you want to assign, or leave it blank to
+              auto-generate one.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="reset-password">New password</Label>
+            <Input
+              id="reset-password"
+              type="text"
+              autoComplete="off"
+              inputMode="text"
+              placeholder="Leave blank to auto-generate"
+              value={resetPassword}
+              onChange={(e) => setResetPassword(e.target.value)}
+              className="font-mono text-base"
+            />
+            <p className="text-xs text-muted-foreground">
+              Minimum 6 characters. The client will use this password to sign in immediately.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResetTarget(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleReset} disabled={resetting}>
+              {resetting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <KeyRound className="mr-2 h-4 w-4" />
+              )}
+              {resetPassword.trim() ? "Set password" : "Generate password"}
             </Button>
           </DialogFooter>
         </DialogContent>
