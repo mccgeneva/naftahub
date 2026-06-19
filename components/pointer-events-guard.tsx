@@ -48,6 +48,22 @@ export function PointerEventsGuard() {
       }
     }
 
+    // Navigation ALWAYS dismisses overlays (you cannot keep a dropdown/dialog
+    // open across a route change). So right after a route change we clear the
+    // body lock UNCONDITIONALLY — this is the only thing that recovers from an
+    // orphaned portal that was left mounted with data-state="open" (which the
+    // conditional check above would otherwise treat as a live overlay forever).
+    // We repeat across a short window to cover Radix's async unmount + exit
+    // animation. A user opening a fresh modal within this window is extremely
+    // unlikely (they have to see the new page first), and if they did, the
+    // modal's own dismissable-layer effect re-applies the lock afterwards.
+    const forceClear = () => {
+      if (document.body.style.pointerEvents === "none") {
+        document.body.style.pointerEvents = ""
+      }
+    }
+    const forceTimers = [0, 80, 200, 400].map((d) => window.setTimeout(forceClear, d))
+
     // 1) Right after a route change (covers leaving a page with open dialogs).
     const timeout = window.setTimeout(clearIfStuck, 0)
 
@@ -73,6 +89,7 @@ export function PointerEventsGuard() {
 
     return () => {
       window.clearTimeout(timeout)
+      forceTimers.forEach((t) => window.clearTimeout(t))
       window.clearInterval(interval)
       cancelAnimationFrame(raf)
       observer.disconnect()
