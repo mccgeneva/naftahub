@@ -147,25 +147,26 @@ export async function saveTreasuryRecordAdmin(
   const contribution = Math.max(0, Number(fields.customerContribution) || 0)
   const leverageEnabled = Boolean(fields.leverageEnabled)
 
-  // The approved leverage facility is capped at 1:10. The customer contribution
-  // must therefore cover at least 10% of the required security deposit; the
-  // remaining (up to 90%) is financed by MCC HOLDING SA.
-  if (leverageEnabled) {
-    const minContribution = Math.ceil(required / MAX_LEVERAGE_RATIO)
-    if (contribution < minContribution) {
-      return {
-        ok: false,
-        error: `Leverage is capped at 1:${MAX_LEVERAGE_RATIO}. The customer must contribute at least EUR ${minContribution.toLocaleString(
-          "en-US",
-        )} (10%) of the EUR ${required.toLocaleString("en-US")} deposit.`,
-      }
-    }
-  }
-
   const exposure = leverageEnabled ? Math.max(0, Number(fields.transactionExposure) || 0) : 0
-  const financed = leverageEnabled ? Math.max(0, required - contribution) : 0
+
+  // The approved facility is capped at 1:10, which means it can finance at most
+  // (10 − 1)× the client's own contribution. We finance the gap to the required
+  // deposit, but never more than that cap allows — so reducing or removing the
+  // contribution correctly leaves the deposit uncovered (a shortfall) instead of
+  // being silently topped up to "fully secured".
+  const maxFinanceable = leverageEnabled ? contribution * (MAX_LEVERAGE_RATIO - 1) : 0
+  const financed = leverageEnabled ? Math.min(Math.max(0, required - contribution), maxFinanceable) : 0
+  const secured = contribution + financed
   const ratio = leverageEnabled && contribution > 0 ? Math.round((required / contribution) * 100) / 100 : 1
-  const status = fields.status
+
+  // Derive the stored status from the real coverage so it can never be saved as
+  // "secured" while the deposit is actually uncovered. "closed" stays explicit.
+  let status: TreasuryStatus
+  if (fields.status === "closed") status = "closed"
+  else if (required > 0 && secured >= required) status = "secured"
+  else if (secured > 0) status = "shortfall"
+  else status = "pending"
+
   const note = fields.note?.toString().trim() || null
   const now = new Date().toISOString()
 
