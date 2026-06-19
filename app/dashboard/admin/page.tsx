@@ -1589,24 +1589,27 @@ export default function AdminPage() {
   // proper approve / reject / moderate controls for that item type), so the
   // admin can see and jump to anything outstanding from one place at the top.
   // ---------------------------------------------------------------------------
+  // `view` is the section id passed to openView() so the banner can jump
+  // straight to the section that actually holds the approve/reject controls.
   const pendingCategories = [
-    { id: "section-kyc", label: "KYC Verification", count: pendingKycCount, icon: ShieldCheck },
-    { id: "section-payments", label: "Outgoing Payments", count: pending.length, icon: ArrowUpRight },
-    { id: "section-instruments", label: "Bank Instruments", count: pendingInstruments.length, icon: FileText },
-    { id: "section-ppp", label: "Yield / PPP", count: pendingPPP.length, icon: TrendingUp },
-    { id: "section-funding", label: "Project Funding", count: pendingFunding.length, icon: Building2 },
-    { id: "section-fiduciary", label: "Fiduciary & Assets", count: pendingFiduciary.length, icon: Landmark },
-    { id: "section-leverage", label: "Leverage Lines", count: pendingLeverage.length, icon: Gauge },
-    { id: "section-switchoff", label: "Leverage Switch-Off", count: pendingSwitchOff.length, icon: Power },
-    { id: "section-dof", label: "Download of Funds", count: pendingDOF.length, icon: Banknote },
-    { id: "section-monetization", label: "Instrument Monetization", count: pendingMonetization.length, icon: Landmark },
-    { id: "section-dtc", label: "DTC Settlement", count: pendingDTC.length, icon: Layers },
-    { id: "section-euroclear", label: "Euroclear Settlement", count: pendingEuroclear.length, icon: Globe },
-    { id: "section-commodity", label: "Commodity Deals", count: pendingDeals.length, icon: Ship },
-    { id: "section-skr", label: "SKR Trading", count: 0, icon: ShieldCheck },
+    { id: "section-kyc", view: "kyc", label: "KYC Verification", count: pendingKycCount, icon: ShieldCheck },
+    { id: "section-payments", view: "payments", label: "Outgoing Payments", count: pending.length, icon: ArrowUpRight },
+    { id: "section-instruments", view: "instruments", label: "Bank Instruments", count: pendingInstruments.length, icon: FileText },
+    { id: "section-ppp", view: "ppp", label: "Yield / PPP", count: pendingPPP.length, icon: TrendingUp },
+    { id: "section-funding", view: "funding", label: "Project Funding", count: pendingFunding.length, icon: Building2 },
+    { id: "section-fiduciary", view: "fiduciary", label: "Fiduciary & Assets", count: pendingFiduciary.length, icon: Landmark },
+    { id: "section-leverage", view: "leverage", label: "Leverage Lines", count: pendingLeverage.length, icon: Gauge },
+    { id: "section-switchoff", view: "leverage", label: "Leverage Switch-Off", count: pendingSwitchOff.length, icon: Power },
+    { id: "section-dof", view: "dof", label: "Download of Funds", count: pendingDOF.length, icon: Banknote },
+    { id: "section-monetization", view: "monetization", label: "Instrument Monetization", count: pendingMonetization.length, icon: Landmark },
+    { id: "section-dtc", view: "settlement", label: "DTC Settlement", count: pendingDTC.length, icon: Layers },
+    { id: "section-euroclear", view: "settlement", label: "Euroclear Settlement", count: pendingEuroclear.length, icon: Globe },
+    { id: "section-commodity", view: "commodity", label: "Commodity Deals", count: pendingDeals.length, icon: Ship },
+    { id: "section-skr", view: "skr", label: "SKR Trading", count: 0, icon: ShieldCheck },
   ] as const
 
-  const totalPendingDecisions = pendingCategories.reduce((sum, c) => sum + c.count, 0)
+  const actionablePending = pendingCategories.filter((c) => c.count > 0)
+  const totalPendingDecisions = actionablePending.reduce((sum, c) => sum + c.count, 0)
 
   // ---------------------------------------------------------------------------
   // Admin Menu registry
@@ -1849,7 +1852,7 @@ export default function AdminPage() {
       {/* Outstanding-work alert banner */}
       {totalPendingDecisions > 0 ? (
         <Card className="border-primary/30 bg-primary/5">
-          <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <CardContent className="flex flex-col gap-4 p-4">
             <div className="flex items-center gap-3">
               <div className="rounded-lg bg-primary/15 p-2">
                 <Clock className="h-5 w-5 text-primary" />
@@ -1859,9 +1862,28 @@ export default function AdminPage() {
                   {totalPendingDecisions} item{totalPendingDecisions === 1 ? "" : "s"} awaiting a decision
                 </p>
                 <p className="text-xs text-muted-foreground text-pretty">
-                  Open the highlighted sections below to approve, reject or process outstanding work.
+                  Tap an item below to jump straight to where you can approve, reject or process it.
                 </p>
               </div>
+            </div>
+            {/* Actionable breakdown — one button per outstanding queue so the
+                admin can jump directly instead of hunting through sections. */}
+            <div className="flex flex-wrap gap-2">
+              {actionablePending.map((c) => {
+                const Icon = c.icon
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => openView(c.view)}
+                    className="flex items-center gap-2 rounded-lg border border-primary/30 bg-card px-3 py-2 text-left text-sm transition-colors hover:border-primary hover:bg-secondary"
+                  >
+                    <Icon className="h-4 w-4 shrink-0 text-primary" />
+                    <span className="font-medium text-foreground">{c.label}</span>
+                    <Badge className="shrink-0">{c.count}</Badge>
+                  </button>
+                )
+              })}
             </div>
           </CardContent>
         </Card>
