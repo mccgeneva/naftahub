@@ -3,6 +3,8 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { scopedKey } from "@/lib/user-scope"
 import { buildInstrumentIdentifiers } from "@/lib/instrument-identifiers"
+import { mirrorSubmission } from "@/lib/approval-sync"
+import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 
 /**
  * Ensure an instrument carries the full identifier set. Records created before
@@ -20,6 +22,8 @@ export type InstrumentStatus = "pending" | "active" | "rejected" | "cancelled" |
 
 export interface Instrument {
   id: string
+  /** DB approval id once mirrored, so admin decisions can be reconciled back. */
+  approvalId?: string
   type: string
   typeFull: string
   issuer: string
@@ -142,6 +146,12 @@ export function InstrumentRequestsProvider({ children }: { children: React.React
     }
   }, [hydrated])
 
+  // Reconcile administrator decisions made cross-client (in the DB) back here.
+  // Instruments use "active" for an approved record, so we map onto that.
+  useApprovalReconcile("instrument", hydrated, instruments, setInstruments, undefined, {
+    approvedStatus: "active",
+  })
+
   const addInstrument: InstrumentRequestsContextValue["addInstrument"] = (instrument) => {
     const full: Instrument = {
       ...instrument,
@@ -149,6 +159,18 @@ export function InstrumentRequestsProvider({ children }: { children: React.React
       submittedAt: new Date().toISOString(),
     }
     setInstruments((prev) => [full, ...prev])
+    // Mirror into the DB so the Administrator can review it cross-client.
+    void mirrorSubmission({
+      kind: "instrument",
+      title: `${full.typeFull} · ${full.issuer}`,
+      summary: `${full.currency} ${full.faceValue.toLocaleString("en-US")} ${full.typeFull} issued by ${full.issuer} (${full.purpose})`,
+      amount: full.faceValue,
+      currency: full.currency,
+      payload: { localId: full.id, type: full.type, issuer: full.issuer, isin: full.isin },
+    }).then((approvalId) => {
+      if (!approvalId) return
+      setInstruments((prev) => prev.map((i) => (i.id === full.id ? { ...i, approvalId } : i)))
+    })
     return full
   }
 

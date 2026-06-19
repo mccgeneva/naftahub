@@ -3,6 +3,8 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { scopedKey } from "@/lib/user-scope"
 import type { AesEquityComponent } from "@/lib/aes"
+import { mirrorSubmission } from "@/lib/approval-sync"
+import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 
 export type ProjectFundingStatus = "pending" | "approved" | "rejected"
 
@@ -18,6 +20,8 @@ export interface UploadedFundingDoc {
 
 export interface ProjectFundingRequest {
   id: string
+  /** DB approval id once mirrored, so admin decisions can be reconciled back. */
+  approvalId?: string
   projectName: string
   sector: string
   jurisdiction: string
@@ -138,6 +142,9 @@ export function ProjectFundingProvider({ children }: { children: React.ReactNode
     }
   }, [hydrated])
 
+  // Reconcile administrator decisions made cross-client (in the DB) back here.
+  useApprovalReconcile("project_funding", hydrated, requests, setRequests)
+
   const addRequest: ProjectFundingContextValue["addRequest"] = (request) => {
     const full: ProjectFundingRequest = {
       ...request,
@@ -145,6 +152,18 @@ export function ProjectFundingProvider({ children }: { children: React.ReactNode
       submittedAt: new Date().toISOString(),
     }
     setRequests((prev) => [full, ...prev])
+    // Mirror into the DB so the Administrator can review it cross-client.
+    void mirrorSubmission({
+      kind: "project_funding",
+      title: `${full.projectName} · ${full.sector}`,
+      summary: `${full.currency} ${full.facility.toLocaleString("en-US")} facility for ${full.projectName} (${full.jurisdiction}) — equity ${full.currency} ${full.totalEquity.toLocaleString("en-US")} @ ${full.effectiveRate}%`,
+      amount: full.facility,
+      currency: full.currency,
+      payload: { localId: full.id, sector: full.sector, jurisdiction: full.jurisdiction },
+    }).then((approvalId) => {
+      if (!approvalId) return
+      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+    })
     return full
   }
 

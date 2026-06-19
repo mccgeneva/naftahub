@@ -3,6 +3,8 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { generateUetr } from "@/lib/swift-gpi"
 import { scopedKey } from "@/lib/user-scope"
+import { mirrorSubmission } from "@/lib/approval-sync"
+import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 
 export type DOFRequestStatus = "pending" | "approved" | "rejected"
 
@@ -11,6 +13,8 @@ export type DOFSettlementMethod = "SWIFT" | "DTC" | "Euroclear"
 
 export interface DOFRequest {
   id: string // platform reference, e.g. "DOF-1A2B3C4D"
+  /** DB approval id once mirrored, so admin decisions can be reconciled back. */
+  approvalId?: string
   uetr: string // SWIFT gpi Unique End-to-End Transaction Reference (UUID v4)
 
   // Core transaction
@@ -131,6 +135,9 @@ export function DOFRequestsProvider({ children }: { children: React.ReactNode })
     }
   }, [hydrated])
 
+  // Reconcile administrator decisions made cross-client (in the DB) back here.
+  useApprovalReconcile("dof", hydrated, requests, setRequests)
+
   const addRequest: DOFRequestsContextValue["addRequest"] = (request) => {
     const full: DOFRequest = {
       ...request,
@@ -140,6 +147,18 @@ export function DOFRequestsProvider({ children }: { children: React.ReactNode })
       submittedAt: new Date().toISOString(),
     }
     setRequests((prev) => [full, ...prev])
+    // Mirror into the DB so the Administrator can review it cross-client.
+    void mirrorSubmission({
+      kind: "dof",
+      title: `Download of Funds · ${full.originatorName}`,
+      summary: `${full.currency} ${full.amount.toLocaleString("en-US")} from ${full.originatorName} via ${full.settlementMethod} (value ${full.valueDate}) — ${full.purpose}`,
+      amount: full.amount,
+      currency: full.currency,
+      payload: { localId: full.id, uetr: full.uetr, settlementMethod: full.settlementMethod, originatorBankBic: full.originatorBankBic },
+    }).then((approvalId) => {
+      if (!approvalId) return
+      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+    })
     return full
   }
 

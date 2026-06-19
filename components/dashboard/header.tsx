@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
+import useSWR from "swr"
 import { Bell, User, LogOut, Settings, HelpCircle, Menu, BookOpen, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { GlobalSearch } from "./global-search"
@@ -20,14 +21,29 @@ import { MobileSidebar } from "./mobile-sidebar"
 import { logout } from "@/app/actions/auth"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { BankekaHeaderButton } from "@/components/bankeka/bankeka-header-button"
+import { getMyNotifications, markMyNotificationsRead } from "@/app/actions/notifications"
 
-const initialNotifications: {
-  id: number
-  title: string
-  description: string
-  time: string
-  type: string
-}[] = []
+/** Relative "time ago" label for a notification timestamp. */
+function timeAgo(iso: string): string {
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return ""
+  const diff = Math.max(0, Date.now() - then)
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return "just now"
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  return `${days}d ago`
+}
+
+/** Map a notification tone to its status dot color. */
+const toneDot: Record<string, string> = {
+  success: "bg-success",
+  warning: "bg-yellow-500",
+  error: "bg-destructive",
+  info: "bg-primary",
+}
 
 /** Live UTC clock + market status pill, Bloomberg terminal style. */
 function TerminalClock() {
@@ -57,8 +73,29 @@ function TerminalClock() {
 
 export function DashboardHeader() {
   const user = useCurrentUser()
-  const [notifications, setNotifications] = useState(initialNotifications)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+
+  // Live notifications from the DB (cross-device). Polls so a decision made by
+  // an admin shows up shortly after, even without a page reload.
+  const { data, mutate } = useSWR("my-notifications", getMyNotifications, {
+    refreshInterval: 30000,
+    revalidateOnFocus: true,
+  })
+  const notifications = data?.items ?? []
+  const unread = data?.unread ?? 0
+
+  const markAllRead = async () => {
+    // Optimistically clear the unread badge, then persist.
+    mutate(
+      (prev) =>
+        prev
+          ? { items: prev.items.map((n) => ({ ...n, read: true })), unread: 0 }
+          : prev,
+      false,
+    )
+    await markMyNotificationsRead()
+    mutate()
+  }
   return (
     <header className="sticky top-0 z-50 flex h-16 items-center justify-between border-b border-border bg-card px-4 md:px-6">
       {/* Mobile Menu */}
@@ -94,9 +131,9 @@ export function DashboardHeader() {
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="relative">
               <Bell className="h-5 w-5" />
-              {notifications.length > 0 && (
+              {unread > 0 && (
                 <Badge className="absolute -right-1 -top-1 h-5 w-5 rounded-full p-0 text-[10px] bg-primary text-primary-foreground flex items-center justify-center">
-                  {notifications.length}
+                  {unread > 9 ? "9+" : unread}
                 </Badge>
               )}
               <span className="sr-only">Notifications</span>
@@ -109,8 +146,8 @@ export function DashboardHeader() {
                 variant="ghost"
                 size="sm"
                 className="h-auto p-0 text-xs text-primary disabled:opacity-50"
-                disabled={notifications.length === 0}
-                onClick={() => setNotifications([])}
+                disabled={unread === 0}
+                onClick={markAllRead}
               >
                 Mark all read
               </Button>
@@ -127,28 +164,36 @@ export function DashboardHeader() {
                 </p>
               </div>
             ) : (
-              notifications.map((notification) => (
-                <DropdownMenuItem key={notification.id} className="flex flex-col items-start gap-1 p-3 cursor-pointer">
-                  <div className="flex items-center gap-2">
-                    <div
-                      className={`h-2 w-2 rounded-full ${
-                        notification.type === "success"
-                          ? "bg-green-500"
-                          : notification.type === "warning"
-                          ? "bg-yellow-500"
-                          : "bg-blue-500"
-                      }`}
-                    />
-                    <span className="font-medium text-sm">{notification.title}</span>
-                  </div>
-                  <span className="text-xs text-muted-foreground pl-4">
-                    {notification.description}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground pl-4">
-                    {notification.time}
-                  </span>
-                </DropdownMenuItem>
-              ))
+              notifications.map((notification) => {
+                const content = (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <div className={`h-2 w-2 rounded-full ${toneDot[notification.tone] ?? "bg-primary"}`} />
+                      <span className="font-medium text-sm">{notification.title}</span>
+                      {!notification.read && (
+                        <span className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" aria-label="Unread" />
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground pl-4 text-pretty">{notification.body}</span>
+                    <span className="text-[10px] text-muted-foreground pl-4">{timeAgo(notification.createdAt)}</span>
+                  </>
+                )
+                return (
+                  <DropdownMenuItem
+                    key={notification.id}
+                    className={`flex flex-col items-start gap-1 p-3 cursor-pointer ${
+                      notification.read ? "" : "bg-secondary/40"
+                    }`}
+                    asChild={!!notification.href}
+                  >
+                    {notification.href ? (
+                      <Link href={notification.href}>{content}</Link>
+                    ) : (
+                      content
+                    )}
+                  </DropdownMenuItem>
+                )
+              })
             )}
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild className="justify-center text-primary cursor-pointer">

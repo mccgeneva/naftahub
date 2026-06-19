@@ -32,6 +32,7 @@ import {
   Settings,
   ChevronRight,
   ArrowLeft,
+  ClipboardList,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -99,6 +100,9 @@ import { TreasuryManager } from "@/components/admin/treasury-manager"
 import { UserManager } from "@/components/admin/user-manager"
 import { MembershipManager } from "@/components/admin/membership-manager"
 import { BeneficiaryManager } from "@/components/admin/beneficiary-manager"
+import { PendingApprovals } from "@/components/admin/pending-approvals"
+import { adminCountPending } from "@/app/actions/approvals"
+import { KIND_LABELS, type ApprovalKind } from "@/lib/approval-kinds"
 import { adminListPendingKyc } from "@/app/actions/beneficiaries"
 import { BalanceManager } from "@/components/admin/balance-manager"
 import { SkrManager } from "@/components/admin/skr-manager"
@@ -266,6 +270,35 @@ export default function AdminPage() {
       cancelled = true
     }
   }, [unlocked])
+
+  // Cross-client pending counts from the DB-backed approvals backbone. Unlike
+  // the localStorage stores above (which only ever see the ADMIN's own browser
+  // data), this reflects requests submitted by ANY client. It is the source of
+  // truth for the unified "All Pending Approvals" dashboard and command center.
+  // Refetched whenever the panel unlocks and whenever we return to the menu.
+  const [dbPending, setDbPending] = useState<Record<string, number>>({})
+  // The type a command-center tile deep-links into when opening the dashboard.
+  const [approvalsInitialKind, setApprovalsInitialKind] = useState<ApprovalKind | undefined>(undefined)
+  useEffect(() => {
+    if (!unlocked) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const counts = await adminCountPending(ADMIN_PASSCODE)
+        if (!cancelled) setDbPending(counts)
+      } catch {
+        // Non-fatal: tiles fall back to 0 if counts can't be loaded.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [unlocked, activeView])
+
+  const dbPendingTotal = useMemo(
+    () => Object.values(dbPending).reduce((sum, n) => sum + (n || 0), 0),
+    [dbPending],
+  )
 
   const handleUnlock = () => {
     if (passcode.trim() === ADMIN_PASSCODE) {
@@ -1591,25 +1624,43 @@ export default function AdminPage() {
   // ---------------------------------------------------------------------------
   // `view` is the section id passed to openView() so the banner can jump
   // straight to the section that actually holds the approve/reject controls.
-  const pendingCategories = [
+  // All request-type counts now come from the DB (cross-client). Each entry
+  // jumps to the unified "approvals" dashboard, pre-filtered to that type, so
+  // clicking a count always lands on a section that actually shows the items —
+  // regardless of which client submitted them. KYC keeps its own count/section
+  // since the BeneficiaryManager already provides the full cross-client review.
+  const pendingCategories: {
+    id: string
+    view: string
+    label: string
+    count: number
+    icon: typeof ShieldCheck
+    kind?: ApprovalKind
+  }[] = [
     { id: "section-kyc", view: "kyc", label: "KYC Verification", count: pendingKycCount, icon: ShieldCheck },
-    { id: "section-payments", view: "payments", label: "Outgoing Payments", count: pending.length, icon: ArrowUpRight },
-    { id: "section-instruments", view: "instruments", label: "Bank Instruments", count: pendingInstruments.length, icon: FileText },
-    { id: "section-ppp", view: "ppp", label: "Yield / PPP", count: pendingPPP.length, icon: TrendingUp },
-    { id: "section-funding", view: "funding", label: "Project Funding", count: pendingFunding.length, icon: Building2 },
-    { id: "section-fiduciary", view: "fiduciary", label: "Fiduciary & Assets", count: pendingFiduciary.length, icon: Landmark },
-    { id: "section-leverage", view: "leverage", label: "Leverage Lines", count: pendingLeverage.length, icon: Gauge },
-    { id: "section-switchoff", view: "leverage", label: "Leverage Switch-Off", count: pendingSwitchOff.length, icon: Power },
-    { id: "section-dof", view: "dof", label: "Download of Funds", count: pendingDOF.length, icon: Banknote },
-    { id: "section-monetization", view: "monetization", label: "Instrument Monetization", count: pendingMonetization.length, icon: Landmark },
-    { id: "section-dtc", view: "settlement", label: "DTC Settlement", count: pendingDTC.length, icon: Layers },
-    { id: "section-euroclear", view: "settlement", label: "Euroclear Settlement", count: pendingEuroclear.length, icon: Globe },
-    { id: "section-commodity", view: "commodity", label: "Commodity Deals", count: pendingDeals.length, icon: Ship },
-    { id: "section-skr", view: "skr", label: "SKR Trading", count: 0, icon: ShieldCheck },
-  ] as const
+    { id: "section-payments", view: "approvals", kind: "payment", label: "Outgoing Payments", count: dbPending.payment ?? 0, icon: ArrowUpRight },
+    { id: "section-instruments", view: "approvals", kind: "instrument", label: "Bank Instruments", count: dbPending.instrument ?? 0, icon: FileText },
+    { id: "section-ppp", view: "approvals", kind: "ppp", label: "Yield / PPP", count: dbPending.ppp ?? 0, icon: TrendingUp },
+    { id: "section-funding", view: "approvals", kind: "project_funding", label: "Project Funding", count: dbPending.project_funding ?? 0, icon: Building2 },
+    { id: "section-fiduciary", view: "approvals", kind: "fiduciary", label: "Fiduciary & Assets", count: dbPending.fiduciary ?? 0, icon: Landmark },
+    { id: "section-leverage", view: "approvals", kind: "leverage", label: "Leverage Lines", count: dbPending.leverage ?? 0, icon: Gauge },
+    { id: "section-switchoff", view: "approvals", kind: "leverage_switchoff", label: "Leverage Switch-Off", count: dbPending.leverage_switchoff ?? 0, icon: Power },
+    { id: "section-dof", view: "approvals", kind: "dof", label: "Download of Funds", count: dbPending.dof ?? 0, icon: Banknote },
+    { id: "section-monetization", view: "approvals", kind: "monetization", label: "Instrument Monetization", count: dbPending.monetization ?? 0, icon: Landmark },
+    { id: "section-dtc", view: "approvals", kind: "dtc", label: "DTC Settlement", count: dbPending.dtc ?? 0, icon: Layers },
+    { id: "section-euroclear", view: "approvals", kind: "euroclear", label: "Euroclear Settlement", count: dbPending.euroclear ?? 0, icon: Globe },
+    { id: "section-commodity", view: "approvals", kind: "commodity", label: "Commodity Deals", count: dbPending.commodity ?? 0, icon: Ship },
+  ]
 
   const actionablePending = pendingCategories.filter((c) => c.count > 0)
   const totalPendingDecisions = actionablePending.reduce((sum, c) => sum + c.count, 0)
+
+  // Open a command-center entry: deep-link into the unified dashboard with the
+  // right type pre-selected, or fall back to the entry's own section (KYC).
+  const openPending = (c: { view: string; kind?: ApprovalKind }) => {
+    setApprovalsInitialKind(c.kind)
+    openView(c.view)
+  }
 
   // ---------------------------------------------------------------------------
   // Admin Menu registry
@@ -1620,6 +1671,7 @@ export default function AdminPage() {
     {
       title: "Approvals & Requests",
       items: [
+        { id: "approvals", label: "All Pending Approvals", description: "Cross-client queue for every request type, with bulk actions.", icon: ClipboardList, count: dbPendingTotal },
         { id: "payments", label: "Outgoing Payments", description: "Review and authorize pending wire transfers.", icon: ArrowUpRight, count: pending.length },
         { id: "instruments", label: "Bank Instruments", description: "Approve SBLC, BG and MTN issuance requests.", icon: FileText, count: pendingInstruments.length },
         { id: "ppp", label: "Yield / PPP", description: "Review private placement & yield applications.", icon: TrendingUp, count: pendingPPP.length },
@@ -1875,7 +1927,7 @@ export default function AdminPage() {
                   <button
                     key={c.id}
                     type="button"
-                    onClick={() => openView(c.view)}
+                    onClick={() => openPending(c)}
                     className="flex items-center gap-2 rounded-lg border border-primary/30 bg-card px-3 py-2 text-left text-sm transition-colors hover:border-primary hover:bg-secondary"
                   >
                     <Icon className="h-4 w-4 shrink-0 text-primary" />
@@ -1943,6 +1995,9 @@ export default function AdminPage() {
         </div>
       )}
       {/* =========================== END ADMIN MENU =========================== */}
+
+      {/* Unified cross-client Pending Approvals dashboard */}
+      {activeView === "approvals" && <PendingApprovals initialKind={approvalsInitialKind} />}
 
       {/* Outgoing Payments section */}
       {activeView === "payments" && (
