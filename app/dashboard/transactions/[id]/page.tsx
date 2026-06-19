@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { useLedger } from "@/lib/ledger-store"
 import { generateReceiptPdf } from "@/lib/receipt-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 import { toast } from "sonner"
 
 const currencySymbols: Record<string, string> = {
@@ -47,6 +48,7 @@ export default function TransactionDetailPage() {
   const params = useParams<{ id: string }>()
   const router = useRouter()
   const { entries, hydrated } = useLedger()
+  const { show } = usePdfViewer()
 
   const id = decodeURIComponent(params.id)
   const entry = useMemo(() => entries.find((e) => e.id === id), [entries, id])
@@ -99,7 +101,7 @@ export default function TransactionDetailPage() {
   const handleDownloadReceipt = () => {
     const bicMatch = entry.bank?.match(/\(?\b(?:BIC|SWIFT)[:\s]+([A-Z0-9]{8,11})\)?/i)
     const bankName = entry.bank?.replace(/\s*\(?\b(?:BIC|SWIFT)[:\s]+[A-Z0-9]{8,11}\)?/i, "").trim()
-    generateReceiptPdf({
+    show(generateReceiptPdf({
       reference: entry.reference || entry.id,
       direction: entry.direction,
       amount: formatAmount(entry.amount, entry.currency),
@@ -112,10 +114,7 @@ export default function TransactionDetailPage() {
       bic: bicMatch?.[1],
       iban: entry.account,
       notes: entry.comment,
-    })
-    toast.success("Receipt downloaded", {
-      description: `PDF receipt for ${entry.id} has started downloading.`,
-    })
+    }))
   }
 
   const rows: { label: string; value?: string; copy?: boolean; icon?: typeof Hash }[] = [

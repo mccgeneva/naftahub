@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils"
 import { useLedger, type LedgerEntry } from "@/lib/ledger-store"
 import { generateReceiptPdf } from "@/lib/receipt-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 
 const currencySymbols: Record<string, string> = {
   EUR: "€",
@@ -47,6 +48,7 @@ const statusColors = {
 export function RecentTransactions() {
   const { entries } = useLedger()
   const router = useRouter()
+  const { show } = usePdfViewer()
   const [selected, setSelected] = useState<LedgerEntry | null>(null)
 
   // Derive the latest activity from the persisted ledger so recorded incoming
@@ -82,7 +84,7 @@ export function RecentTransactions() {
     // Split a combined "BANK NAME (BIC XXXX)" string into name + BIC.
     const bicMatch = e.bank?.match(/\(?\b(?:BIC|SWIFT)[:\s]+([A-Z0-9]{8,11})\)?/i)
     const bankName = e.bank?.replace(/\s*\(?\b(?:BIC|SWIFT)[:\s]+[A-Z0-9]{8,11}\)?/i, "").trim()
-    generateReceiptPdf({
+    show(generateReceiptPdf({
       reference: e.reference || e.id,
       direction: e.direction,
       amount: formatAmount(e.amount, e.currency),
@@ -95,10 +97,7 @@ export function RecentTransactions() {
       bic: bicMatch?.[1],
       iban: e.account,
       notes: e.comment,
-    })
-    toast.success("Receipt downloaded", {
-      description: `PDF receipt for ${e.id} has started downloading.`,
-    })
+    }))
   }
 
   const handleReportIssue = (e: LedgerEntry) => {

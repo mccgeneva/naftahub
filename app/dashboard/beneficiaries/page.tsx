@@ -70,6 +70,8 @@ import {
   type BeneficiaryStatus,
 } from "@/lib/beneficiaries-store"
 import { exportToCsv, importCsvFile } from "@/lib/export-utils"
+import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 import { VerifiedBankField } from "@/components/verified-bank-field"
 import { CountryCombobox } from "@/components/country-combobox"
 import { countryName, validateIban, validateBic } from "@/lib/iban-swift"
@@ -158,6 +160,7 @@ export default function BeneficiariesPage() {
   const [form, setForm] = useState(emptyForm)
   const [formError, setFormError] = useState<string | null>(null)
   const logActivity = useActivityLog()
+  const { show } = usePdfViewer()
   const router = useRouter()
 
   const viewBeneficiary = (ben: Beneficiary) => {
@@ -337,7 +340,7 @@ export default function BeneficiariesPage() {
     setIsAddDialogOpen(false)
   }
 
-  const handleExport = () => {
+  const handleExportCsv = () => {
     const count = exportToCsv("beneficiaries", beneficiaries, [
       { key: "id", label: "ID" },
       { key: "type", label: "Type" },
@@ -359,6 +362,39 @@ export default function BeneficiariesPage() {
         summary: `Client exported ${count} beneficiar${count === 1 ? "y" : "ies"} to a CSV file.`,
         recordCount: `${count}`,
         format: "CSV",
+      },
+    })
+  }
+
+  const handleExportPdf = () => {
+    if (beneficiaries.length === 0) {
+      toast.info("No beneficiaries to export", { description: "Add a beneficiary first." })
+      return
+    }
+    const doc = generateTablePdf({
+      title: "Beneficiary Register",
+      refPrefix: "BEN",
+      meta: [{ label: "Records", value: `${beneficiaries.length}` }],
+      columns: [
+        { key: "name", header: "Name" },
+        { key: "type", header: "Type" },
+        { key: "bankName", header: "Bank" },
+        { key: "iban", header: "IBAN / Account" },
+        { key: "swiftBic", header: "SWIFT/BIC" },
+        { key: "currency", header: "Ccy" },
+        { key: "status", header: "Status" },
+      ],
+      rows: beneficiaries as unknown as Record<string, unknown>[],
+      footNote: "Beneficiary register exported from the MCC Capital platform.",
+    })
+    show({ doc, filename: tablePdfFilename("Beneficiary-Register"), title: "Beneficiary Register" })
+    logActivity({
+      action: `Exported ${beneficiaries.length} beneficiar${beneficiaries.length === 1 ? "y" : "ies"} to PDF`,
+      category: "Beneficiary Management",
+      details: {
+        summary: `Client previewed/exported ${beneficiaries.length} beneficiary record(s) as a professional PDF.`,
+        recordCount: `${beneficiaries.length}`,
+        format: "PDF",
       },
     })
   }
@@ -454,10 +490,24 @@ export default function BeneficiariesPage() {
             <Upload className="h-4 w-4" />
             Import
           </Button>
-          <Button variant="outline" size="sm" className="gap-2" onClick={handleExport}>
-            <Download className="h-4 w-4" />
-            Export
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-2">
+                <Download className="h-4 w-4" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={handleExportPdf}>
+                <FileText className="mr-2 h-4 w-4" />
+                Export as PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportCsv}>
+                <Download className="mr-2 h-4 w-4" />
+                Export as CSV
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
             <DialogTrigger asChild>
               <Button size="sm" className="gap-2 bg-primary">

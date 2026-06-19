@@ -31,6 +31,7 @@ import { useCurrentUser } from "@/lib/use-current-user"
 import { useLedger, convertCurrency, type LedgerEntry } from "@/lib/ledger-store"
 import { useActivityLog } from "@/components/activity-tracker"
 import { generateStatementPdf } from "@/lib/statement-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 import { exportToCsv } from "@/lib/export-utils"
 import { StatementDocument } from "@/components/dashboard/statement-document"
 
@@ -74,6 +75,7 @@ export default function StatementsPage() {
   const user = useCurrentUser()
   const { entries, currencies } = useLedger()
   const logActivity = useActivityLog()
+  const { show } = usePdfViewer()
 
   const [account, setAccount] = useState("master")
 
@@ -213,27 +215,29 @@ export default function StatementsPage() {
       })
       return
     }
-    generateStatementPdf({
-      holderName,
-      holderCompany: user.company,
-      bankName,
-      iban,
-      bic,
-      accountEmail: user.accountEmail,
-      periodFrom,
-      periodTo: periodTo ? new Date(periodTo) : undefined,
-      entries: scopedEntries.map((e) => ({
-        id: e.id,
-        date: e.date,
-        direction: e.direction,
-        amount: e.amount,
-        currency: e.currency,
-        status: e.status,
-        counterparty: e.counterparty,
-        reference: e.reference,
-        category: e.category,
-      })),
-    })
+    show(
+      generateStatementPdf({
+        holderName,
+        holderCompany: user.company,
+        bankName,
+        iban,
+        bic,
+        accountEmail: user.accountEmail,
+        periodFrom,
+        periodTo: periodTo ? new Date(periodTo) : undefined,
+        entries: scopedEntries.map((e) => ({
+          id: e.id,
+          date: e.date,
+          direction: e.direction,
+          amount: e.amount,
+          currency: e.currency,
+          status: e.status,
+          counterparty: e.counterparty,
+          reference: e.reference,
+          category: e.category,
+        })),
+      }),
+    )
     logActivity({
       action: `Generated account statement for ${accountLabel}`,
       category: "Statements",
@@ -245,7 +249,6 @@ export default function StatementsPage() {
         format: "PDF (A4)",
       },
     })
-    toast.success("Statement generated", { description: "Your PDF statement download has started." })
   }
 
   const handleExportCsv = () => {

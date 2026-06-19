@@ -8,6 +8,7 @@
 
 import { createContext, useCallback, useContext, useState } from "react"
 import type { jsPDF } from "jspdf"
+import type { GeneratedPdf } from "@/lib/pdf-core"
 import { PdfPreviewModal } from "@/components/pdf-preview-modal"
 
 interface PdfViewerState {
@@ -19,6 +20,8 @@ interface PdfViewerState {
 interface PdfViewerContextValue {
   /** Open the in-app preview for a generated PDF document. */
   preview: (doc: jsPDF, filename: string, title?: string) => void
+  /** Convenience: preview the result of a PDF generator directly. */
+  show: (generated: GeneratedPdf) => void
 }
 
 const PdfViewerContext = createContext<PdfViewerContextValue | null>(null)
@@ -30,8 +33,12 @@ export function PdfViewerProvider({ children }: { children: React.ReactNode }) {
     setState({ doc, filename, title })
   }, [])
 
+  const show = useCallback((generated: GeneratedPdf) => {
+    setState({ doc: generated.doc, filename: generated.filename, title: generated.title })
+  }, [])
+
   return (
-    <PdfViewerContext.Provider value={{ preview }}>
+    <PdfViewerContext.Provider value={{ preview, show }}>
       {children}
       {state && (
         <PdfPreviewModal

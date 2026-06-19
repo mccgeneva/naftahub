@@ -54,6 +54,8 @@ import { useBeneficiaries } from "@/lib/beneficiaries-store"
 import { useLedger } from "@/lib/ledger-store"
 import { usePaymentRequests, type PaymentRequest } from "@/lib/payment-requests-store"
 import { exportToCsv } from "@/lib/export-utils"
+import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 import { VerifiedBankField } from "@/components/verified-bank-field"
 import { validateIban, validateBic } from "@/lib/iban-swift"
 import { generateReceiptPdf } from "@/lib/receipt-pdf"
@@ -134,6 +136,7 @@ export default function PaymentsPage() {
   const [formError, setFormError] = useState<string | null>(null)
   const { beneficiaries } = useBeneficiaries()
   const logActivity = useActivityLog()
+  const { show } = usePdfViewer()
   const { balanceFor, entries } = useLedger()
   const { requests, addRequest } = usePaymentRequests()
 
@@ -218,7 +221,7 @@ export default function PaymentsPage() {
   }
 
   const downloadReceipt = (payment: Payment) => {
-    generateReceiptPdf({
+    show(generateReceiptPdf({
       reference: payment.reference || payment.id,
       direction: payment.type === "incoming" ? "credit" : "debit",
       amount: payment.amount,
@@ -230,10 +233,7 @@ export default function PaymentsPage() {
       iban: payment.iban,
       fee: payment.fee,
       uetr: payment.uetr,
-    })
-    toast.success("Receipt downloaded", {
-      description: `The receipt for ${payment.id} has been generated as a PDF.`,
-    })
+    }))
     logActivity({
       action: `Downloaded receipt for payment ${payment.id}`,
       category: "Payments",
@@ -454,7 +454,7 @@ export default function PaymentsPage() {
     return matchesStatus && matchesSearch
   })
 
-  const handleExport = () => {
+  const handleExportCsv = () => {
     const count = exportToCsv("payments", filteredPayments, [
       { key: "id", label: "Payment ID" },
       { key: "type", label: "Direction" },
@@ -477,6 +477,41 @@ export default function PaymentsPage() {
         summary: `Client exported ${count} payment record${count === 1 ? "" : "s"} (current filters applied) to a CSV file.`,
         recordCount: `${count}`,
         format: "CSV",
+      },
+    })
+  }
+
+  const handleExportPdf = () => {
+    if (filteredPayments.length === 0) {
+      toast.info("No payments to export", {
+        description: "There are no payments matching the current filters.",
+      })
+      return
+    }
+    const doc = generateTablePdf({
+      title: "Payment History",
+      refPrefix: "PAY",
+      meta: [{ label: "Records", value: `${filteredPayments.length}` }],
+      columns: [
+        { key: "date", header: "Date" },
+        { key: "id", header: "Reference" },
+        { key: "beneficiary", header: "Beneficiary" },
+        { key: "swiftCode", header: "SWIFT/BIC" },
+        { key: "type", header: "Dir." },
+        { key: "amount", header: "Amount", align: "right" },
+        { key: "status", header: "Status" },
+      ],
+      rows: filteredPayments as unknown as Record<string, unknown>[],
+      footNote: "Payment history exported from the MCC Capital platform with the filters active at the time of export.",
+    })
+    show({ doc, filename: tablePdfFilename("Payment-History"), title: "Payment History" })
+    logActivity({
+      action: `Exported ${filteredPayments.length} payment${filteredPayments.length === 1 ? "" : "s"} to PDF`,
+      category: "Payments",
+      details: {
+        summary: `Client previewed/exported ${filteredPayments.length} payment record(s) as a professional PDF.`,
+        recordCount: `${filteredPayments.length}`,
+        format: "PDF",
       },
     })
   }
@@ -537,10 +572,24 @@ export default function PaymentsPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleExport}>
-            <Download className="mr-2 h-4 w-4" />
-            Export
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                <Download className="mr-2 h-4 w-4" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={handleExportPdf}>
+                <Download className="mr-2 h-4 w-4" />
+                Export as PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportCsv}>
+                <Download className="mr-2 h-4 w-4" />
+                Export as CSV
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Dialog
             open={isNewPaymentOpen}
             onOpenChange={(open) => {

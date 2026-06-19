@@ -6,15 +6,16 @@ import { useParams } from "next/navigation"
 import { ArrowLeft, Download, FileText, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { toast } from "sonner"
 import { useInstrumentRequests } from "@/lib/instrument-requests-store"
 import { useCurrentUser } from "@/lib/use-current-user"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 import { buildInstrumentDocument, generateInstrumentDocumentPdf } from "@/lib/instrument-document"
 
 export default function InstrumentDocumentPage() {
   const params = useParams<{ id: string }>()
   const { instruments, hydrated } = useInstrumentRequests()
   const user = useCurrentUser()
+  const { show } = usePdfViewer()
 
   const id = decodeURIComponent(params.id)
   const instrument = useMemo(() => instruments.find((i) => i.id === id), [instruments, id])
@@ -62,10 +63,7 @@ export default function InstrumentDocumentPage() {
   }
 
   const handleDownload = () => {
-    generateInstrumentDocumentPdf(content)
-    toast.success("Instrument document downloaded", {
-      description: `The operative ${content.kind} document for ${content.reference} has been generated as a PDF.`,
-    })
+    show(generateInstrumentDocumentPdf(content))
   }
 
   return (
