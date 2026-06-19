@@ -22,6 +22,15 @@ import {
   Banknote,
   Gauge,
   Power,
+  Users,
+  Wallet,
+  Award,
+  BadgeCheck,
+  Repeat,
+  ScrollText,
+  Settings,
+  ChevronRight,
+  ArrowLeft,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -116,6 +125,9 @@ export default function AdminPage() {
   const [unlocked, setUnlocked] = useState(false)
   const [passcode, setPasscode] = useState("")
   const [gateError, setGateError] = useState<string | null>(null)
+  // Which admin view is open. "menu" shows the dashboard of clickable section
+  // cards; any other value renders that single section with a back-to-menu bar.
+  const [activeView, setActiveView] = useState<string>("menu")
 
   const { requests, approveRequest, rejectRequest } = usePaymentRequests()
   const {
@@ -1594,6 +1606,61 @@ export default function AdminPage() {
 
   const totalPendingDecisions = pendingCategories.reduce((sum, c) => sum + c.count, 0)
 
+  // ---------------------------------------------------------------------------
+  // Admin Menu registry
+  // Every admin feature is exposed as a clickable card grouped by area. Clicking
+  // a card opens that section (activeView); counts surface outstanding work.
+  // ---------------------------------------------------------------------------
+  const navGroups = [
+    {
+      title: "Approvals & Requests",
+      items: [
+        { id: "payments", label: "Outgoing Payments", description: "Review and authorize pending wire transfers.", icon: ArrowUpRight, count: pending.length },
+        { id: "instruments", label: "Bank Instruments", description: "Approve SBLC, BG and MTN issuance requests.", icon: FileText, count: pendingInstruments.length },
+        { id: "ppp", label: "Yield / PPP", description: "Review private placement & yield applications.", icon: TrendingUp, count: pendingPPP.length },
+        { id: "funding", label: "Project Funding", description: "Assess AES project funding applications.", icon: Building2, count: pendingFunding.length },
+        { id: "leverage", label: "Leverage Lines", description: "Approve leverage and switch-off requests.", icon: Gauge, count: pendingLeverage.length + pendingSwitchOff.length },
+        { id: "fiduciary", label: "Fiduciary & Assets", description: "Process fiduciary service jobs.", icon: Landmark, count: pendingFiduciary.length },
+        { id: "dof", label: "Download of Funds", description: "Authorize download-of-funds requests.", icon: Banknote, count: pendingDOF.length },
+        { id: "monetization", label: "Monetization", description: "Review instrument monetization requests.", icon: Layers, count: pendingMonetization.length },
+      ],
+    },
+    {
+      title: "Settlement & Trading",
+      items: [
+        { id: "settlement", label: "Securities Settlement", description: "DTC and Euroclear settlement instructions.", icon: Globe, count: pendingDTC.length + pendingEuroclear.length },
+        { id: "commodity", label: "Commodity Deals", description: "POP/POF review and trade execution.", icon: Ship, count: pendingDeals.length },
+        { id: "skr", label: "SKR Trading", description: "Create, assign and transfer safe-keeping receipts.", icon: ShieldCheck, count: 0 },
+      ],
+    },
+    {
+      title: "Administration",
+      items: [
+        { id: "users", label: "Client Accounts", description: "Create, edit, suspend and reset users.", icon: Users, count: 0 },
+        { id: "membership", label: "Membership Upgrades", description: "Approve tiers and validate deposits.", icon: Award, count: 0 },
+        { id: "balances", label: "Balances & Transactions", description: "Credit, debit, adjust and reverse.", icon: Wallet, count: 0 },
+        { id: "kyc", label: "KYC / Beneficiaries", description: "Verify beneficiaries and KYC documents.", icon: BadgeCheck, count: pendingKycCount },
+        { id: "gateway", label: "Payment Gateway", description: "Configure partner banks and routing.", icon: Settings, count: 0 },
+        { id: "reconciliation", label: "Reconciliation", description: "Automated payment reconciliation engine.", icon: Repeat, count: 0 },
+        { id: "treasury", label: "Treasury Services", description: "Security deposits and 1:10 leverage.", icon: Landmark, count: 0 },
+        { id: "certificates", label: "Certificates", description: "Issue and re-issue official certificates.", icon: ScrollText, count: 0 },
+      ],
+    },
+    {
+      title: "System",
+      items: [
+        { id: "danger", label: "Danger Zone", description: "Reset account data to a brand-new state.", icon: AlertTriangle, count: 0 },
+      ],
+    },
+  ]
+
+  const activeNav = navGroups.flatMap((g) => g.items).find((i) => i.id === activeView) ?? null
+
+  const openView = (id: string) => {
+    setActiveView(id)
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" })
+  }
+
   const scrollToSection = (id: string) => {
     if (typeof document === "undefined") return
     const el = document.getElementById(id)
@@ -1656,25 +1723,62 @@ export default function AdminPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-start gap-3">
+      {/* Top bar: branding + exit + lock (always visible) */}
+      <div className="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-center sm:justify-between">
+        <button
+          type="button"
+          onClick={() => openView("menu")}
+          className="flex items-start gap-3 text-left"
+          aria-label="Back to Admin Menu"
+        >
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10">
             <ShieldCheck className="h-6 w-6 text-primary" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-foreground">Administrator Panel</h1>
             <p className="text-sm text-muted-foreground text-pretty">
-              Review and authorize outgoing payments, bank instrument requests, and Yield/PPP
-              applications. Operations are only executed on approval.
+              MCC Capital · Banking &amp; Trade Platform control center
             </p>
           </div>
+        </button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleLock}>
+            <Lock className="mr-2 h-4 w-4" />
+            Lock Panel
+          </Button>
+          <Button variant="default" size="sm" asChild>
+            <a href="/dashboard">
+              <LogOut className="mr-2 h-4 w-4" />
+              Exit Admin Panel
+            </a>
+          </Button>
         </div>
-        <Button variant="outline" size="sm" onClick={handleLock}>
-          <LogOut className="mr-2 h-4 w-4" />
-          Lock Panel
-        </Button>
       </div>
+
+      {/* Breadcrumb / back bar — shown inside any section */}
+      {activeView !== "menu" && activeNav && (
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <button
+              type="button"
+              onClick={() => openView("menu")}
+              className="font-medium text-foreground hover:text-primary"
+            >
+              Admin Menu
+            </button>
+            <ChevronRight className="h-4 w-4" />
+            <span className="text-foreground">{activeNav.label}</span>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => openView("menu")}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Admin Menu
+          </Button>
+        </div>
+      )}
+
+      {/* ============================= ADMIN MENU ============================= */}
+      {activeView === "menu" && (
+        <div className="space-y-6">
 
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-3">
@@ -1739,73 +1843,85 @@ export default function AdminPage() {
         </Card>
       </div>
 
-      {/* Pending Decisions command center — unified review queue */}
-      <Card className="border-primary/30 bg-primary/5">
-        <CardHeader>
-          <CardTitle className="flex flex-wrap items-center gap-2 text-lg font-semibold">
-            <ShieldCheck className="h-5 w-5 text-primary" />
-            Pending Decisions
-            <Badge
-              variant={totalPendingDecisions > 0 ? "default" : "secondary"}
-              className="ml-1"
-            >
-              {totalPendingDecisions} awaiting
-            </Badge>
-          </CardTitle>
-          <p className="text-sm text-muted-foreground text-pretty">
-            Everything that needs to be approved, rejected, or moderated, in one place. Select a
-            category to jump to its review queue below.
-          </p>
-        </CardHeader>
-        <CardContent>
-          {totalPendingDecisions === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
-              <Check className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">
-                All caught up. No items are currently awaiting a decision.
-              </p>
+      {/* Outstanding-work alert banner */}
+      {totalPendingDecisions > 0 ? (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="rounded-lg bg-primary/15 p-2">
+                <Clock className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-foreground">
+                  {totalPendingDecisions} item{totalPendingDecisions === 1 ? "" : "s"} awaiting a decision
+                </p>
+                <p className="text-xs text-muted-foreground text-pretty">
+                  Open the highlighted sections below to approve, reject or process outstanding work.
+                </p>
+              </div>
             </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-              {pendingCategories.map((cat) => {
-                const Icon = cat.icon
-                const active = cat.count > 0
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="border-border bg-card">
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="rounded-lg bg-secondary p-2">
+              <Check className="h-5 w-5 text-green-400" />
+            </div>
+            <p className="text-sm text-muted-foreground">
+              All caught up. No items are currently awaiting a decision.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Interactive section menu — grouped clickable cards */}
+      <div className="space-y-8">
+        {navGroups.map((group) => (
+          <div key={group.title} className="space-y-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                {group.title}
+              </h2>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {group.items.map((item) => {
+                const Icon = item.icon
                 return (
                   <button
-                    key={cat.id}
+                    key={item.id}
                     type="button"
-                    onClick={() => active && scrollToSection(cat.id)}
-                    disabled={!active}
-                    aria-label={`${cat.count} ${cat.label} awaiting decision`}
-                    className={cn(
-                      "flex min-h-[88px] flex-col justify-between rounded-lg border p-3 text-left transition-colors",
-                      active
-                        ? "border-border bg-card hover:border-primary hover:bg-secondary cursor-pointer"
-                        : "border-border/50 bg-card/40 opacity-60 cursor-default",
-                    )}
+                    onClick={() => openView(item.id)}
+                    className="group flex items-start gap-4 rounded-xl border border-border bg-card p-4 text-left transition-colors hover:border-primary hover:bg-secondary"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <Icon className="h-4 w-4 text-muted-foreground" />
-                      <span
-                        className={cn(
-                          "rounded-full px-2 py-0.5 text-sm font-bold tabular-nums",
-                          active ? "bg-primary/15 text-primary" : "text-muted-foreground",
-                        )}
-                      >
-                        {cat.count}
-                      </span>
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <Icon className="h-5 w-5" />
                     </div>
-                    <span className="text-xs font-medium text-foreground text-pretty">
-                      {cat.label}
-                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-semibold text-foreground">{item.label}</p>
+                        {item.count > 0 && <Badge className="shrink-0">{item.count}</Badge>}
+                      </div>
+                      <p className="mt-0.5 text-xs text-muted-foreground text-pretty">
+                        {item.description}
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
                   </button>
                 )
               })}
             </div>
-          )}
-        </CardContent>
-      </Card>
+          </div>
+        ))}
+      </div>
+        </div>
+      )}
+      {/* =========================== END ADMIN MENU =========================== */}
 
+      {/* Outgoing Payments section */}
+      {activeView === "payments" && (
+      <div className="space-y-6">
       {/* Pending requests */}
       <Card id="section-payments" className="bg-card border-border">
         <CardHeader>
@@ -1997,6 +2113,12 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      </div>
+      )}
+
+      {/* Bank Instruments section */}
+      {activeView === "instruments" && (
+      <div className="space-y-6">
       {/* Pending instrument requests */}
       <Card id="section-instruments" className="bg-card border-border">
         <CardHeader>
@@ -2148,6 +2270,12 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      </div>
+      )}
+
+      {/* Yield / PPP section */}
+      {activeView === "ppp" && (
+      <div className="space-y-6">
       {/* Pending PPP applications */}
       <Card id="section-ppp" className="bg-card border-border">
         <CardHeader>
@@ -2287,6 +2415,12 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      </div>
+      )}
+
+      {/* Project Funding section */}
+      {activeView === "funding" && (
+      <div className="space-y-6">
       {/* Pending Project Funding applications */}
       <Card id="section-funding" className="bg-card border-border">
         <CardHeader>
@@ -2479,6 +2613,12 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      </div>
+      )}
+
+      {/* Leverage Lines section */}
+      {activeView === "leverage" && (
+      <div className="space-y-6">
       {/* Pending leverage requests */}
       <Card id="section-leverage" className="bg-card border-border">
         <CardHeader>
@@ -2873,6 +3013,12 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      </div>
+      )}
+
+      {/* Fiduciary & Assets section */}
+      {activeView === "fiduciary" && (
+      <div className="space-y-6">
       {/* Pending Fiduciary service jobs */}
       <Card id="section-fiduciary" className="bg-card border-border">
         <CardHeader>
@@ -3001,6 +3147,12 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      </div>
+      )}
+
+      {/* Download of Funds section */}
+      {activeView === "dof" && (
+      <div className="space-y-6">
       {/* Pending Download of Funds */}
       <Card id="section-dof" className="bg-card border-border">
         <CardHeader>
@@ -3173,6 +3325,12 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      </div>
+      )}
+
+      {/* Monetization section */}
+      {activeView === "monetization" && (
+      <div className="space-y-6">
       {/* Pending Bank Instrument Monetization */}
       <Card id="section-monetization" className="bg-card border-border">
         <CardHeader>
@@ -3358,6 +3516,12 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      </div>
+      )}
+
+      {/* Securities Settlement section (DTC + Euroclear) */}
+      {activeView === "settlement" && (
+      <div className="space-y-6">
       {/* Pending Securities Settlement (DTC / Euroclear) */}
       <Card id="section-dtc" className="bg-card border-border">
         <CardHeader>
@@ -3740,6 +3904,12 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      </div>
+      )}
+
+      {/* Commodity Deals section */}
+      {activeView === "commodity" && (
+      <div className="space-y-6">
       {/* Pending Commodity Deals (POP / POF review + execution authorization) */}
       <Card id="section-commodity" className="bg-card border-border">
         <CardHeader>
@@ -4021,36 +4191,75 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      </div>
+      )}
+
       {/* Client account administration: create, edit, suspend, reset credentials */}
-      <UserManager />
+      {activeView === "users" && (
+      <div className="space-y-6">
+        <UserManager />
+      </div>
+      )}
 
       {/* Membership upgrades: approve requests, then validate the security deposit */}
-      <MembershipManager />
+      {activeView === "membership" && (
+      <div className="space-y-6">
+        <MembershipManager />
+      </div>
+      )}
 
       {/* Balance & transaction management: credit, debit, adjust, reverse */}
-      <BalanceManager />
+      {activeView === "balances" && (
+      <div className="space-y-6">
+        <BalanceManager />
+      </div>
+      )}
 
       {/* Beneficiary management: add, edit, remove, approve on behalf of clients */}
-      <div id="section-kyc" className="rounded-lg transition-shadow">
+      {activeView === "kyc" && (
+      <div id="section-kyc" className="space-y-6 rounded-lg transition-shadow">
         <BeneficiaryManager />
       </div>
+      )}
 
       {/* Payment Gateway administration */}
-      <AdminGatewaySection />
+      {activeView === "gateway" && (
+      <div className="space-y-6">
+        <AdminGatewaySection />
+      </div>
+      )}
 
       {/* Automated payment reconciliation engine */}
-      <AdminReconciliationSection />
+      {activeView === "reconciliation" && (
+      <div className="space-y-6">
+        <AdminReconciliationSection />
+      </div>
+      )}
 
       {/* Treasury Services: security deposits & approved 1:10 leverage */}
-      <TreasuryManager />
+      {activeView === "treasury" && (
+      <div className="space-y-6">
+        <TreasuryManager />
+      </div>
+      )}
 
       {/* SKR Trading Platform: create, assign, transfer & administer safe keeping receipts */}
-      <SkrManager />
+      {activeView === "skr" && (
+      <div className="space-y-6">
+        <SkrManager />
+      </div>
+      )}
 
       {/* Bank Certificates: approve, issue, decline & re-issue official certificates */}
-      <CertificateManager />
+      {activeView === "certificates" && (
+      <div className="space-y-6">
+        <CertificateManager />
+      </div>
+      )}
 
       {/* Danger zone: reset account data */}
+      {activeView === "danger" && (
+      <div className="space-y-6">
       <Card className="border-destructive/30 bg-destructive/5">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg font-semibold text-destructive">
@@ -4082,6 +4291,9 @@ export default function AdminPage() {
           </div>
         </CardContent>
       </Card>
+
+      </div>
+      )}
 
       {/* Reset confirmation dialog */}
       <Dialog
