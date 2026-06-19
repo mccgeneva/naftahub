@@ -31,8 +31,14 @@ export const YAHOO_SYMBOLS: Record<string, string> = {
   "ETH/USD": "ETH-USD",
   // Equities
   AAPL: "AAPL",
+  MSFT: "MSFT",
+  AMZN: "AMZN",
+  GOOGL: "GOOGL",
+  META: "META",
   TSLA: "TSLA",
   NVDA: "NVDA",
+  AMD: "AMD",
+  JPM: "JPM",
 }
 
 // Maps the platform's display symbols to TradingView's "EXCHANGE:SYMBOL"
@@ -69,8 +75,14 @@ export const TRADINGVIEW_SYMBOLS: Record<string, string> = {
   "ETH/USD": "BITSTAMP:ETHUSD",
   // Equities
   AAPL: "NASDAQ:AAPL",
+  MSFT: "NASDAQ:MSFT",
+  AMZN: "NASDAQ:AMZN",
+  GOOGL: "NASDAQ:GOOGL",
+  META: "NASDAQ:META",
   TSLA: "NASDAQ:TSLA",
   NVDA: "NASDAQ:NVDA",
+  AMD: "NASDAQ:AMD",
+  JPM: "NYSE:JPM",
 }
 
 /** TradingView symbol for a display symbol, falling back to the raw symbol. */
