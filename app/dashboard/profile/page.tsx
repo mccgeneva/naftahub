@@ -151,34 +151,29 @@ export default function ProfilePage() {
             <CardDescription>Identity and compliance documents on file</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               {user.kycDocuments.map((doc) => (
                 <a
-                  key={doc.pathname}
-                  href={blobFileUrl(doc.pathname)}
+                  key={`${doc.type}-${doc.pageNumber}`}
+                  href={`${blobFileUrl(doc.pathname)}#page=${doc.pageNumber}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="group flex flex-col overflow-hidden rounded-lg border border-border bg-secondary/30 transition-colors hover:border-primary"
+                  className="group flex items-center justify-between gap-2 rounded-lg border border-border bg-secondary/30 p-3 transition-colors hover:border-primary"
                 >
-                  <div className="relative aspect-[3/4] w-full overflow-hidden bg-secondary">
-                    <img
-                      src={blobFileUrl(doc.pathname) || "/placeholder.svg"}
-                      alt={doc.label}
-                      className="h-full w-full object-cover"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-2 p-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-foreground">
-                          {KYC_DOCUMENT_LABELS[doc.type]}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">{doc.label}</p>
-                      </div>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10">
+                      <FileText className="h-5 w-5 text-primary" />
                     </div>
-                    <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {KYC_DOCUMENT_LABELS[doc.type]}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {doc.label} · Page {doc.pageNumber}
+                      </p>
+                    </div>
                   </div>
+                  <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                 </a>
               ))}
             </div>
