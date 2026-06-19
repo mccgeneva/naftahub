@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   Users,
   UserPlus,
@@ -14,6 +14,10 @@ import {
   ShieldOff,
   Ban,
   Search,
+  FileUp,
+  Sparkles,
+  FileText,
+  X,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -50,6 +54,12 @@ import {
   type AdminUserView,
 } from "@/app/actions/admin-users"
 import type { UserStatus } from "@/lib/profile-types"
+import { renderPdfToPngBlobs } from "@/lib/pdf-render"
+import {
+  type KycAnalysisResult,
+  KYC_DOCUMENT_LABELS,
+  blobFileUrl,
+} from "@/lib/kyc-types"
 
 const STATUS_META: Record<UserStatus, { label: string; className: string }> = {
   active: { label: "Active", className: "bg-green-500/10 text-green-400 border-green-500/30" },
@@ -88,6 +98,12 @@ export function UserManager() {
   const [website, setWebsite] = useState("")
   const [accountBadge, setAccountBadge] = useState("PRO Account")
   const [creating, setCreating] = useState(false)
+
+  // KYC PDF auto-fill
+  const [kycAnalyzing, setKycAnalyzing] = useState(false)
+  const [kycResult, setKycResult] = useState<KycAnalysisResult | null>(null)
+  const [kycFileName, setKycFileName] = useState("")
+  const kycInputRef = useRef<HTMLInputElement | null>(null)
 
   // Edit form
   const [editTarget, setEditTarget] = useState<AdminUserView | null>(null)
@@ -152,6 +168,63 @@ export function UserManager() {
     setAddress("")
     setWebsite("")
     setAccountBadge("PRO Account")
+    setKycResult(null)
+    setKycFileName("")
+    setKycAnalyzing(false)
+    if (kycInputRef.current) kycInputRef.current.value = ""
+  }
+
+  // Render the uploaded PDF to page images in the browser, then send them to the
+  // server for Blob storage + AI extraction, and pre-fill the form.
+  const handleKycUpload = async (file: File | null) => {
+    if (!file) return
+    if (file.type !== "application/pdf") {
+      toast.error("Please upload a PDF file.")
+      return
+    }
+    setKycAnalyzing(true)
+    setKycResult(null)
+    setKycFileName(file.name)
+    try {
+      const { pages } = await renderPdfToPngBlobs(file)
+      if (pages.length === 0) throw new Error("Could not read any pages from the PDF.")
+
+      const fd = new FormData()
+      fd.append("passcode", ADMIN_PASSCODE)
+      fd.append("pdf", file)
+      pages.forEach((blob, i) => fd.append("pages", blob, `page-${i + 1}.png`))
+
+      const res = await fetch("/api/kyc/analyze", { method: "POST", body: fd })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error || "Analysis failed.")
+      }
+      const result = (await res.json()) as KycAnalysisResult
+      setKycResult(result)
+
+      // Pre-fill any field the admin hasn't already typed into.
+      const f = result.fields
+      if (f.fullName) setFullName((v) => v || f.fullName)
+      if (f.company) setCompany((v) => v || f.company)
+      if (f.role) setRole((v) => v || f.role)
+      if (f.email) setEmail((v) => v || f.email)
+      if (f.phone) setPhone((v) => v || f.phone)
+      if (f.nationality) setNationality((v) => v || f.nationality)
+      if (f.address) setAddress((v) => v || f.address)
+      if (f.website) setWebsite((v) => v || f.website)
+
+      toast.success("KYC document analysed", {
+        description: `${result.documents.length} document${
+          result.documents.length === 1 ? "" : "s"
+        } detected. Review the pre-filled details below.`,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not analyse the document."
+      toast.error(message)
+      setKycFileName("")
+    } finally {
+      setKycAnalyzing(false)
+    }
   }
 
   const handleCreate = async () => {
@@ -172,6 +245,12 @@ export function UserManager() {
       address: address.trim() || undefined,
       website: website.trim() || undefined,
       accountBadge: accountBadge.trim() || undefined,
+      passportImage: kycResult?.passportImagePathname
+        ? blobFileUrl(kycResult.passportImagePathname)
+        : undefined,
+      passportMeta: kycResult?.passportMeta ?? undefined,
+      kycDocuments: kycResult?.documents?.length ? kycResult.documents : undefined,
+      kycPdfPathname: kycResult?.pdfPathname || undefined,
       adminName: "Administrator",
     })
     setCreating(false)
@@ -469,6 +548,96 @@ export function UserManager() {
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 space-y-4 overflow-y-auto py-2 pr-1">
+            {/* KYC PDF auto-fill */}
+            <div className="rounded-lg border border-dashed border-border bg-secondary/30 p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground">Auto-fill from KYC document</p>
+                  <p className="text-xs text-muted-foreground">
+                    Upload a client&apos;s KYC PDF and we&apos;ll read the identity details and attach the
+                    documents automatically.
+                  </p>
+
+                  <input
+                    ref={kycInputRef}
+                    type="file"
+                    accept="application/pdf"
+                    className="sr-only"
+                    onChange={(e) => handleKycUpload(e.target.files?.[0] ?? null)}
+                  />
+
+                  {!kycResult ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-3"
+                      disabled={kycAnalyzing}
+                      onClick={() => kycInputRef.current?.click()}
+                    >
+                      {kycAnalyzing ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <FileUp className="mr-2 h-4 w-4" />
+                      )}
+                      {kycAnalyzing ? "Analysing document…" : "Upload KYC PDF"}
+                    </Button>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          <span className="truncate text-xs font-medium text-foreground">{kycFileName}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="text-muted-foreground transition-colors hover:text-foreground"
+                          onClick={() => {
+                            setKycResult(null)
+                            setKycFileName("")
+                            if (kycInputRef.current) kycInputRef.current.value = ""
+                          }}
+                          aria-label="Remove uploaded document"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+
+                      {kycResult.documents.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {kycResult.documents.map((doc) => (
+                            <a
+                              key={doc.pathname}
+                              href={blobFileUrl(doc.pathname)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="group flex items-center gap-2 rounded-md border border-border bg-background p-1.5 pr-2.5 transition-colors hover:border-primary"
+                            >
+                              <img
+                                src={blobFileUrl(doc.pathname) || "/placeholder.svg"}
+                                alt={doc.label}
+                                className="h-10 w-8 rounded-sm border border-border object-cover"
+                              />
+                              <span className="text-[11px] font-medium text-muted-foreground group-hover:text-foreground">
+                                {KYC_DOCUMENT_LABELS[doc.type]}
+                              </span>
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        Details below were pre-filled from the document. Review and edit before creating
+                        the account.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="um-fullname">Full name</Label>

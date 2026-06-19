@@ -28,6 +28,7 @@ import {
   type UserStatus,
 } from "@/lib/admin-users-db"
 import type { SerializableUserProfile, SerializableProfileItem } from "@/lib/profile-types"
+import type { KycDocument, KycPassportMeta } from "@/lib/kyc-types"
 
 // A client-safe view of a dynamic user (never includes nothing it shouldn't —
 // for the admin console the password IS shown, intentionally, so the admin can
@@ -152,6 +153,11 @@ export interface CreateUserInput {
   principalExtra?: SerializableProfileItem[]
   companyExtra?: SerializableProfileItem[]
   bankingExtra?: SerializableProfileItem[]
+  // KYC documents extracted from an uploaded onboarding PDF (Blob pathnames).
+  passportImage?: string
+  passportMeta?: KycPassportMeta | null
+  kycDocuments?: KycDocument[]
+  kycPdfPathname?: string
   adminName?: string
 }
 
@@ -206,6 +212,10 @@ function buildProfile(input: CreateUserInput, id: string, email: string, passwor
     principal,
     companyInfo,
     banking,
+    ...(input.passportImage ? { passportImage: input.passportImage } : {}),
+    ...(input.passportMeta ? { passportMeta: input.passportMeta } : {}),
+    ...(input.kycDocuments?.length ? { kycDocuments: input.kycDocuments } : {}),
+    ...(input.kycPdfPathname ? { kycPdfPathname: input.kycPdfPathname } : {}),
   }
 }
 

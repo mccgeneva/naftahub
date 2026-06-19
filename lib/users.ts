@@ -63,6 +63,11 @@ export interface UserProfile {
     validUntil: string
     country: string
   }
+
+  // --- KYC documents (optional; extracted from an uploaded onboarding PDF) ---
+  kycDocuments?: import("@/lib/kyc-types").KycDocument[]
+  /** Blob pathname of the original uploaded KYC PDF. */
+  kycPdfPathname?: string
 }
 
 // The primary account keeps the legacy, un-suffixed localStorage keys so data
