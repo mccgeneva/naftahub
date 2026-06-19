@@ -161,8 +161,7 @@ export default function BeneficiariesPage() {
   const router = useRouter()
 
   const viewBeneficiary = (ben: Beneficiary) => {
-    setSelectedBeneficiary(ben)
-    setIsViewDialogOpen(true)
+    router.push(`/dashboard/beneficiaries/${encodeURIComponent(ben.id)}`)
   }
 
   const duplicateBeneficiary = (ben: Beneficiary) => {
@@ -891,10 +890,7 @@ export default function BeneficiariesPage() {
                     <TableRow
                       key={ben.id}
                       className="cursor-pointer hover:bg-muted/20"
-                      onClick={() => {
-                        setSelectedBeneficiary(ben)
-                        setIsViewDialogOpen(true)
-                      }}
+                      onClick={() => router.push(`/dashboard/beneficiaries/${encodeURIComponent(ben.id)}`)}
                     >
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         <button className="text-muted-foreground hover:text-primary transition-colors">

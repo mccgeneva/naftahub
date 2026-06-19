@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import {
   ArrowUpRight,
   ArrowDownLeft,
@@ -114,6 +115,7 @@ export default function TransactionsPage() {
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined)
   const [selectedTxn, setSelectedTxn] = useState<Transaction | null>(null)
   const logActivity = useActivityLog()
+  const router = useRouter()
   const { entries } = useLedger()
 
   // Build the transaction list from the persisted ledger so every recorded
@@ -283,7 +285,6 @@ export default function TransactionsPage() {
   }
 
   const handleViewDetails = (txn: Transaction) => {
-    setSelectedTxn(txn)
     logActivity({
       action: `Viewed transaction ${txn.id}`,
       category: "Transactions",
@@ -293,6 +294,7 @@ export default function TransactionsPage() {
         amount: txn.amount,
       },
     })
+    router.push(`/dashboard/transactions/${encodeURIComponent(txn.id)}`)
   }
 
   const handleDownloadReceipt = (txn: Transaction) => {
@@ -496,7 +498,11 @@ export default function TransactionsPage() {
                   const typeColor = typeColors[txn.type as keyof typeof typeColors]
 
                   return (
-                    <TableRow key={txn.id} className="border-border">
+                    <TableRow
+                      key={txn.id}
+                      className="border-border cursor-pointer transition-colors hover:bg-secondary/40"
+                      onClick={() => router.push(`/dashboard/transactions/${encodeURIComponent(txn.id)}`)}
+                    >
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <div
@@ -583,7 +589,7 @@ export default function TransactionsPage() {
                         <p className="text-sm text-foreground">{txn.date}</p>
                         <p className="text-xs text-muted-foreground">{txn.time}</p>
                       </TableCell>
-                      <TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-8 w-8">
