@@ -56,6 +56,16 @@ export async function proxy(request: NextRequest) {
     res.cookies.set(SESSION_COOKIE, token!, sessionCookieOptions)
     const userId = request.cookies.get(USER_COOKIE)?.value
     if (userId) res.cookies.set(USER_COOKIE, userId, userCookieOptions)
+
+    // CRITICAL (cross-user isolation): authenticated dashboard responses are
+    // per-user and must NEVER be cached or reused. Without this, a shared CDN /
+    // browser-back-forward / proxy cache could serve one user's rendered
+    // dashboard (or RSC payload) to another — which is exactly the "I logged in
+    // and saw a different account" symptom. `private, no-store` forbids any
+    // shared or persistent caching of these responses.
+    res.headers.set("Cache-Control", "private, no-store, no-cache, must-revalidate, max-age=0")
+    res.headers.set("Pragma", "no-cache")
+    res.headers.set("Vary", "Cookie")
     return res
   }
 
