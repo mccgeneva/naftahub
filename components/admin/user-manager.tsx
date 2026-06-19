@@ -55,7 +55,6 @@ import {
 } from "@/app/actions/admin-users"
 import type { UserStatus } from "@/lib/profile-types"
 import { upload } from "@vercel/blob/client"
-import { renderPdfToPngBlobs } from "@/lib/pdf-render"
 import {
   type KycAnalysisResult,
   KYC_DOCUMENT_LABELS,
@@ -188,16 +187,14 @@ export function UserManager() {
     setKycResult(null)
     setKycFileName(file.name)
     try {
-      const { pages } = await renderPdfToPngBlobs(file)
-      if (pages.length === 0) throw new Error("Could not read any pages from the PDF.")
-
-      // Upload the original PDF + each page image straight to Blob from the
-      // browser. This keeps the large image payload out of our API function,
-      // which would otherwise reject it (serverless body limit ~4.5 MB).
+      // Upload the raw PDF straight to Blob from the browser. This keeps the
+      // file out of our API function (which would reject anything over the
+      // ~4.5 MB serverless body limit) and avoids any client-side PDF rendering,
+      // which proved unreliable on mobile Safari.
       const prefix = `kyc/${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
       const clientPayload = JSON.stringify({ passcode: ADMIN_PASSCODE })
 
-      // Guard every upload so a stalled mobile connection can't spin forever.
+      // Guard the upload so a stalled mobile connection can't spin forever.
       const withTimeout = <T,>(p: Promise<T>, ms: number, label: string) =>
         Promise.race([
           p,
@@ -217,23 +214,8 @@ export function UserManager() {
         "Uploading the PDF",
       )
 
-      const pagePathnames: string[] = []
-      for (let i = 0; i < pages.length; i++) {
-        const uploaded = await withTimeout(
-          upload(`${prefix}/page-${i + 1}.jpg`, pages[i], {
-            access: "private",
-            handleUploadUrl: "/api/kyc/blob-upload",
-            contentType: "image/jpeg",
-            clientPayload,
-          }),
-          60_000,
-          `Uploading page ${i + 1}`,
-        )
-        pagePathnames.push(uploaded.pathname)
-      }
-
       const controller = new AbortController()
-      const analyzeTimer = setTimeout(() => controller.abort(), 90_000)
+      const analyzeTimer = setTimeout(() => controller.abort(), 110_000)
       let res: Response
       try {
         res = await fetch("/api/kyc/analyze", {
@@ -242,7 +224,6 @@ export function UserManager() {
           body: JSON.stringify({
             passcode: ADMIN_PASSCODE,
             pdfPathname: pdfUpload.pathname,
-            pagePathnames,
           }),
           signal: controller.signal,
         })
@@ -669,19 +650,16 @@ export function UserManager() {
                         <div className="flex flex-wrap gap-2">
                           {kycResult.documents.map((doc) => (
                             <a
-                              key={doc.pathname}
-                              href={blobFileUrl(doc.pathname)}
+                              key={`${doc.type}-${doc.pageNumber}`}
+                              href={`${blobFileUrl(doc.pathname)}#page=${doc.pageNumber}`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="group flex items-center gap-2 rounded-md border border-border bg-background p-1.5 pr-2.5 transition-colors hover:border-primary"
+                              className="group flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 transition-colors hover:border-primary"
                             >
-                              <img
-                                src={blobFileUrl(doc.pathname) || "/placeholder.svg"}
-                                alt={doc.label}
-                                className="h-10 w-8 rounded-sm border border-border object-cover"
-                              />
+                              <FileText className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-foreground" />
                               <span className="text-[11px] font-medium text-muted-foreground group-hover:text-foreground">
                                 {KYC_DOCUMENT_LABELS[doc.type]}
+                                <span className="ml-1 text-muted-foreground/70">p.{doc.pageNumber}</span>
                               </span>
                             </a>
                           ))}

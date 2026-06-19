@@ -71,14 +71,13 @@ const analysisSchema = z.object({
 interface AnalyzeRequestBody {
   passcode?: string
   pdfPathname?: string
-  pagePathnames?: string[]
 }
 
 /** Read a private Blob into a Buffer for the multimodal model call. */
 async function readBlobBuffer(pathname: string): Promise<Buffer> {
   const result = await get(pathname, { access: "private" })
   if (!result || result.statusCode !== 200 || !result.stream) {
-    throw new Error(`Could not read uploaded page: ${pathname}`)
+    throw new Error(`Could not read uploaded file: ${pathname}`)
   }
   const arrayBuffer = await new Response(result.stream).arrayBuffer()
   return Buffer.from(arrayBuffer)
@@ -95,18 +94,14 @@ export async function POST(request: NextRequest) {
     }
 
     const pdfPathname = body.pdfPathname
-    const pagePathnames = Array.isArray(body.pagePathnames) ? body.pagePathnames : []
-
     if (!pdfPathname) return NextResponse.json({ error: "No PDF was uploaded." }, { status: 400 })
-    if (pagePathnames.length === 0) {
-      return NextResponse.json({ error: "No rendered pages were uploaded." }, { status: 400 })
-    }
 
-    // 1) Read the already-uploaded page images back from Blob.
-    stage = "read-blobs"
-    const pageBuffers = await Promise.all(pagePathnames.map((p) => readBlobBuffer(p)))
+    // 1) Read the already-uploaded PDF back from Blob.
+    stage = "read-blob"
+    const pdfBuffer = await readBlobBuffer(pdfPathname)
 
-    // 2) Analyse all pages in a single multimodal call.
+    // 2) Send the PDF straight to the multimodal model. Gemini reads PDFs
+    //    natively, so there is no client-side rendering step to go wrong.
     stage = "ai-analyze"
     const { output } = await generateText({
       model: "google/gemini-3-flash",
@@ -118,46 +113,38 @@ export async function POST(request: NextRequest) {
             {
               type: "text",
               text:
-                "You are a KYC analyst for a financial institution. The following images are the pages, in order, of a single client onboarding / KYC PDF. " +
-                "Extract the account holder's identity details to pre-fill an onboarding form, read any passport or identity document bio-data, and classify EACH page. " +
-                "Use empty strings for fields you cannot find. Page numbers are 1-based and must match the order shown.",
+                "You are a KYC analyst for a financial institution. The attached PDF is a single client onboarding / KYC pack. " +
+                "Extract the account holder's identity details to pre-fill an onboarding form, read any passport or identity document bio-data, and classify EACH page of the PDF. " +
+                "Use empty strings for fields you cannot find. Page numbers are 1-based, in document order.",
             },
-            ...pageBuffers.map((buf) => ({
-              type: "image" as const,
-              image: new Uint8Array(buf),
-            })),
+            {
+              type: "file" as const,
+              data: new Uint8Array(pdfBuffer),
+              mediaType: "application/pdf",
+            },
           ],
         },
       ],
     })
 
-    // 3) Map the model's per-page classifications back to stored blob pathnames.
+    // 3) Map the model's per-page classifications to document references. Every
+    //    document points back to the stored PDF at its page number.
     stage = "map-documents"
     const documents: KycDocument[] = []
     for (const page of output.pages) {
-      const idx = page.pageNumber - 1
-      if (idx < 0 || idx >= pagePathnames.length) continue
       if (!page.isDocument) continue
       documents.push({
-        pathname: pagePathnames[idx],
+        pathname: pdfPathname,
         type: page.type as KycDocumentType,
         label: page.label || "Document",
         pageNumber: page.pageNumber,
       })
     }
 
-    // Prefer a passport page for the headline identity image, then an ID card,
-    // then fall back to the first detected document.
-    const passportDoc =
-      documents.find((d) => d.type === "passport") ??
-      documents.find((d) => d.type === "id_card") ??
-      documents[0] ??
-      null
-
     const result: KycAnalysisResult = {
       fields: output.fields,
       passportMeta: output.passport,
-      passportImagePathname: passportDoc ? passportDoc.pathname : null,
+      passportImagePathname: null,
       documents,
       pdfPathname,
     }
