@@ -73,9 +73,9 @@ interface AnalyzeRequestBody {
   pdfPathname?: string
 }
 
-/** Read a private Blob into a Buffer for the multimodal model call. */
+/** Read the uploaded Blob into a Buffer for the multimodal model call. */
 async function readBlobBuffer(pathname: string): Promise<Buffer> {
-  const result = await get(pathname, { access: "private" })
+  const result = await get(pathname, { access: "public" })
   if (!result || result.statusCode !== 200 || !result.stream) {
     throw new Error(`Could not read uploaded file: ${pathname}`)
   }
