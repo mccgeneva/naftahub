@@ -18,7 +18,7 @@ import "server-only"
 import { cookies } from "next/headers"
 import { SESSION_COOKIE, SESSION_META_COOKIE, SESSION_IDLE_MAX_AGE } from "@/lib/auth"
 import { verifySessionMeta, evaluateSessionMeta } from "@/lib/session-token"
-import { getUserById, getUserBySessionToken, USERS, type UserProfile } from "@/lib/users"
+import { getUserById, type UserProfile } from "@/lib/users"
 import {
   getDynamicUserById,
   getDynamicUserBySessionToken,
@@ -48,24 +48,18 @@ function dynamicToResolved(rec: DynamicUserRecord): ResolvedSession {
 }
 
 /**
- * Resolve a session token to a user. Static users win (they never touch the DB,
- * keeping login fast and resilient even when Postgres is unavailable). Dynamic
- * users are only granted access while their status is "active".
+ * Resolve a session token to a user. Every account lives in the database, so
+ * this requires Postgres to be reachable. Accounts are only granted access
+ * while their status is "active".
  */
 export async function resolveSessionByToken(token: string | undefined | null): Promise<ResolvedSession | null> {
   if (!token) return null
-
-  const staticUser = getUserBySessionToken(token)
-  if (staticUser) {
-    return { id: staticUser.id, profile: staticUser, kind: "static", status: "active" }
-  }
 
   try {
     const dyn = await getDynamicUserBySessionToken(token)
     if (dyn && dyn.status === "active") return dynamicToResolved(dyn)
   } catch {
-    // DB unavailable (e.g. no DATABASE_URL in this sandbox). Static users still
-    // work; dynamic users simply can't be resolved until the DB is reachable.
+    // Database unreachable — the session cannot be resolved until it recovers.
   }
   return null
 }
@@ -96,8 +90,6 @@ export async function resolveCurrentSession(): Promise<ResolvedSession | null> {
  */
 export async function resolveAccountProfileById(userId: string | undefined | null): Promise<UserProfile> {
   if (!userId) return getUserById(null)
-  const staticUser = USERS.find((u) => u.id === userId)
-  if (staticUser) return staticUser
   try {
     const dyn = await getDynamicUserById(userId)
     if (dyn) return hydrateProfile(dyn.profile)

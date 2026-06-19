@@ -14,7 +14,6 @@
 // ---------------------------------------------------------------------------
 
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
-import { findUserByEmail } from "@/lib/users"
 import { normalizeAccountBadge } from "@/lib/account-tier"
 import { logActivity } from "@/app/actions/log-activity"
 import {
@@ -95,8 +94,8 @@ export async function generateUsername(seed: string): Promise<string> {
   const domain = "mccgva.ch"
   let candidate = `${base}@${domain}`
   let n = 1
-  // Ensure uniqueness across BOTH static and dynamic users.
-  while (findUserByEmail(candidate) || (await getDynamicUserByEmail(candidate))) {
+  // Ensure uniqueness across all (dynamic) accounts.
+  while (await getDynamicUserByEmail(candidate)) {
     n += 1
     candidate = `${base}${n}@${domain}`
   }
@@ -230,7 +229,7 @@ export async function createUser(input: CreateUserInput): Promise<AdminUserMutat
     }
 
     const email = (input.email?.trim() || (await generateUsername(input.fullName || input.company))).toLowerCase()
-    if (findUserByEmail(email) || (await getDynamicUserByEmail(email))) {
+    if (await getDynamicUserByEmail(email)) {
       return { ok: false, error: `The email ${email} is already in use.` }
     }
     const tempPassword = input.password?.trim() || generateTempPassword()
@@ -352,7 +351,7 @@ export async function editUser(input: EditUserInput): Promise<AdminUserMutation>
     let email = existing.email
     if (input.email?.trim() && input.email.trim().toLowerCase() !== existing.email.toLowerCase()) {
       email = input.email.trim().toLowerCase()
-      if (findUserByEmail(email) || (await getDynamicUserByEmail(email))) {
+      if (await getDynamicUserByEmail(email)) {
         return { ok: false, error: `The email ${email} is already in use.` }
       }
       profile.email = email
@@ -474,23 +473,15 @@ export interface SelectableClient {
 
 /**
  * Returns every account an administrator can act on (manage balances,
- * beneficiaries, etc.): the static registry users plus all *active* dynamic
- * (admin-created) users. Passcode-gated. Used by admin pickers so dynamic users
- * are first-class throughout the control panel — not just in User Management.
+ * beneficiaries, etc.): all *active* accounts in the database, including the
+ * three seeded core accounts. Passcode-gated. Used by admin pickers so every
+ * client is first-class throughout the control panel — not just in User
+ * Management.
  */
 export async function listSelectableClients(passcode: string): Promise<SelectableClient[]> {
-  const { USERS } = await import("@/lib/users")
-  const staticClients: SelectableClient[] = USERS.map((u) => ({
-    id: u.id,
-    fullName: u.fullName,
-    company: u.company,
-    email: u.email,
-    kind: "static" as const,
-  }))
-
   try {
     requireAdmin(passcode)
-    const dynamic = (await listDynamicUsers())
+    return (await listDynamicUsers())
       .filter((u) => u.status === "active")
       .map((u) => ({
         id: u.id,
@@ -499,10 +490,9 @@ export async function listSelectableClients(passcode: string): Promise<Selectabl
         email: u.email,
         kind: "dynamic" as const,
       }))
-    return [...staticClients, ...dynamic]
   } catch {
-    // DB unavailable or unauthorized — still return the static registry so the
-    // existing accounts remain manageable.
-    return staticClients
+    // DB unavailable or unauthorized — return an empty list rather than exposing
+    // any account.
+    return []
   }
 }

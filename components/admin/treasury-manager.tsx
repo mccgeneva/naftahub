@@ -17,8 +17,8 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import { USERS, getUserById } from "@/lib/users"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
+import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
 import {
   TREASURY_PROFILES,
   TREASURY_CURRENCY,
@@ -64,13 +64,36 @@ const TXN_OPTIONS: { value: TreasuryTxnType; label: string }[] = [
 ]
 
 export function TreasuryManager() {
-  const [targetUserId, setTargetUserId] = useState(USERS[0]?.id ?? "u1")
+  const [targetUserId, setTargetUserId] = useState("")
   const [stored, setStored] = useState<TreasuryAccount>(() => emptyTreasuryAccount())
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [posting, setPosting] = useState(false)
+  // Every client account (including the seeded core accounts) is a database
+  // record, loaded once on mount via the passcode-gated admin action.
+  const [clients, setClients] = useState<SelectableClient[]>([])
 
-  const targetUser = getUserById(targetUserId)
+  useEffect(() => {
+    let active = true
+    listSelectableClients(ADMIN_PASSCODE)
+      .then((list) => {
+        if (!active || !list.length) return
+        setClients(list)
+        // Default to the first client once the list loads.
+        setTargetUserId((cur) => cur || list[0].id)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const targetUser = clients.find((c) => c.id === targetUserId) ?? {
+    id: targetUserId,
+    fullName: "Selected client",
+    company: "—",
+    email: "",
+  }
 
   // --- Record editor state -------------------------------------------------
   const [profile, setProfile] = useState<TreasuryProfileKey>("pro")
@@ -83,6 +106,7 @@ export function TreasuryManager() {
 
   // Load the selected client's record from the server (passcode-verified).
   useEffect(() => {
+    if (!targetUserId) return
     let active = true
     setLoading(true)
     getTreasuryForUserAdmin(ADMIN_PASSCODE, targetUserId)
@@ -235,9 +259,10 @@ export function TreasuryManager() {
               <SelectValue placeholder="Select a client" />
             </SelectTrigger>
             <SelectContent>
-              {USERS.map((u) => (
+              {clients.map((u) => (
                 <SelectItem key={u.id} value={u.id}>
-                  {u.fullName} — {u.company} ({u.email})
+                  {u.fullName} — {u.company}
+                  {u.email ? ` (${u.email})` : ""}
                 </SelectItem>
               ))}
             </SelectContent>

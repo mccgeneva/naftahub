@@ -14,6 +14,7 @@
 import "server-only"
 import { query } from "@/lib/db"
 import type { SerializableUserProfile, SerializableProfileItem, UserStatus } from "@/lib/profile-types"
+import { CORE_USER_SEEDS } from "@/lib/core-user-seeds"
 
 export type { UserStatus }
 
@@ -45,7 +46,37 @@ async function ensureTable(): Promise<void> {
        updated_at    timestamptz NOT NULL DEFAULT now()
      )`,
   )
+  await seedCoreUsers()
   ensured = true
+}
+
+// Migrate the three legacy "static" accounts into the table exactly once,
+// preserving their ids/emails/passwords/session tokens so existing data and
+// logins keep working. `ON CONFLICT DO NOTHING` makes this idempotent and means
+// that once an account has been edited or deleted by an administrator it is
+// never silently recreated.
+async function seedCoreUsers(): Promise<void> {
+  for (const seed of CORE_USER_SEEDS) {
+    try {
+      await query(
+        `INSERT INTO admin_users (id, email, password, session_token, status, profile, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)
+         ON CONFLICT DO NOTHING`,
+        [
+          seed.profile.id,
+          seed.email.trim(),
+          seed.password,
+          seed.profile.sessionToken,
+          seed.status,
+          JSON.stringify(seed.profile),
+          "System (core account)",
+        ],
+      )
+    } catch {
+      // Non-fatal: a seed failure must never block the rest of the table from
+      // being usable. The account simply isn't migrated yet.
+    }
+  }
 }
 
 function rowToRecord(row: Record<string, unknown>): DynamicUserRecord {
