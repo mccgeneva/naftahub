@@ -39,13 +39,22 @@ export function PointerEventsGuard() {
   const pathname = usePathname()
 
   useEffect(() => {
-    // True only while a genuine floating/modal overlay is actually rendered.
+    // True only while a genuine floating/modal overlay is actually rendered AND
+    // visible. We require visibility (client rects) because an orphaned popper
+    // wrapper can be left in the DOM after its content closed — counting that
+    // as "live" is exactly what would block recovery and freeze the page.
     const hasLiveOverlay = () => {
       // Popper-based overlays (dropdown menu, select, popover, combobox,
-      // tooltip, hover card) always mount their content inside this wrapper
-      // while open, and it is removed the moment they close.
-      if (document.querySelector("[data-radix-popper-content-wrapper]")) return true
-      // Modal dialogs / alert dialogs that are open.
+      // tooltip, hover card) mount their content inside this wrapper while open.
+      // NOTE: do NOT use offsetParent to test visibility here — Radix poppers
+      // are position:fixed, whose offsetParent is null even when fully visible.
+      // getClientRects() correctly reports 0 for a display:none orphan and >0
+      // for a visible overlay.
+      const poppers = document.querySelectorAll("[data-radix-popper-content-wrapper]")
+      for (const p of poppers) {
+        if (p.getClientRects().length > 0) return true
+      }
+      // Modal dialogs / alert dialogs that are open and visible.
       const dialog = document.querySelector(
         '[role="dialog"][data-state="open"],[role="alertdialog"][data-state="open"]',
       )
@@ -90,7 +99,26 @@ export function PointerEventsGuard() {
     // phase + window/document so it fires even though <body> is pointer-events:
     // none (the event still reaches the document/window). touchstart covers
     // mobile, where this freeze is most painful.
-    const onInteract = () => clear()
+    //
+    // This is TARGET-AWARE and intentionally stronger than `clear()`: if the
+    // user interacts OUTSIDE of any real overlay while the body is locked, we
+    // clear unconditionally — even if a stale/orphaned popper wrapper is still
+    // in the DOM claiming an overlay is "open". That orphan is exactly what
+    // makes the page look permanently frozen, and `hasLiveOverlay()` alone can
+    // never recover from it. Tapping outside a genuinely-open dropdown would
+    // dismiss it anyway, so clearing early here is always safe.
+    const onInteract = (e: Event) => {
+      if (document.body.style.pointerEvents !== "none") return
+      const target = e.target as Element | null
+      const insideOverlay = Boolean(
+        target?.closest?.(
+          '[data-radix-popper-content-wrapper],[role="dialog"][data-state="open"],[role="alertdialog"][data-state="open"]',
+        ),
+      )
+      if (!insideOverlay) {
+        document.body.style.pointerEvents = ""
+      }
+    }
     const opts = { capture: true, passive: true } as const
     window.addEventListener("pointerdown", onInteract, opts)
     window.addEventListener("touchstart", onInteract, opts)
