@@ -5,9 +5,11 @@ import { resolveCurrentSession } from "@/lib/session-user"
 // Blob access + session resolution require the Node.js runtime.
 export const runtime = "nodejs"
 
-// Serves PRIVATE blobs (KYC documents) only to authenticated users. Blob
-// pathnames are unguessable, and access additionally requires a valid signed-in
-// session, so documents are never exposed anonymously.
+// Serves KYC document blobs only to authenticated users. This route is the only
+// path the UI uses to reach a document: it requires a valid signed-in session
+// before streaming the file, and the raw Blob URL is never surfaced in the app.
+// (The connected Blob store is a public store, but pathnames are unguessable and
+// the app only ever links through this session-gated proxy.)
 export async function GET(request: NextRequest) {
   const session = await resolveCurrentSession()
   if (!session) {
@@ -21,7 +23,7 @@ export async function GET(request: NextRequest) {
     }
 
     const result = await get(pathname, {
-      access: "private",
+      access: "public",
       ifNoneMatch: request.headers.get("if-none-match") ?? undefined,
     })
 

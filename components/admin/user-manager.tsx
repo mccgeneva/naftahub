@@ -205,7 +205,7 @@ export function UserManager() {
 
       const pdfUpload = await withTimeout(
         upload(`${prefix}/original.pdf`, file, {
-          access: "private",
+          access: "public",
           handleUploadUrl: "/api/kyc/blob-upload",
           contentType: "application/pdf",
           clientPayload,
