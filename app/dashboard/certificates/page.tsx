@@ -52,6 +52,7 @@ import {
   type CertificateBalance,
 } from "@/lib/certificates-store"
 import { generateAccountCertificate } from "@/lib/certificate-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 import { CertificateDocument } from "@/components/dashboard/certificate-document"
 
 const TYPE_ICONS: Record<CertificateType, typeof Award> = {
@@ -92,6 +93,7 @@ export default function CertificatesPage() {
   const { balanceFor, totalIn, currencies } = useLedger()
   const { requests, hydrated, addRequest, recordDownload } = useCertificateRequests()
   const logActivity = useActivityLog()
+  const { show } = usePdfViewer()
   const router = useRouter()
 
   // ---- Account holder + banking snapshot fields ----------------------------
@@ -226,7 +228,7 @@ export default function CertificatesPage() {
       })
       return
     }
-    generateAccountCertificate({
+    show(generateAccountCertificate({
       type: req.type,
       reference: req.reference,
       verificationCode: req.verificationCode,
@@ -246,7 +248,7 @@ export default function CertificatesPage() {
       balances: req.balances,
       totalEur: req.totalEur,
       displayCurrency: req.displayCurrency,
-    })
+    }))
     recordDownload(req.id)
     logActivity({
       action: `Downloaded ${CERTIFICATE_TYPE_LABELS[req.type]}`,
@@ -257,7 +259,6 @@ export default function CertificatesPage() {
         version: `Revision ${req.version}`,
       },
     })
-    toast.success("Certificate downloaded", { description: `${req.reference} — your PDF download has started.` })
   }
 
   const pendingCount = requests.filter((r) => r.status === "pending").length

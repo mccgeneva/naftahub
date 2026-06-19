@@ -36,8 +36,12 @@ export interface TablePdfInput {
   holderCompany?: string
   /** Extra key/value rows shown beneath the title (period, filters, totals…). */
   meta?: TablePdfMeta[]
+  /** Optional heading printed directly above the table (e.g. "Transaction History"). */
+  sectionTitle?: string
   columns: TableColumn[]
   rows: Record<string, unknown>[]
+  /** Message shown in place of the table when there are no rows. */
+  emptyMessage?: string
   /** Optional note printed under the table (e.g. disclaimer). */
   footNote?: string
 }
@@ -104,7 +108,8 @@ export function generateTablePdf(input: TablePdfInput): PdfDoc {
   if (input.holderName) metaLines.push(input.holderName)
   if (input.holderCompany) metaLines.push(input.holderCompany)
   const metaPairs = input.meta ?? []
-  const firstPageTableTop = 78 + 20 + 18 + metaLines.length * 13 + metaPairs.length * 13 + 16
+  const sectionTitleHeight = input.sectionTitle ? 22 : 0
+  const firstPageTableTop = 78 + 20 + 18 + metaLines.length * 13 + metaPairs.length * 13 + 16 + sectionTitleHeight
 
   const drawMetaBlock = () => {
     let y = 78 + 26
@@ -130,9 +135,16 @@ export function generateTablePdf(input: TablePdfInput): PdfDoc {
       doc.text(`${pair.label}:`, margin, y)
       doc.setFont("helvetica", "bold")
       doc.setTextColor(...BRAND.ink)
-      doc.text(pair.value, margin + 110, y)
+      doc.text(pair.value, margin + 150, y)
       y += 13
     })
+    if (input.sectionTitle) {
+      y += 8
+      doc.setFont("helvetica", "bold")
+      doc.setFontSize(10)
+      doc.setTextColor(...BRAND.ink)
+      doc.text(input.sectionTitle, margin, y)
+    }
   }
 
   const head = [input.columns.map((c) => c.header)]
@@ -152,7 +164,7 @@ export function generateTablePdf(input: TablePdfInput): PdfDoc {
 
   autoTable(doc, {
     head,
-    body: body.length > 0 ? body : [[{ content: "No records to display.", colSpan: input.columns.length, styles: { halign: "center", textColor: BRAND.slate, fontStyle: "italic" } } as never]],
+    body: body.length > 0 ? body : [[{ content: input.emptyMessage ?? "No records to display.", colSpan: input.columns.length, styles: { halign: "center", textColor: BRAND.slate, fontStyle: "italic" } } as never]],
     startY: firstPageTableTop,
     margin: { top: 96, left: margin, right: margin, bottom: 46 },
     styles: {

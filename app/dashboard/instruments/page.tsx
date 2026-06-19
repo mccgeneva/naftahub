@@ -62,6 +62,8 @@ import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
 import { useActivityLog } from "@/components/activity-tracker"
 import { exportToCsv } from "@/lib/export-utils"
+import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 import { toast } from "sonner"
 import { useInstrumentRequests, type Instrument } from "@/lib/instrument-requests-store"
 import {
@@ -208,6 +210,7 @@ export default function InstrumentsPage() {
 
   const logActivity = useActivityLog()
   const router = useRouter()
+  const { show } = usePdfViewer()
 
   const handleCopyBankingDetails = () => {
     const text = BANKING_DETAILS.map((r) => `${r.label}: ${r.value}`).join("\n")
@@ -558,7 +561,7 @@ export default function InstrumentsPage() {
   }
 
   const downloadCertificate = (instrument: Instrument) => {
-    generateInstrumentCertificate({
+    show(generateInstrumentCertificate({
       id: instrument.id,
       type: instrument.type,
       typeFull: instrument.typeFull,
@@ -583,10 +586,7 @@ export default function InstrumentsPage() {
       governingLaw: instrument.governingLaw,
       deliveryMethod: instrument.deliveryMethod,
       form: instrument.form,
-    })
-    toast.success("Certificate downloaded", {
-      description: `The certificate for ${instrument.id} has been generated as a PDF.`,
-    })
+    }))
     logActivity({
       action: `Downloaded certificate for ${instrument.type} ${instrument.id}`,
       category: "Bank Instruments",
@@ -611,7 +611,43 @@ export default function InstrumentsPage() {
     return matchesSearch && matchesType && matchesStatus
   })
 
-  const handleExport = () => {
+  const handleExportPdf = () => {
+    if (filteredInstruments.length === 0) {
+      toast.info("No instruments to export", { description: "There are no instruments matching the current filters." })
+      return
+    }
+    const doc = generateTablePdf({
+      title: "Bank Instruments Register",
+      refPrefix: "INS",
+      meta: [{ label: "Records", value: `${filteredInstruments.length}` }],
+      columns: [
+        { key: "id", header: "Reference" },
+        { key: "type", header: "Type" },
+        { key: "issuer", header: "Issuing Bank" },
+        { key: "faceValue", header: "Face Value", align: "right" },
+        { key: "rating", header: "Rating" },
+        { key: "status", header: "Status" },
+        { key: "expiryDate", header: "Expiry" },
+      ],
+      rows: filteredInstruments.map((i) => ({
+        ...i,
+        faceValue: `${i.currency} ${i.faceValue.toLocaleString()}`,
+      })) as unknown as Record<string, unknown>[],
+      footNote: "Bank instruments register exported from the MCC Capital platform with the filters active at the time of export.",
+    })
+    show({ doc, filename: tablePdfFilename("Bank-Instruments"), title: "Bank Instruments Register" })
+    logActivity({
+      action: `Exported ${filteredInstruments.length} bank instrument${filteredInstruments.length === 1 ? "" : "s"} to PDF`,
+      category: "Bank Instruments",
+      details: {
+        summary: `Client previewed/exported ${filteredInstruments.length} bank instrument record(s) as a professional PDF.`,
+        recordCount: `${filteredInstruments.length}`,
+        format: "PDF",
+      },
+    })
+  }
+
+  const handleExportCsv = () => {
     const count = exportToCsv(
       "bank-instruments",
       filteredInstruments.map((i) => ({
@@ -697,10 +733,24 @@ export default function InstrumentsPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleExport}>
-            <Download className="mr-2 h-4 w-4" />
-            Export
-          </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Download className="mr-2 h-4 w-4" />
+                  Export
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={handleExportPdf}>
+                  <FileText className="mr-2 h-4 w-4" />
+                  Export as PDF
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleExportCsv}>
+                  <Download className="mr-2 h-4 w-4" />
+                  Export as CSV
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           <Dialog
             open={isNewInstrumentOpen}
             onOpenChange={(open) => {
