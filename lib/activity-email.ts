@@ -25,6 +25,16 @@ export type ActivityLog = {
 // Pure navigation and read-only/UI noise (viewing, exporting, copying, toggling
 // settings, refreshing, draft saving) are intentionally NOT emailed.
 
+// Routine authentication events that should NEVER be emailed to the trader desk.
+// These are matched FIRST, before any always-email/security rule, so the desk
+// is no longer notified on every sign-in or sign-out. Security-relevant auth
+// events ("Login failed", "Session terminated automatically") deliberately use
+// different action strings and remain fully covered by ALWAYS_EMAIL_PATTERNS.
+const SUPPRESS_EMAIL_PATTERNS: RegExp[] = [
+  /^Login successful$/i, // a normal, successful sign-in
+  /^Logout$/i, // a normal, user-initiated sign-out
+]
+
 // Security / failure / error events ALWAYS notify, regardless of anything else.
 const ALWAYS_EMAIL_PATTERNS: RegExp[] = [
   /security/i,
@@ -56,6 +66,12 @@ const NOISE_ACTION_PATTERNS: RegExp[] = [
 export function shouldEmail(activity: ActivityLog): boolean {
   const action = activity.action ?? ""
   const category = activity.category ?? ""
+
+  // Routine login/logout: never email, even though "Authentication" would
+  // otherwise pass the default-allow filter below.
+  if (SUPPRESS_EMAIL_PATTERNS.some((re) => re.test(action))) {
+    return false
+  }
 
   if (ALWAYS_EMAIL_PATTERNS.some((re) => re.test(action) || re.test(category))) {
     return true
