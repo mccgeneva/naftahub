@@ -42,13 +42,9 @@ import { useActivityLog } from "@/components/activity-tracker"
 import { useLedger, creditUserLedger } from "@/lib/ledger-store"
 import { usePaymentRequests } from "@/lib/payment-requests-store"
 import { useCurrentUser } from "@/lib/use-current-user"
-import {
-  getTransferDirectory,
-  findTransferRecipientByEmail,
-  type TransferDirectoryEntry,
-} from "@/lib/users"
+import type { TransferDirectoryEntry } from "@/lib/users"
 import { exportToCsv } from "@/lib/export-utils"
-import { resolveTransferRecipient } from "@/app/actions/transfers"
+import { resolveTransferRecipient, listTransferDirectory } from "@/app/actions/transfers"
 import { toast } from "sonner"
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "JPY", "AUD", "CAD", "SGD"]
@@ -120,9 +116,23 @@ export default function SendMoneyPage() {
   // attributed to, or sent from, the wrong account.
   const self = useCurrentUser()
   const activeUserId = self.id
+  // The platform directory is fetched from the server (every account is a
+  // database record now). Exclude the signed-in account from the quick-pick.
+  const [allDirectory, setAllDirectory] = useState<TransferDirectoryEntry[]>([])
+  useEffect(() => {
+    let cancelled = false
+    listTransferDirectory()
+      .then((list) => {
+        if (!cancelled) setAllDirectory(list)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const directory = useMemo<TransferDirectoryEntry[]>(
-    () => getTransferDirectory().filter((d) => d.id !== activeUserId),
-    [activeUserId],
+    () => allDirectory.filter((d) => d.id !== activeUserId),
+    [allDirectory, activeUserId],
   )
 
   const [method, setMethod] = useState<SendMethod>("instant")
@@ -137,14 +147,9 @@ export default function SendMoneyPage() {
 
   const availableBalance = balanceFor(currency)
 
-  // Live recipient resolution for the instant method.
-  // Static accounts resolve instantly; for everything else we ask the server,
-  // which also checks administrator-created (dynamic) accounts in Neon. Without
-  // this, a real logged-in dynamic user shows "No account found".
-  const staticRecipient = useMemo(
-    () => (recipientEmail.trim() ? findTransferRecipientByEmail(recipientEmail) : undefined),
-    [recipientEmail],
-  )
+  // Live recipient resolution for the instant method. Every account is resolved
+  // on the server (which checks the Neon `admin_users` table), so any account
+  // that can log in can also receive transfers.
   const [resolvedRecipient, setResolvedRecipient] = useState<TransferDirectoryEntry | undefined>(
     undefined,
   )
@@ -157,13 +162,7 @@ export default function SendMoneyPage() {
       setResolvingRecipient(false)
       return
     }
-    // Static hit: resolve immediately, no server round-trip.
-    if (staticRecipient) {
-      setResolvedRecipient(staticRecipient)
-      setResolvingRecipient(false)
-      return
-    }
-    // Otherwise debounce a server lookup that includes dynamic users.
+    // Debounce a server lookup that resolves the recipient from the database.
     let cancelled = false
     setResolvingRecipient(true)
     const handle = window.setTimeout(async () => {
@@ -181,7 +180,7 @@ export default function SendMoneyPage() {
       cancelled = true
       window.clearTimeout(handle)
     }
-  }, [recipientEmail, staticRecipient])
+  }, [recipientEmail])
 
   const recipientIsSelf = resolvedRecipient?.id === activeUserId
 

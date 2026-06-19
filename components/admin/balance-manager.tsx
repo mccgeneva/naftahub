@@ -35,7 +35,6 @@ import {
 } from "@/app/actions/ledger"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
-import { USERS } from "@/lib/users"
 import { getActiveUserId } from "@/lib/user-scope"
 import { useActivityLog } from "@/components/activity-tracker"
 
@@ -70,11 +69,9 @@ export function BalanceManager() {
   // exactly how payments were landing on the wrong client (mesa@ipostrad.com).
   // Start empty so a client must be explicitly chosen before anything can post.
   const [targetUserId, setTargetUserId] = useState("")
-  // The full set of accounts the admin can manage: static registry users plus
-  // active dynamic (admin-created) users, fetched once on mount.
-  const [clients, setClients] = useState<SelectableClient[]>(
-    USERS.map((u) => ({ id: u.id, fullName: u.fullName, company: u.company, email: u.email, kind: "static" as const })),
-  )
+  // The full set of accounts the admin can manage: all active accounts in the
+  // database, fetched once on mount.
+  const [clients, setClients] = useState<SelectableClient[]>([])
 
   useEffect(() => {
     let active = true

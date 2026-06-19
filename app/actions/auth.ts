@@ -14,43 +14,29 @@ import {
 } from "@/lib/auth"
 import { signSessionMeta } from "@/lib/session-token"
 import { USER_COOKIE } from "@/lib/user-scope"
-import { findUserByEmail } from "@/lib/users"
 import { getDynamicUserByEmail } from "@/lib/admin-users-db"
 import { logActivity } from "@/app/actions/log-activity"
 
 export type LoginState = { error?: string }
 
-// A minimal, auth-only view of a credential match. Works for both the static
-// registry (lib/users.ts) and admin-created users persisted in Neon.
+// A minimal, auth-only view of a credential match. Every account is a dynamic
+// record in Neon (lib/admin-users-db.ts).
 interface AuthMatch {
   id: string
   password: string
   sessionToken: string
   fullName: string
   company: string
-  /** Dynamic accounts can be suspended/inactive; static users are always active. */
+  /** Accounts can be suspended/inactive, which denies access. */
   active: boolean
 }
 
 /**
- * Resolve a login email to a credential record. Static users win (fast, always
- * available even without a DB). When no static user matches we fall back to the
- * admin-created users stored in Postgres so that accounts created from the
- * administrator panel can actually log in.
+ * Resolve a login email to a credential record from the database. All accounts
+ * (including the three seeded core accounts) live in Postgres, so login depends
+ * on the database being reachable.
  */
 async function findAuthMatchByEmail(email: string): Promise<AuthMatch | undefined> {
-  const staticUser = findUserByEmail(email)
-  if (staticUser) {
-    return {
-      id: staticUser.id,
-      password: staticUser.password,
-      sessionToken: staticUser.sessionToken,
-      fullName: staticUser.fullName,
-      company: staticUser.company,
-      active: true,
-    }
-  }
-
   try {
     const dyn = await getDynamicUserByEmail(email)
     if (dyn) {
@@ -64,7 +50,7 @@ async function findAuthMatchByEmail(email: string): Promise<AuthMatch | undefine
       }
     }
   } catch {
-    // DB unavailable — static users still work; dynamic ones can't resolve yet.
+    // Database unreachable — no account can be resolved until it recovers.
   }
   return undefined
 }

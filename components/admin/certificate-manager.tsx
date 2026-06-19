@@ -25,9 +25,12 @@ import {
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { useActivityLog } from "@/components/activity-tracker"
-import { USERS, getUserById } from "@/lib/users"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
+
+// Neutral fallback used for labels before the client list has loaded or when an
+// id no longer resolves to an account. Never a real account.
+const FALLBACK_CLIENT: SelectableClient = { id: "", fullName: "—", company: "—", email: "", kind: "dynamic" }
 import { CERTIFICATE_TYPE_LABELS, type CertificateRequest } from "@/lib/certificates-store"
 import {
   adminListCertificateRequests,
@@ -56,16 +59,8 @@ const money = (amount: number, currency: string) =>
 export function CertificateManager() {
   const logActivity = useActivityLog()
 
-  const [clients, setClients] = useState<SelectableClient[]>(
-    USERS.map((u) => ({
-      id: u.id,
-      fullName: u.fullName,
-      company: u.company,
-      email: u.email,
-      kind: "static" as const,
-    })),
-  )
-  const [targetUserId, setTargetUserId] = useState(USERS[0]?.id ?? "u1")
+  const [clients, setClients] = useState<SelectableClient[]>([])
+  const [targetUserId, setTargetUserId] = useState("")
   const [requests, setRequests] = useState<CertificateRequest[]>([])
   const [loading, setLoading] = useState(false)
   const [working, setWorking] = useState(false)
@@ -80,13 +75,16 @@ export function CertificateManager() {
   const [note, setNote] = useState("")
   const [auditReq, setAuditReq] = useState<CertificateRequest | null>(null)
 
-  const targetUser = clients.find((c) => c.id === targetUserId) ?? getUserById(targetUserId)
+  const targetUser = clients.find((c) => c.id === targetUserId) ?? FALLBACK_CLIENT
 
   useEffect(() => {
     let active = true
     listSelectableClients(ADMIN_PASSCODE)
       .then((list) => {
-        if (active && list.length) setClients(list)
+        if (!active || !list.length) return
+        setClients(list)
+        // Default to the first client once the list loads.
+        setTargetUserId((cur) => cur || list[0].id)
       })
       .catch(() => {})
     return () => {
@@ -134,8 +132,7 @@ export function CertificateManager() {
   const clientLabel = (userId: string) => {
     const c = clients.find((x) => x.id === userId)
     if (c) return `${c.fullName} — ${c.company}`
-    const u = getUserById(userId)
-    return u ? `${u.fullName} — ${u.company}` : userId
+    return userId
   }
 
   const pending = useMemo(() => requests.filter((r) => r.status === "pending"), [requests])

@@ -42,9 +42,12 @@ import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { useActivityLog } from "@/components/activity-tracker"
 import { exportToCsv } from "@/lib/export-utils"
-import { USERS, getUserById } from "@/lib/users"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
+
+// Neutral fallback used for labels before the client list has loaded or when an
+// id no longer resolves to an account. Never a real account.
+const FALLBACK_CLIENT: SelectableClient = { id: "", fullName: "—", company: "—", email: "", kind: "dynamic" }
 import {
   getSkrRecordsForUser,
   setSkrRecordsForUser,
@@ -106,16 +109,8 @@ const emptyForm = (ownerName = ""): RecordForm => ({
 export function SkrManager() {
   const logActivity = useActivityLog()
 
-  const [clients, setClients] = useState<SelectableClient[]>(
-    USERS.map((u) => ({
-      id: u.id,
-      fullName: u.fullName,
-      company: u.company,
-      email: u.email,
-      kind: "static" as const,
-    })),
-  )
-  const [targetUserId, setTargetUserId] = useState(USERS[0]?.id ?? "u1")
+  const [clients, setClients] = useState<SelectableClient[]>([])
+  const [targetUserId, setTargetUserId] = useState("")
   const [records, setRecords] = useState<SkrRecord[]>([])
   const [requests, setRequests] = useState<SkrRequest[]>([])
   const [loading, setLoading] = useState(false)
@@ -135,13 +130,16 @@ export function SkrManager() {
   const [transferTarget, setTransferTarget] = useState<SkrRecord | null>(null)
   const [transferToUserId, setTransferToUserId] = useState("")
 
-  const targetUser = clients.find((c) => c.id === targetUserId) ?? getUserById(targetUserId)
+  const targetUser = clients.find((c) => c.id === targetUserId) ?? FALLBACK_CLIENT
 
   useEffect(() => {
     let active = true
     listSelectableClients(ADMIN_PASSCODE)
       .then((list) => {
-        if (active && list.length) setClients(list)
+        if (!active || !list.length) return
+        setClients(list)
+        // Default to the first client once the list loads.
+        setTargetUserId((cur) => cur || list[0].id)
       })
       .catch(() => {})
     return () => {
@@ -469,7 +467,7 @@ export function SkrManager() {
       toast.error("Select a different destination account.")
       return
     }
-    const destUser = clients.find((c) => c.id === transferToUserId) ?? getUserById(transferToUserId)
+    const destUser = clients.find((c) => c.id === transferToUserId) ?? FALLBACK_CLIENT
 
     // Remove from current owner.
     const remaining = records.filter((r) => r.id !== transferTarget.id)
