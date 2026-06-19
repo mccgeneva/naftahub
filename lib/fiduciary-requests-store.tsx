@@ -2,6 +2,8 @@
 
 import { createContext, useContext, useEffect, useState } from "react"
 import { scopedKey } from "@/lib/user-scope"
+import { mirrorSubmission } from "@/lib/approval-sync"
+import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 
 export type FiduciaryRequestStatus = "pending" | "approved" | "rejected"
 
@@ -25,6 +27,8 @@ export const FIDUCIARY_SERVICE_LABELS: Record<FiduciaryServiceType, string> = {
 
 export interface FiduciaryRequest {
   id: string // platform reference, e.g. "FID-1A2B3C4D"
+  /** DB approval id once mirrored, so admin decisions can be reconciled back. */
+  approvalId?: string
   serviceType: FiduciaryServiceType
   serviceLabel: string
   /** Free-text asset class / instrument (e.g. "Gold bullion", "SBLC", "Equities"). */
@@ -116,6 +120,9 @@ export function FiduciaryRequestsProvider({ children }: { children: React.ReactN
     }
   }, [hydrated])
 
+  // Reconcile administrator decisions made cross-client (in the DB) back here.
+  useApprovalReconcile("fiduciary", hydrated, requests, setRequests)
+
   const addRequest: FiduciaryRequestsContextValue["addRequest"] = (request) => {
     const full: FiduciaryRequest = {
       ...request,
@@ -124,6 +131,18 @@ export function FiduciaryRequestsProvider({ children }: { children: React.ReactN
       submittedAt: new Date().toISOString(),
     }
     setRequests((prev) => [full, ...prev])
+    // Mirror into the DB so the Administrator (custody desk) can review it.
+    void mirrorSubmission({
+      kind: "fiduciary",
+      title: `${full.serviceLabel} · ${full.assetType}`,
+      summary: `${full.serviceLabel} — ${full.assetType}${full.estimatedValue ? ` (${full.currency} ${full.estimatedValue.toLocaleString("en-US")})` : ""}`,
+      amount: full.estimatedValue || undefined,
+      currency: full.currency,
+      payload: { localId: full.id, serviceType: full.serviceType, assetType: full.assetType },
+    }).then((approvalId) => {
+      if (!approvalId) return
+      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+    })
     return full
   }
 

@@ -3,6 +3,8 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { generateUetr } from "@/lib/swift-gpi"
 import { scopedKey } from "@/lib/user-scope"
+import { mirrorSubmission } from "@/lib/approval-sync"
+import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 
 export type EuroclearRequestStatus = "pending" | "approved" | "rejected"
 
@@ -17,6 +19,8 @@ export type EuroclearSettlementBasis = "DVP" | "FOP"
 
 export interface EuroclearRequest {
   id: string // platform reference, e.g. "EOC-1A2B3C4D"
+  /** DB approval id once mirrored, so admin decisions can be reconciled back. */
+  approvalId?: string
   uetr: string // SWIFT gpi Unique End-to-End Transaction Reference (UUID v4)
 
   // Trade direction + settlement basis
@@ -142,6 +146,9 @@ export function EuroclearRequestsProvider({ children }: { children: React.ReactN
     }
   }, [hydrated])
 
+  // Reconcile administrator decisions made cross-client (in the DB) back here.
+  useApprovalReconcile("euroclear", hydrated, requests, setRequests)
+
   const addRequest: EuroclearRequestsContextValue["addRequest"] = (request) => {
     const full: EuroclearRequest = {
       ...request,
@@ -151,6 +158,18 @@ export function EuroclearRequestsProvider({ children }: { children: React.ReactN
       submittedAt: new Date().toISOString(),
     }
     setRequests((prev) => [full, ...prev])
+    // Mirror into the DB so the Administrator can review it cross-client.
+    void mirrorSubmission({
+      kind: "euroclear",
+      title: `Euroclear ${full.direction === "deliver" ? "Deliver" : "Receive"} · ${full.securityName}`,
+      summary: `${full.settlementBasis} ${full.direction} ${full.quantity.toLocaleString("en-US")} ${full.securityType} (${full.isin}) @ ${full.pricePercent}%${full.settlementBasis === "DVP" ? ` — cash ${full.currency} ${full.cashAmount.toLocaleString("en-US")}` : ""}`,
+      amount: full.cashAmount || undefined,
+      currency: full.currency,
+      payload: { localId: full.id, uetr: full.uetr, direction: full.direction, isin: full.isin },
+    }).then((approvalId) => {
+      if (!approvalId) return
+      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+    })
     return full
   }
 

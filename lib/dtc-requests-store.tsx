@@ -3,6 +3,8 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { generateUetr } from "@/lib/swift-gpi"
 import { scopedKey } from "@/lib/user-scope"
+import { mirrorSubmission } from "@/lib/approval-sync"
+import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 
 export type DTCRequestStatus = "pending" | "approved" | "rejected"
 
@@ -20,6 +22,8 @@ export type DTCSettlementBasis = "DVP" | "FOP"
 
 export interface DTCRequest {
   id: string // platform reference, e.g. "DTC-1A2B3C4D"
+  /** DB approval id once mirrored, so admin decisions can be reconciled back. */
+  approvalId?: string
   uetr: string // SWIFT gpi Unique End-to-End Transaction Reference (UUID v4)
 
   // Settlement venue + trade direction
@@ -146,6 +150,9 @@ export function DTCRequestsProvider({ children }: { children: React.ReactNode })
     }
   }, [hydrated])
 
+  // Reconcile administrator decisions made cross-client (in the DB) back here.
+  useApprovalReconcile("dtc", hydrated, requests, setRequests)
+
   const addRequest: DTCRequestsContextValue["addRequest"] = (request) => {
     const full: DTCRequest = {
       ...request,
@@ -155,6 +162,18 @@ export function DTCRequestsProvider({ children }: { children: React.ReactNode })
       submittedAt: new Date().toISOString(),
     }
     setRequests((prev) => [full, ...prev])
+    // Mirror into the DB so the Administrator can review it cross-client.
+    void mirrorSubmission({
+      kind: "dtc",
+      title: `${full.depository} ${full.direction === "deliver" ? "Deliver" : "Receive"} · ${full.securityName}`,
+      summary: `${full.settlementBasis} ${full.direction} ${full.quantity.toLocaleString("en-US")} ${full.securityType} (${full.isin}) @ ${full.pricePercent}%${full.settlementBasis === "DVP" ? ` — cash ${full.currency} ${full.cashAmount.toLocaleString("en-US")}` : ""}`,
+      amount: full.cashAmount || undefined,
+      currency: full.currency,
+      payload: { localId: full.id, uetr: full.uetr, depository: full.depository, direction: full.direction, isin: full.isin },
+    }).then((approvalId) => {
+      if (!approvalId) return
+      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+    })
     return full
   }
 

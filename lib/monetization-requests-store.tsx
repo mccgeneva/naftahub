@@ -3,6 +3,8 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { generateUetr } from "@/lib/swift-gpi"
 import { scopedKey } from "@/lib/user-scope"
+import { mirrorSubmission } from "@/lib/approval-sync"
+import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 
 export type MonetizationStatus = "pending" | "approved" | "rejected"
 
@@ -14,6 +16,8 @@ export type MonetizationStructure =
 
 export interface MonetizationRequest {
   id: string // platform reference, e.g. "MON-1A2B3C4D"
+  /** DB approval id once mirrored, so admin decisions can be reconciled back. */
+  approvalId?: string
   uetr: string // SWIFT gpi Unique End-to-End Transaction Reference (UUID v4)
 
   // Underlying bank instrument being monetized
@@ -133,6 +137,9 @@ export function MonetizationRequestsProvider({ children }: { children: React.Rea
     }
   }, [hydrated])
 
+  // Reconcile administrator decisions made cross-client (in the DB) back here.
+  useApprovalReconcile("monetization", hydrated, requests, setRequests)
+
   const addRequest: MonetizationRequestsContextValue["addRequest"] = (request) => {
     const full: MonetizationRequest = {
       ...request,
@@ -142,6 +149,18 @@ export function MonetizationRequestsProvider({ children }: { children: React.Rea
       submittedAt: new Date().toISOString(),
     }
     setRequests((prev) => [full, ...prev])
+    // Mirror into the DB so the Administrator can review it cross-client.
+    void mirrorSubmission({
+      kind: "monetization",
+      title: `${full.instrumentTypeFull} · ${full.issuer}`,
+      summary: `Monetize ${full.currency} ${full.faceValue.toLocaleString("en-US")} ${full.instrumentTypeFull} at ${full.advanceRatePercent}% (proceeds ${full.proceedsCurrency} ${full.grossProceeds.toLocaleString("en-US")})`,
+      amount: full.grossProceeds,
+      currency: full.proceedsCurrency,
+      payload: { localId: full.id, uetr: full.uetr, structure: full.structure, instrumentId: full.instrumentId },
+    }).then((approvalId) => {
+      if (!approvalId) return
+      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+    })
     return full
   }
 

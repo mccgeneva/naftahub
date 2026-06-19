@@ -3,6 +3,8 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { generateUetr } from "@/lib/swift-gpi"
 import { scopedKey } from "@/lib/user-scope"
+import { mirrorSubmission } from "@/lib/approval-sync"
+import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 
 export type DealStatus = "pending" | "approved" | "rejected"
 
@@ -63,6 +65,8 @@ export interface DealDocument {
 
 export interface CommodityDeal {
   id: string // platform reference, e.g. "DEAL-1A2B3C4D"
+  /** DB approval id once mirrored, so admin decisions can be reconciled back. */
+  approvalId?: string
   uetr: string // SWIFT gpi Unique End-to-End Transaction Reference (UUID v4)
 
   // Deal identity
@@ -235,6 +239,22 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
     }
   }, [hydrated])
 
+  // Reconcile administrator decisions made cross-client (in the DB) back here.
+  // When a deal is newly approved, also advance it to the execution stage to
+  // match the in-app approveDeal() behaviour.
+  useApprovalReconcile(
+    "commodity",
+    hydrated,
+    deals,
+    setDeals,
+    (approved) => {
+      const ids = new Set(approved.map((d) => d.id))
+      setDeals((prev) =>
+        prev.map((d) => (ids.has(d.id) ? { ...d, stage: "execution" as DealStage } : d)),
+      )
+    },
+  )
+
   const addDeal: CommodityDealsContextValue["addDeal"] = (deal) => {
     const { stage, ...rest } = deal
     const full: CommodityDeal = {
@@ -247,6 +267,18 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
       submittedAt: new Date().toISOString(),
     }
     setDeals((prev) => [full, ...prev])
+    // Mirror into the DB so the Administrator can review it cross-client.
+    void mirrorSubmission({
+      kind: "commodity",
+      title: `${full.title} · ${full.commodity}`,
+      summary: `${full.tradeStructure} ${full.commodity} ${full.quantity} — ${full.currency} ${full.approxValue.toLocaleString("en-US")} (${full.buyerName} ⇄ ${full.sellerName})`,
+      amount: full.approxValue,
+      currency: full.currency,
+      payload: { localId: full.id, uetr: full.uetr, category: full.category, commodity: full.commodity },
+    }).then((approvalId) => {
+      if (!approvalId) return
+      setDeals((prev) => prev.map((d) => (d.id === full.id ? { ...d, approvalId } : d)))
+    })
     return full
   }
 
