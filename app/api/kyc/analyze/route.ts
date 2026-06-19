@@ -28,7 +28,13 @@ const DOCUMENT_TYPES = [
 // the passport bio-data, and a per-page classification of every PDF page.
 const analysisSchema = z.object({
   fields: z.object({
-    fullName: z.string().describe("Full legal name of the individual account holder / principal."),
+    fullName: z
+      .string()
+      .describe(
+        "Full name of the individual account holder / principal in natural display order " +
+          '(given names first, then surname), including any honorific/title and noble designation, e.g. "Dr. Luigi Forino Von Thyssen". ' +
+          'Do NOT use the "SURNAME, Given" passport format.',
+      ),
     company: z.string().describe("Company or entity name, if any. Empty string if none."),
     role: z.string().describe("Job title or role of the person (e.g. Director). Empty string if unknown."),
     email: z.string().describe("Email address. Empty string if none found."),
