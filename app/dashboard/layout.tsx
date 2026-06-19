@@ -1,9 +1,12 @@
+import { redirect } from "next/navigation"
+import { getMyIdentity } from "@/app/actions/admin-users"
 import { DashboardSidebar } from "@/components/dashboard/sidebar"
 import { DashboardHeader } from "@/components/dashboard/header"
 import { MarketTicker } from "@/components/dashboard/market-ticker"
 import { BackToTop } from "@/components/dashboard/back-to-top"
 import { ActivityTracker } from "@/components/activity-tracker"
 import { CurrentUserProvider } from "@/lib/use-current-user"
+import { PdfViewerProvider } from "@/lib/pdf-viewer"
 import { SessionGuard } from "@/components/session-guard"
 import { PointerEventsGuard } from "@/components/pointer-events-guard"
 import { DemoSeedGate } from "@/components/demo-seed-gate"
@@ -26,9 +29,22 @@ import { CertificateRequestsProvider } from "@/lib/certificates-store"
 import { TreasuryProvider } from "@/lib/treasury-store"
 import { GatewayProvider } from "@/lib/gateway-store"
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+// Identity depends on the per-request session cookie, so this layout must never
+// be statically cached or shared between users.
+export const dynamic = "force-dynamic"
+
+export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
+  // Authoritative, per-request identity resolved from the httpOnly session
+  // cookie on the SERVER. This is the single source of truth for who is signed
+  // in: it is computed fresh on every request/refresh (never a stale client
+  // cache, never a CDN-shared payload), so a user can only ever see the account
+  // their own session cookie resolves to. No valid session → back to login.
+  const identity = await getMyIdentity()
+  if (!identity) redirect("/login?expired=expiry")
+
   return (
-    <CurrentUserProvider>
+    <CurrentUserProvider initialIdentity={identity}>
+    <PdfViewerProvider>
     <ActivityTracker>
       <DemoSeedGate>
       <BeneficiariesProvider>
@@ -84,6 +100,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </BeneficiariesProvider>
       </DemoSeedGate>
     </ActivityTracker>
+    </PdfViewerProvider>
     </CurrentUserProvider>
   )
 }

@@ -34,6 +34,7 @@ import {
   type CertificateRequest,
 } from "@/lib/certificates-store"
 import { generateAccountCertificate } from "@/lib/certificate-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 import { CertificateDocument } from "@/components/dashboard/certificate-document"
 
 const TYPE_ICONS: Record<CertificateType, typeof Award> = {
@@ -83,6 +84,7 @@ export default function CertificateDetailPage() {
   const router = useRouter()
   const { requests, hydrated, recordDownload } = useCertificateRequests()
   const logActivity = useActivityLog()
+  const { show } = usePdfViewer()
 
   const id = decodeURIComponent(params.id)
   const req = useMemo(() => requests.find((r) => r.id === id), [requests, id])
@@ -130,7 +132,7 @@ export default function CertificateDetailPage() {
       })
       return
     }
-    generateAccountCertificate({
+    show(generateAccountCertificate({
       type: req.type,
       reference: req.reference,
       verificationCode: req.verificationCode,
@@ -150,7 +152,7 @@ export default function CertificateDetailPage() {
       balances: req.balances,
       totalEur: req.totalEur,
       displayCurrency: req.displayCurrency,
-    })
+    }))
     recordDownload(req.id)
     logActivity({
       action: `Downloaded ${CERTIFICATE_TYPE_LABELS[req.type]}`,
@@ -161,7 +163,6 @@ export default function CertificateDetailPage() {
         version: `Revision ${req.version}`,
       },
     })
-    toast.success("Certificate downloaded", { description: `${req.reference} — your PDF download has started.` })
   }
 
   const detailRows: { label: string; value?: string; icon?: typeof Hash }[] = [

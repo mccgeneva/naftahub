@@ -43,7 +43,9 @@ import {
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { useActivityLog } from "@/components/activity-tracker"
-import { exportToCsv, downloadFile } from "@/lib/export-utils"
+import { exportToCsv } from "@/lib/export-utils"
+import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 import {
   useSkr,
   formatSkrValue,
@@ -114,36 +116,39 @@ export default function SkrPage() {
     }
   }, [records])
 
+  const { show } = usePdfViewer()
+
   const downloadStatement = (record: SkrRecord) => {
-    const lines = [
-      "MCC CAPITAL — SAFE KEEPING RECEIPT (SKR) STATEMENT",
-      "==================================================",
-      "",
-      `SKR Reference:        ${record.id}`,
-      `Status:               ${SKR_STATUS_LABELS[record.status]}`,
-      `Issuing Bank/Custodian: ${record.custodian}`,
-      `Beneficial Owner:     ${record.beneficialOwner}`,
-      `Face Value:           ${formatSkrValue(record.faceValue, record.currency)}`,
-      `Currency:             ${record.currency}`,
-      `Date of Issuance:     ${formatDate(record.issueDate)}`,
-      `Expiry Date:          ${formatDate(record.expiryDate)}`,
-      `Custody Account Ref:  ${record.custodyAccountRef}`,
-      "",
-      "TRANSACTION HISTORY",
-      "-------------------",
-      ...(record.transactions.length
-        ? record.transactions.map(
-            (t) => `${formatDate(t.date)}  ${t.type.padEnd(16)} ${t.reference.padEnd(16)} ${t.description}`,
-          )
-        : ["No transactions on record."]),
-      "",
-      `Generated: ${new Date().toLocaleString("en-GB")}`,
-      "This statement is issued for information purposes by MCC Capital custody services.",
-    ]
-    downloadFile(`SKR-Statement-${record.id}.txt`, lines.join("\n"), "text/plain;charset=utf-8;")
-    toast.success("Statement downloaded", {
-      description: `Account statement for ${record.id} has been generated.`,
+    const doc = generateTablePdf({
+      title: "Safe Keeping Receipt Statement",
+      refPrefix: "SKR",
+      meta: [
+        { label: "SKR Reference", value: record.id },
+        { label: "Status", value: SKR_STATUS_LABELS[record.status] },
+        { label: "Issuing Bank / Custodian", value: record.custodian },
+        { label: "Beneficial Owner", value: record.beneficialOwner },
+        { label: "Face Value", value: formatSkrValue(record.faceValue, record.currency) },
+        { label: "Date of Issuance", value: formatDate(record.issueDate) },
+        { label: "Expiry Date", value: formatDate(record.expiryDate) },
+        { label: "Custody Account Ref", value: record.custodyAccountRef },
+      ],
+      sectionTitle: "Transaction History",
+      columns: [
+        { key: "date", header: "Date" },
+        { key: "type", header: "Type" },
+        { key: "reference", header: "Reference" },
+        { key: "description", header: "Description" },
+      ],
+      rows: record.transactions.map((t) => ({
+        date: formatDate(t.date),
+        type: t.type,
+        reference: t.reference,
+        description: t.description,
+      })),
+      emptyMessage: "No transactions on record.",
+      footNote: "This statement is issued for information purposes by MCC Capital custody services.",
     })
+    show({ doc, filename: tablePdfFilename(`SKR-Statement-${record.id}`), title: "Safe Keeping Receipt Statement" })
     logActivity({
       action: `Downloaded SKR statement for ${record.id}`,
       category: "SKR Trading",

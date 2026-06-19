@@ -4,6 +4,7 @@
 
 import { jsPDF } from "jspdf"
 import type { CertificateType } from "@/lib/certificates-store"
+import type { GeneratedPdf } from "@/lib/pdf-core"
 
 export interface InstrumentCertificateData {
   id: string
@@ -53,9 +54,7 @@ function formatDate(value: string): string {
   })
 }
 
-export function generateInstrumentCertificate(data: InstrumentCertificateData): void {
-  if (typeof window === "undefined") return
-
+export function generateInstrumentCertificate(data: InstrumentCertificateData): GeneratedPdf {
   const doc = new jsPDF({ unit: "pt", format: "a4" })
   const pageWidth = doc.internal.pageSize.getWidth()
   const pageHeight = doc.internal.pageSize.getHeight()
@@ -212,7 +211,7 @@ export function generateInstrumentCertificate(data: InstrumentCertificateData): 
     { align: "right" },
   )
 
-  doc.save(`MCC-Certificate-${data.id}.pdf`)
+  return { doc, filename: `MCC-Certificate-${data.id}.pdf`, title: "Instrument Certificate" }
 }
 
 // ===========================================================================
@@ -339,9 +338,7 @@ function drawSeal(doc: jsPDF, cx: number, cy: number, r: number) {
   doc.text("OFFICIAL SEAL", cx, cy + 10, { align: "center" })
 }
 
-export function generateAccountCertificate(data: AccountCertificateData): void {
-  if (typeof window === "undefined") return
-
+export function generateAccountCertificate(data: AccountCertificateData): GeneratedPdf {
   const doc = new jsPDF({ unit: "pt", format: "a4" })
   const pageWidth = doc.internal.pageSize.getWidth()
   const pageHeight = doc.internal.pageSize.getHeight()
@@ -543,5 +540,5 @@ export function generateAccountCertificate(data: AccountCertificateData): void {
   const secLines = doc.splitTextToSize(security, contentWidth)
   doc.text(secLines, margin, footY)
 
-  doc.save(`${data.reference}.pdf`)
+  return { doc, filename: `${data.reference}.pdf`, title: "Account Certificate" }
 }

@@ -15,6 +15,7 @@ import {
   Mail,
   Search,
   Download,
+  FileText,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -44,6 +45,14 @@ import { usePaymentRequests } from "@/lib/payment-requests-store"
 import { useCurrentUser } from "@/lib/use-current-user"
 import type { TransferDirectoryEntry } from "@/lib/users"
 import { exportToCsv } from "@/lib/export-utils"
+import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { resolveTransferRecipient, listTransferDirectory } from "@/app/actions/transfers"
 import { toast } from "sonner"
 
@@ -108,6 +117,7 @@ type HistoryRow = {
 export default function SendMoneyPage() {
   const logActivity = useActivityLog()
   const { entries, balanceFor, addDebit, hydrated } = useLedger()
+  const { show } = usePdfViewer()
   const { requests, addRequest } = usePaymentRequests()
 
   // Resolve the acting sender from the authoritative signed-in identity (which
@@ -401,33 +411,56 @@ export default function SendMoneyPage() {
     resetForm()
   }
 
-  const handleExport = () => {
-    const count = exportToCsv(
-      "send-money",
-      filteredHistory.map((t) => ({
-        reference: t.reference,
-        method: t.kind === "instant" ? "Instant" : "Approval",
-        direction: t.direction === "credit" ? "Received" : "Sent",
-        status: t.status,
-        amount: formatCurrency(t.amount, t.currency),
-        counterparty: t.counterparty,
-        note: t.note,
-        date: t.date,
-      })),
-      [
-        { key: "reference", label: "Reference" },
-        { key: "method", label: "Method" },
-        { key: "direction", label: "Direction" },
-        { key: "status", label: "Status" },
-        { key: "amount", label: "Amount" },
-        { key: "counterparty", label: "Counterparty" },
-        { key: "note", label: "Note" },
-        { key: "date", label: "Date" },
-      ],
-    )
+  const sendRows = () =>
+    filteredHistory.map((t) => ({
+      reference: t.reference,
+      method: t.kind === "instant" ? "Instant" : "Approval",
+      direction: t.direction === "credit" ? "Received" : "Sent",
+      status: t.status,
+      amount: formatCurrency(t.amount, t.currency),
+      counterparty: t.counterparty,
+      note: t.note,
+      date: t.date,
+    }))
+
+  const handleExportCsv = () => {
+    const count = exportToCsv("send-money", sendRows(), [
+      { key: "reference", label: "Reference" },
+      { key: "method", label: "Method" },
+      { key: "direction", label: "Direction" },
+      { key: "status", label: "Status" },
+      { key: "amount", label: "Amount" },
+      { key: "counterparty", label: "Counterparty" },
+      { key: "note", label: "Note" },
+      { key: "date", label: "Date" },
+    ])
     toast.success("Transfers exported", {
       description: `${count} transfer${count === 1 ? "" : "s"} exported to CSV.`,
     })
+  }
+
+  const handleExportPdf = () => {
+    if (filteredHistory.length === 0) {
+      toast.info("No transfers to export", { description: "There are no transfers matching the current filters." })
+      return
+    }
+    const doc = generateTablePdf({
+      title: "Transfer History",
+      refPrefix: "SND",
+      meta: [{ label: "Records", value: `${filteredHistory.length}` }],
+      columns: [
+        { key: "date", header: "Date" },
+        { key: "reference", header: "Reference" },
+        { key: "method", header: "Method" },
+        { key: "counterparty", header: "Counterparty" },
+        { key: "direction", header: "Dir." },
+        { key: "amount", header: "Amount", align: "right" },
+        { key: "status", header: "Status" },
+      ],
+      rows: sendRows(),
+      footNote: "Transfer history exported from the MCC Capital platform with the filters active at the time of export.",
+    })
+    show({ doc, filename: tablePdfFilename("Transfer-History"), title: "Transfer History" })
   }
 
   const stats = [
@@ -465,10 +498,24 @@ export default function SendMoneyPage() {
             via Administrator approval for any recipient.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={handleExport}>
-          <Download className="mr-2 h-4 w-4" />
-          Export
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm">
+              <Download className="mr-2 h-4 w-4" />
+              Export
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={handleExportPdf}>
+              <FileText className="mr-2 h-4 w-4" />
+              Export as PDF
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleExportCsv}>
+              <Download className="mr-2 h-4 w-4" />
+              Export as CSV
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Stats */}

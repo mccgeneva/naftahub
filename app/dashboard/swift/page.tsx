@@ -4,6 +4,14 @@ import { useState } from "react"
 import { toast } from "sonner"
 import { useActivityLog } from "@/components/activity-tracker"
 import { exportToCsv } from "@/lib/export-utils"
+import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { SwiftComposer, SWIFT_MESSAGE_TYPES } from "@/components/dashboard/swift-composer"
 import { parseSwiftMessage } from "@/lib/swift-mt"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -148,8 +156,43 @@ export default function SwiftPage() {
   }
 
   const logActivity = useActivityLog()
+  const { show } = usePdfViewer()
 
-  const handleExport = () => {
+  const handleExportPdf = () => {
+    if (filteredMessages.length === 0) {
+      toast.info("No messages to export", { description: "There are no SWIFT messages matching the current filters." })
+      return
+    }
+    const doc = generateTablePdf({
+      title: "SWIFT Message Log",
+      refPrefix: "SWF",
+      meta: [{ label: "Records", value: `${filteredMessages.length}` }],
+      columns: [
+        { key: "date", header: "Date" },
+        { key: "id", header: "Message ID" },
+        { key: "type", header: "MT" },
+        { key: "direction", header: "Dir." },
+        { key: "sender", header: "Sender BIC" },
+        { key: "receiver", header: "Receiver BIC" },
+        { key: "amount", header: "Amount", align: "right" },
+        { key: "status", header: "Status" },
+      ],
+      rows: filteredMessages as unknown as Record<string, unknown>[],
+      footNote: "SWIFT message log exported from the MCC Capital platform with the filters active at the time of export.",
+    })
+    show({ doc, filename: tablePdfFilename("SWIFT-Messages"), title: "SWIFT Message Log" })
+    logActivity({
+      action: `Exported ${filteredMessages.length} SWIFT message${filteredMessages.length === 1 ? "" : "s"} to PDF`,
+      category: "SWIFT Messaging",
+      details: {
+        summary: `Client previewed/exported ${filteredMessages.length} SWIFT message record(s) as a professional PDF.`,
+        recordCount: `${filteredMessages.length}`,
+        format: "PDF",
+      },
+    })
+  }
+
+  const handleExportCsv = () => {
     const count = exportToCsv("swift-messages", filteredMessages, [
       { key: "id", label: "Message ID" },
       { key: "type", label: "MT Type" },
@@ -398,10 +441,24 @@ export default function SwiftPage() {
             <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
             Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={handleExport}>
-            <Download className="mr-2 h-4 w-4" />
-            Export
-          </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Download className="mr-2 h-4 w-4" />
+                  Export
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={handleExportPdf}>
+                  <FileText className="mr-2 h-4 w-4" />
+                  Export as PDF
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleExportCsv}>
+                  <Download className="mr-2 h-4 w-4" />
+                  Export as CSV
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
         </div>
       </div>
 

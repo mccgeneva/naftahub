@@ -3,6 +3,7 @@
 // page via lib/handbook-content.ts so the two never drift apart.
 
 import { jsPDF } from "jspdf"
+import type { GeneratedPdf } from "@/lib/pdf-core"
 import { HANDBOOK_META, HANDBOOK_SECTIONS, type HandbookSection } from "./handbook-content"
 
 const BRAND = {
@@ -14,9 +15,7 @@ const BRAND = {
   white: [255, 255, 255] as [number, number, number],
 }
 
-export function generateHandbookPdf(): void {
-  if (typeof window === "undefined") return
-
+export function generateHandbookPdf(): GeneratedPdf {
   const doc = new jsPDF({ unit: "pt", format: "a4" })
   const pageWidth = doc.internal.pageSize.getWidth()
   const pageHeight = doc.internal.pageSize.getHeight()
@@ -244,5 +243,5 @@ export function generateHandbookPdf(): void {
     })
   })
 
-  doc.save("MCC-Capital-Client-Handbook.pdf")
+  return { doc, filename: "MCC-Capital-Client-Handbook.pdf", title: "Client Handbook" }
 }

@@ -14,6 +14,7 @@
 // ===========================================================================
 
 import { jsPDF } from "jspdf"
+import type { GeneratedPdf } from "@/lib/pdf-core"
 
 export interface DocField {
   label: string
@@ -445,9 +446,7 @@ const BRAND = {
   watermark: [243, 244, 246] as [number, number, number],
 }
 
-export function generateInstrumentDocumentPdf(content: InstrumentDocumentContent): void {
-  if (typeof window === "undefined") return
-
+export function generateInstrumentDocumentPdf(content: InstrumentDocumentContent): GeneratedPdf {
   const doc = new jsPDF({ unit: "pt", format: "a4" })
   const pageWidth = doc.internal.pageSize.getWidth()
   const pageHeight = doc.internal.pageSize.getHeight()
@@ -666,5 +665,9 @@ export function generateInstrumentDocumentPdf(content: InstrumentDocumentContent
     { maxWidth: contentWidth },
   )
 
-  doc.save(`MCC-${content.kind}-${content.reference}.pdf`)
+  return {
+    doc,
+    filename: `MCC-${content.kind}-${content.reference}.pdf`,
+    title: `${content.kind} · ${content.reference}`,
+  }
 }

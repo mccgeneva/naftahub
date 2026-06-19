@@ -53,8 +53,10 @@ import {
 import { Calendar as CalendarPicker } from "@/components/ui/calendar"
 import type { DateRange } from "react-day-picker"
 import { cn } from "@/lib/utils"
-  import { exportToCsv } from "@/lib/export-utils"
+import { exportToCsv } from "@/lib/export-utils"
 import { generateReceiptPdf } from "@/lib/receipt-pdf"
+import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 import { useActivityLog } from "@/components/activity-tracker"
 import { toast } from "sonner"
 import { useLedger, convertCurrency } from "@/lib/ledger-store"
@@ -117,6 +119,7 @@ export default function TransactionsPage() {
   const logActivity = useActivityLog()
   const router = useRouter()
   const { entries } = useLedger()
+  const { show } = usePdfViewer()
 
   // Build the transaction list from the persisted ledger so every recorded
   // incoming payment (and outgoing payment) appears here automatically. The 2%
@@ -250,7 +253,7 @@ export default function TransactionsPage() {
     return `${fmt(dateRange.from)} – ${fmt(dateRange.to)}`
   }
 
-  const handleExport = () => {
+  const handleExportCsv = () => {
     if (filteredTransactions.length === 0) {
       toast.info("No transactions to export", {
         description: "There are no transactions matching the current filters.",
@@ -284,6 +287,45 @@ export default function TransactionsPage() {
     })
   }
 
+  const handleExportPdf = () => {
+    if (filteredTransactions.length === 0) {
+      toast.info("No transactions to export", {
+        description: "There are no transactions matching the current filters.",
+      })
+      return
+    }
+    const doc = generateTablePdf({
+      title: "Transaction History",
+      refPrefix: "TXN",
+      meta: [
+        { label: "Records", value: `${filteredTransactions.length}` },
+        { label: "Period", value: formatRangeLabel() === "Date Range" ? "All dates" : formatRangeLabel() },
+      ],
+      columns: [
+        { key: "date", header: "Date" },
+        { key: "id", header: "Reference" },
+        { key: "type", header: "Type" },
+        { key: "counterparty", header: "Counterparty" },
+        { key: "direction", header: "Dir." },
+        { key: "amount", header: "Amount", align: "right" },
+        { key: "status", header: "Status" },
+      ],
+      rows: filteredTransactions as unknown as Record<string, unknown>[],
+      footNote:
+        "Transaction history exported from the MCC Capital platform with the filters active at the time of export.",
+    })
+    show({ doc, filename: tablePdfFilename("Transaction-History"), title: "Transaction History" })
+    logActivity({
+      action: `Exported ${filteredTransactions.length} transaction${filteredTransactions.length === 1 ? "" : "s"} to PDF`,
+      category: "Transactions",
+      details: {
+        summary: `Client previewed/exported ${filteredTransactions.length} transaction record(s) as a professional PDF.`,
+        recordCount: `${filteredTransactions.length}`,
+        format: "PDF",
+      },
+    })
+  }
+
   const handleViewDetails = (txn: Transaction) => {
     logActivity({
       action: `Viewed transaction ${txn.id}`,
@@ -304,7 +346,7 @@ export default function TransactionsPage() {
     const bank = entry?.bank
     const bicMatch = bank?.match(/\(?\b(?:BIC|SWIFT)[:\s]+([A-Z0-9]{8,11})\)?/i)
     const bankName = bank?.replace(/\s*\(?\b(?:BIC|SWIFT)[:\s]+[A-Z0-9]{8,11}\)?/i, "").trim()
-    generateReceiptPdf({
+    show(generateReceiptPdf({
       reference: entry?.reference || txn.id,
       direction: txn.direction === "incoming" ? "credit" : "debit",
       amount: txn.amount,
@@ -317,7 +359,7 @@ export default function TransactionsPage() {
       bic: bicMatch?.[1],
       iban: entry?.account || (txn.account !== "MCC Capital" ? txn.account : undefined),
       notes: entry?.comment,
-    })
+    }))
     logActivity({
       action: `Downloaded receipt for ${txn.id}`,
       category: "Transactions",
@@ -326,9 +368,6 @@ export default function TransactionsPage() {
         transaction: txn.id,
         format: "PDF",
       },
-    })
-    toast.success("Receipt downloaded", {
-      description: `PDF receipt for ${txn.id} has started downloading.`,
     })
   }
 
@@ -375,10 +414,24 @@ export default function TransactionsPage() {
               )}
             </PopoverContent>
           </Popover>
-          <Button variant="outline" size="sm" onClick={handleExport}>
-            <Download className="mr-2 h-4 w-4" />
-            Export
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                <Download className="mr-2 h-4 w-4" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={handleExportPdf}>
+                <FileText className="mr-2 h-4 w-4" />
+                Export as PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportCsv}>
+                <Download className="mr-2 h-4 w-4" />
+                Export as CSV
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 

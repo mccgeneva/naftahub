@@ -2,6 +2,7 @@
 // browser using jsPDF. Used for single-transaction "Download Receipt" actions.
 
 import { jsPDF } from "jspdf"
+import type { GeneratedPdf } from "@/lib/pdf-core"
 
 export interface ReceiptData {
   reference: string
@@ -53,9 +54,7 @@ function formatTime(value: string): string {
   return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
 }
 
-export function generateReceiptPdf(data: ReceiptData): void {
-  if (typeof window === "undefined") return
-
+export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
   const doc = new jsPDF({ unit: "pt", format: "a4" })
   const pageWidth = doc.internal.pageSize.getWidth()
   const margin = 48
@@ -285,5 +284,5 @@ export function generateReceiptPdf(data: ReceiptData): void {
     { align: "right" },
   )
 
-  doc.save(`receipt-${data.reference}.pdf`)
+  return { doc, filename: `receipt-${data.reference}.pdf`, title: "Payment Receipt" }
 }

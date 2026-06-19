@@ -3,7 +3,9 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { getUserById, UNKNOWN_USER_ID, type UserProfile } from "@/lib/users"
 import { hydrateProfile } from "@/lib/profile-types"
-import { getMyIdentity } from "@/app/actions/admin-users"
+import { getMyIdentity, type MyIdentity } from "@/app/actions/admin-users"
+import { USER_COOKIE } from "@/lib/user-scope"
+import { SESSION_IDLE_MAX_AGE } from "@/lib/auth"
 
 /**
  * Identity is resolved ONCE per session from the authoritative httpOnly session
@@ -32,38 +34,74 @@ function resolveNeutral(): UserProfile {
   return getUserById(UNKNOWN_USER_ID)
 }
 
-export function CurrentUserProvider({ children }: { children: React.ReactNode }) {
-  // Deterministic neutral placeholder for SSR + first client render (prevents
-  // hydration mismatch and never shows a real account by default).
-  const [user, setUser] = useState<UserProfile>(resolveNeutral)
+// Turn the authoritative server identity into a full client profile.
+function identityToProfile(identity: MyIdentity | null | undefined): UserProfile {
+  if (!identity) return resolveNeutral()
+  if (identity.kind === "static") return getUserById(identity.id)
+  return hydrateProfile(identity.profile)
+}
+
+// Force the client-readable `mcc_user` data-scope cookie to match the
+// authoritative session identity. This is what guarantees the data the user
+// sees (namespaced by this cookie) can never belong to a different account than
+// the one their session resolves to — closing the identity/data desync.
+function reconcileUserCookie(id: string | undefined) {
+  if (typeof document === "undefined" || !id) return
+  try {
+    const current = document.cookie.match(new RegExp(`(?:^|; )${USER_COOKIE}=([^;]*)`))
+    const value = current ? decodeURIComponent(current[1]) : ""
+    if (value === id) return
+    document.cookie = `${USER_COOKIE}=${encodeURIComponent(id)}; path=/; max-age=${SESSION_IDLE_MAX_AGE}; SameSite=None; Secure`
+  } catch {
+    // ignore — a cookie write failure must never break rendering
+  }
+}
+
+export function CurrentUserProvider({
+  initialIdentity,
+  children,
+}: {
+  /** Authoritative identity resolved on the server (per request) and passed in
+   *  by the dashboard layout. Seeding from this means the correct account is
+   *  shown immediately on first paint — there is no neutral flash and no stale
+   *  client-cached identity to flip to another user on refresh/navigation. */
+  initialIdentity?: MyIdentity | null
+  children: React.ReactNode
+}) {
+  // Seed synchronously from the server-resolved identity. The initializer also
+  // reconciles the data-scope cookie BEFORE the inner store providers mount, so
+  // both the displayed identity and the data namespace are locked to the same
+  // authoritative account from the very first render.
+  const [user, setUser] = useState<UserProfile>(() => {
+    const profile = identityToProfile(initialIdentity)
+    reconcileUserCookie(profile.id !== UNKNOWN_USER_ID ? profile.id : undefined)
+    return profile
+  })
+
+  const initialId = initialIdentity?.id
 
   useEffect(() => {
-    // Resolve identity once for the whole tree. The `cancelled` flag prevents a
-    // stale update if this provider unmounts (or remounts under Strict Mode)
-    // before the request resolves. In production this runs a single time.
+    // Re-confirm against the server after mount. The layout already provides the
+    // correct identity per request, but this keeps a long-lived client session
+    // (where the layout isn't re-rendered) in lock step with the session cookie.
     let cancelled = false
 
     getMyIdentity()
       .then((identity) => {
         if (cancelled) return
-        if (!identity) {
-          setUser(resolveNeutral())
-          return
-        }
-        if (identity.kind === "static") {
-          setUser(getUserById(identity.id))
-        } else {
-          setUser(hydrateProfile(identity.profile))
-        }
+        const profile = identityToProfile(identity)
+        reconcileUserCookie(profile.id !== UNKNOWN_USER_ID ? profile.id : undefined)
+        setUser(profile)
       })
       .catch(() => {
-        if (!cancelled) setUser(resolveNeutral())
+        // Network/transient error — keep the server-seeded identity rather than
+        // dropping to neutral, so a hiccup never blanks a valid session.
       })
 
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [initialId])
 
   return <CurrentUserContext.Provider value={user}>{children}</CurrentUserContext.Provider>
 }

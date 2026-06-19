@@ -6,17 +6,15 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useActivityLog } from "@/components/activity-tracker"
 import { generateHandbookPdf } from "@/lib/handbook-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 import { HANDBOOK_META, HANDBOOK_SECTIONS } from "@/lib/handbook-content"
-import { toast } from "sonner"
 
 export default function HandbookPage() {
   const logActivity = useActivityLog()
+  const { show } = usePdfViewer()
 
   const handleDownload = () => {
-    generateHandbookPdf()
-    toast.success("Handbook downloaded", {
-      description: "The MCC Capital Client Handbook PDF has started downloading.",
-    })
+    show(generateHandbookPdf())
     logActivity({
       action: "Downloaded the MCC Capital Client Handbook (PDF)",
       category: "Platform",
