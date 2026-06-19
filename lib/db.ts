@@ -52,6 +52,11 @@ if (process.env.NODE_ENV !== "production") {
   globalForDb.__mccPool = pool
 }
 
+// Boot-time diagnostic: confirms at a glance (in server logs) whether a database
+// connection string was found in the current environment. If this logs `false`
+// in production, the DATABASE_URL project env var is missing from the deployment.
+console.log("[v0] database configured:", isDatabaseConfigured)
+
 // Connection-level errors that mean "the socket was dead"; safe to retry once on
 // a fresh connection because the query never actually ran on the server.
 const RETRYABLE = new Set([
