@@ -41,22 +41,49 @@ export default function GlobalError({
           <p style={{ fontSize: 14, color: "#a1a1aa", marginBottom: 24, lineHeight: 1.5 }}>
             The application hit an unexpected error. Please try again.
           </p>
-          <button
-            onClick={() => reset()}
-            style={{
-              minHeight: 44,
-              padding: "0 24px",
-              borderRadius: 10,
-              border: "none",
-              backgroundColor: "#e0b43a",
-              color: "#1a1a2e",
-              fontSize: 16,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            Try again
-          </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "center" }}>
+            <button
+              onClick={() => reset()}
+              style={{
+                minHeight: 44,
+                width: "100%",
+                maxWidth: 260,
+                padding: "0 24px",
+                borderRadius: 10,
+                border: "none",
+                backgroundColor: "#e0b43a",
+                color: "#1a1a2e",
+                fontSize: 16,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Try again
+            </button>
+            <button
+              onClick={() => {
+                // Hard reload to a clean route. If the root layout itself is
+                // crashing, reset() would just replay the same crash, so we
+                // fully reload the document from the sign-in page instead.
+                window.location.href = "/login"
+              }}
+              style={{
+                minHeight: 44,
+                width: "100%",
+                maxWidth: 260,
+                padding: "0 24px",
+                borderRadius: 10,
+                border: "1px solid #3a3a4a",
+                backgroundColor: "transparent",
+                color: "#f5f5f5",
+                fontSize: 16,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Sign in again
+            </button>
+          </div>
         </div>
       </body>
     </html>
