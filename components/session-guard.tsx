@@ -16,15 +16,22 @@ const HANDOFF = "mcc_login_handoff"
 const EXPIRY = "mcc_session_expiry"
 // Shared last-activity timestamp (ms) so inactivity is tracked across tabs.
 const LAST_ACTIVITY = "mcc_last_activity"
+// Liveness heartbeat (ms). The app stamps this continuously while it is open.
+// Unlike sessionStorage (which mobile Chrome/Safari restore when the browser is
+// reopened), a heartbeat in localStorage cannot be "restored" — if it is stale
+// on startup, the app demonstrably was NOT running, i.e. the browser was
+// closed. This is what makes close=logout reliable on mobile.
+const HEARTBEAT = "mcc_heartbeat"
 
 // Keep the client-side idle window in lock step with the server-enforced
-// SESSION_IDLE_MAX_AGE (15 minutes) in lib/auth.ts. A previous 3-minute value
-// silently logged users out mid-task (e.g. while reviewing the admin panel or
-// filling a form), after which every click hit a dead session and the app
-// appeared frozen.
-const INACTIVITY_LIMIT = 15 * 60 * 1000 // 15 minutes
+// SESSION_IDLE_MAX_AGE (5 minutes) in lib/auth.ts.
+const INACTIVITY_LIMIT = 5 * 60 * 1000 // 5 minutes
 const WARNING_BEFORE = 60 * 1000 // warn 60s before inactivity logout
 const TICK = 1000
+// How long the heartbeat may lapse before we treat the gap as a browser
+// close/reopen. This tolerates brief app-switches (answering a call, copying a
+// code from another app) while still forcing re-login after a real close.
+const HEARTBEAT_TOLERANCE = 90 * 1000 // 90 seconds
 
 const ACTIVITY_EVENTS = ["mousemove", "mousedown", "keydown", "scroll", "touchstart", "click"]
 
@@ -75,8 +82,9 @@ function isEmbeddedPreview(): boolean {
  * Client-side security guard for authenticated areas. Automatically terminates
  * the session when:
  *  - the session lifetime expires,
- *  - the browser tab/window was closed and later reopened, or
- *  - the user has been inactive for 15 minutes.
+ *  - the browser tab/window was closed and later reopened (detected via a
+ *    liveness heartbeat that survives mobile sessionStorage restoration), or
+ *  - the user has been inactive for 5 minutes.
  *
  * The auth cookie is httpOnly, so termination calls the `expireSession` server
  * action to actually delete it; this component handles detection and UX.
@@ -96,6 +104,7 @@ export function SessionGuard() {
         localStorage.removeItem(EXPIRY)
         localStorage.removeItem(LAST_ACTIVITY)
         localStorage.removeItem(HANDOFF)
+        localStorage.removeItem(HEARTBEAT)
         sessionStorage.removeItem(TAB_FLAG)
       } catch {
         // ignore storage errors
@@ -104,7 +113,7 @@ export function SessionGuard() {
       const messages: Record<ExpireReason, string> = {
         expiry: "Your session has expired. Please sign in again.",
         "tab-close": "Session ended because the tab was closed. Please sign in again.",
-        inactivity: "Signed out due to 15 minutes of inactivity. Please sign in again.",
+        inactivity: "Signed out due to 5 minutes of inactivity. Please sign in again.",
       }
       toast.dismiss("inactivity-warning")
       toast.error(messages[reason], { id: "session-ended" })
@@ -113,77 +122,79 @@ export function SessionGuard() {
       void expireSession(reason)
     }
 
-    // --- Establish or validate this tab's session ---
-    let hasTab = false
+    // --- Establish or validate this session ---
+    //
+    // The liveness heartbeat is the source of truth for "was the app actually
+    // running just before this load?". sessionStorage alone is unreliable on
+    // mobile because Chrome/Safari restore it (and its TAB_FLAG) when the
+    // browser is reopened, which previously let a reopened browser slip back
+    // into the dashboard. The heartbeat cannot be restored — it only advances
+    // while the app runs — so a stale/missing heartbeat means the browser was
+    // genuinely closed.
+    const lastBeat = readNumber(HEARTBEAT)
+    const beatFresh = lastBeat != null && now - lastBeat <= HEARTBEAT_TOLERANCE
+
+    // A genuine fresh login is proven, in order of reliability, by:
+    //  1. the `?fresh=1` URL param the login redirect adds (works everywhere,
+    //     including sandboxed iframes and mobile Safari where cookies/storage
+    //     may be partitioned or blocked),
+    //  2. the server-set fresh-login cookie, or
+    //  3. the localStorage handoff flag.
+    let freshParam = false
     try {
-      hasTab = sessionStorage.getItem(TAB_FLAG) === "1"
+      freshParam = new URLSearchParams(window.location.search).get("fresh") === "1"
     } catch {
-      hasTab = false
+      freshParam = false
     }
+    const freshCookie = readCookie(FRESH_LOGIN_COOKIE) === "1"
+    let handoff = false
+    try {
+      handoff = localStorage.getItem(HANDOFF) === "1"
+    } catch {
+      handoff = false
+    }
+    const freshLogin = freshParam || freshCookie || handoff
 
-    if (!hasTab) {
-      // A genuine fresh login is proven, in order of reliability, by:
-      //  1. the `?fresh=1` URL param the login redirect adds (works everywhere,
-      //     including sandboxed iframes and mobile Safari where cookies/storage
-      //     may be partitioned or blocked),
-      //  2. the server-set fresh-login cookie, or
-      //  3. the localStorage handoff flag.
-      let freshParam = false
+    if (freshLogin || isEmbeddedPreview()) {
+      // Genuine fresh login (or running inside the preview iframe, where
+      // tab-close detection is unreliable): establish session markers and start
+      // the heartbeat fresh, ignoring any stale value left by a prior session.
+      clearCookie(FRESH_LOGIN_COOKIE)
+      if (freshParam) {
+        // Strip the one-time param so a later reopen of this URL can't be
+        // mistaken for a fresh login.
+        router.replace("/dashboard")
+      }
       try {
-        freshParam = new URLSearchParams(window.location.search).get("fresh") === "1"
+        localStorage.removeItem(HANDOFF)
+        sessionStorage.setItem(TAB_FLAG, "1")
+        localStorage.setItem(EXPIRY, String(now + SESSION_MAX_AGE * 1000))
+        localStorage.setItem(LAST_ACTIVITY, String(now))
+        localStorage.setItem(HEARTBEAT, String(now))
       } catch {
-        freshParam = false
+        // ignore storage errors
       }
-      const freshCookie = readCookie(FRESH_LOGIN_COOKIE) === "1"
-      let handoff = false
-      try {
-        handoff = localStorage.getItem(HANDOFF) === "1"
-      } catch {
-        handoff = false
-      }
-
-      if (freshParam || freshCookie || handoff || isEmbeddedPreview()) {
-        // Genuine fresh login in this tab (or running inside the preview iframe,
-        // where tab-close detection is unreliable): establish session markers
-        // instead of terminating.
-        clearCookie(FRESH_LOGIN_COOKIE)
-        if (freshParam) {
-          // Strip the one-time param so a later reopen of this URL can't be
-          // mistaken for a fresh login.
-          router.replace("/dashboard")
-        }
-        try {
-          localStorage.removeItem(HANDOFF)
-          sessionStorage.setItem(TAB_FLAG, "1")
-          if (readNumber(EXPIRY) == null) {
-            localStorage.setItem(EXPIRY, String(now + SESSION_MAX_AGE * 1000))
-          }
-          localStorage.setItem(LAST_ACTIVITY, String(now))
-        } catch {
-          // ignore storage errors
-        }
-      } else {
-        // No tab session and no fresh-login signal => the tab was closed and
-        // reopened (or opened directly) with a lingering cookie. Terminate.
-        endSession("tab-close")
-        return
-      }
+    } else if (!beatFresh) {
+      // No fresh-login signal and the heartbeat is stale/missing => the browser
+      // was closed and reopened (or the page was opened directly) while a
+      // cookie lingered. Terminate, even if sessionStorage was restored.
+      endSession("tab-close")
+      return
     } else {
-      // Existing tab session (page reload or in-app navigation). Make sure the
-      // tracking markers exist without resetting them.
-      if (readNumber(EXPIRY) == null) {
-        try {
+      // Heartbeat is fresh: this is a real reload or in-app navigation of an
+      // app that was running moments ago. Keep the existing markers and resume
+      // the heartbeat without resetting expiry/activity.
+      try {
+        sessionStorage.setItem(TAB_FLAG, "1")
+        if (readNumber(EXPIRY) == null) {
           localStorage.setItem(EXPIRY, String(now + SESSION_MAX_AGE * 1000))
-        } catch {
-          // ignore
         }
-      }
-      if (readNumber(LAST_ACTIVITY) == null) {
-        try {
+        if (readNumber(LAST_ACTIVITY) == null) {
           localStorage.setItem(LAST_ACTIVITY, String(now))
-        } catch {
-          // ignore
         }
+        localStorage.setItem(HEARTBEAT, String(now))
+      } catch {
+        // ignore
       }
     }
 
@@ -207,6 +218,15 @@ export function SessionGuard() {
     const interval = window.setInterval(() => {
       if (endedRef.current) return
       const t = Date.now()
+
+      // Advance the liveness heartbeat. This proves the app is still running so
+      // that a later browser reopen can distinguish "was open moments ago"
+      // (reload) from "was closed" (force re-login).
+      try {
+        localStorage.setItem(HEARTBEAT, String(t))
+      } catch {
+        // ignore
+      }
 
       const expiry = readNumber(EXPIRY)
       if (expiry != null && t >= expiry) {
@@ -244,10 +264,35 @@ export function SessionGuard() {
     }
     window.addEventListener("storage", onStorage)
 
+    // --- Resume check: when a frozen/backgrounded tab returns to the
+    // foreground WITHOUT a full reload (common on mobile), the heartbeat
+    // interval was suspended. If it lapsed beyond tolerance the browser was
+    // effectively closed, so terminate; otherwise resume the heartbeat. ---
+    function onResume() {
+      if (endedRef.current) return
+      if (document.visibilityState !== "visible") return
+      if (isEmbeddedPreview()) return
+      const t = Date.now()
+      const beat = readNumber(HEARTBEAT)
+      if (beat != null && t - beat > HEARTBEAT_TOLERANCE) {
+        endSession("tab-close")
+        return
+      }
+      try {
+        localStorage.setItem(HEARTBEAT, String(t))
+      } catch {
+        // ignore
+      }
+    }
+    document.addEventListener("visibilitychange", onResume)
+    window.addEventListener("pageshow", onResume)
+
     return () => {
       window.clearInterval(interval)
       ACTIVITY_EVENTS.forEach((evt) => window.removeEventListener(evt, markActivity))
       window.removeEventListener("storage", onStorage)
+      document.removeEventListener("visibilitychange", onResume)
+      window.removeEventListener("pageshow", onResume)
     }
   }, [router])
 

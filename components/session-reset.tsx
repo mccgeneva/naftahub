@@ -9,6 +9,7 @@ const STORAGE_KEYS = [
   "mcc_login_handoff",
   "mcc_session_expiry",
   "mcc_last_activity",
+  "mcc_heartbeat",
 ]
 
 // Expires a cookie across every path/SameSite/Secure variant the app might have
