@@ -35,6 +35,47 @@ export const YAHOO_SYMBOLS: Record<string, string> = {
   NVDA: "NVDA",
 }
 
+// Maps the platform's display symbols to TradingView's "EXCHANGE:SYMBOL"
+// format, used by the embedded TradingView widgets (ticker tape, charts,
+// quotes). TradingView is the source of truth for what clients see on screen.
+export const TRADINGVIEW_SYMBOLS: Record<string, string> = {
+  // FX majors / crosses
+  "EUR/USD": "FX:EURUSD",
+  "GBP/USD": "FX:GBPUSD",
+  "USD/CHF": "FX:USDCHF",
+  "USD/JPY": "FX:USDJPY",
+  "EUR/GBP": "FX:EURGBP",
+  "AUD/USD": "FX:AUDUSD",
+  "USD/CAD": "FX:USDCAD",
+  "EUR/CHF": "FX:EURCHF",
+  "USD/SGD": "FX:USDSGD",
+  // Commodities
+  "XAU/USD": "OANDA:XAUUSD",
+  BRENT: "TVC:UKOIL",
+  WTI: "TVC:USOIL",
+  NG: "NYMEX:NG1!",
+  // Indices
+  SPX: "SP:SPX",
+  NDX: "NASDAQ:NDX",
+  UKX: "TVC:UKX",
+  DAX: "TVC:DAX",
+  // Rates / volatility
+  US10Y: "TVC:US10Y",
+  VIX: "TVC:VIX",
+  // Crypto
+  "BTC/USD": "BITSTAMP:BTCUSD",
+  "ETH/USD": "BITSTAMP:ETHUSD",
+  // Equities
+  AAPL: "NASDAQ:AAPL",
+  TSLA: "NASDAQ:TSLA",
+  NVDA: "NASDAQ:NVDA",
+}
+
+/** TradingView symbol for a display symbol, falling back to the raw symbol. */
+export function tradingViewSymbol(display: string): string {
+  return TRADINGVIEW_SYMBOLS[display] ?? display.replace("/", "")
+}
+
 export type MarketQuote = {
   /** Latest traded/market price. */
   price: number

@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { useActivityLog } from "@/components/activity-tracker"
 import { useLedger } from "@/lib/ledger-store"
 import { useMarketQuotes } from "@/lib/use-market"
+import { TradingViewWidget } from "@/components/market/tradingview-widget"
 import {
   ArrowDownUp,
   RefreshCw,
@@ -30,14 +31,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-  Area,
-  AreaChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts"
 import { cn } from "@/lib/utils"
 
 const currencies = [
@@ -182,21 +175,6 @@ export default function ExchangePage() {
     const toUsd = quotes[`${toCurrency}/USD`]?.changePct ?? 0
     return Number((fromUsd - toUsd).toFixed(2))
   })()
-
-  // Build a coherent intraday curve anchored on the real current rate so the
-  // chart never contradicts the live quote.
-  const chartData = useMemo(() => {
-    const labels = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "Now"]
-    const drift = currentRate * (pairChangePct / 100)
-    return labels.map((time, i) => {
-      if (i === labels.length - 1) return { time, rate: currentRate }
-      // Walk backwards from the current rate along the day's net move, with a
-      // small deterministic wave so the line reads naturally.
-      const stepsBack = labels.length - 1 - i
-      const wave = Math.sin(i * 1.3) * currentRate * 0.0006
-      return { time, rate: currentRate - (drift / (labels.length - 1)) * stepsBack + wave }
-    })
-  }, [currentRate, pairChangePct])
 
   const numericFrom = parseFloat(fromAmount.replace(/,/g, "")) || 0
   const feeAmount = numericFrom * conversionFee
@@ -531,71 +509,22 @@ export default function ExchangePage() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="h-[200px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData}>
-                    <defs>
-                      <linearGradient
-                        id="colorRate"
-                        x1="0"
-                        y1="0"
-                        x2="0"
-                        y2="1"
-                      >
-                        <stop
-                          offset="5%"
-                          stopColor="hsl(var(--primary))"
-                          stopOpacity={0.3}
-                        />
-                        <stop
-                          offset="95%"
-                          stopColor="hsl(var(--primary))"
-                          stopOpacity={0}
-                        />
-                      </linearGradient>
-                    </defs>
-                    <XAxis
-                      dataKey="time"
-                      stroke="hsl(var(--muted-foreground))"
-                      fontSize={12}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <YAxis
-                      domain={["dataMin - 0.005", "dataMax + 0.005"]}
-                      stroke="hsl(var(--muted-foreground))"
-                      fontSize={12}
-                      tickLine={false}
-                      axisLine={false}
-                      tickFormatter={(value) => value.toFixed(4)}
-                    />
-                    <Tooltip
-                      content={({ active, payload }) => {
-                        if (active && payload && payload.length) {
-                          return (
-                            <div className="rounded-lg border border-border bg-card p-2 shadow-lg">
-                              <p className="text-xs text-muted-foreground">
-                                {payload[0].payload.time}
-                              </p>
-                              <p className="text-sm font-bold text-foreground">
-                                {(payload[0].value as number).toFixed(4)}
-                              </p>
-                            </div>
-                          )
-                        }
-                        return null
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="rate"
-                      stroke="hsl(var(--primary))"
-                      strokeWidth={2}
-                      fillOpacity={1}
-                      fill="url(#colorRate)"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+              <div className="h-[220px] w-full">
+                <TradingViewWidget
+                  scriptSrc="embed-widget-mini-symbol-overview.js"
+                  config={{
+                    symbol: `FX:${fromCurrency}${toCurrency}`,
+                    width: "100%",
+                    height: "100%",
+                    locale: "en",
+                    dateRange: "1D",
+                    colorTheme: "dark",
+                    isTransparent: true,
+                    autosize: true,
+                    chartOnly: false,
+                  }}
+                  height="100%"
+                />
               </div>
             </CardContent>
           </Card>

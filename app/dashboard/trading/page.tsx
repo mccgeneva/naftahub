@@ -46,6 +46,8 @@ import { useActivityLog } from "@/components/activity-tracker"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { useLedger } from "@/lib/ledger-store"
 import { useMarketQuotes } from "@/lib/use-market"
+import { TradingViewWidget } from "@/components/market/tradingview-widget"
+import { tradingViewSymbol } from "@/lib/market-symbols"
 
 type Signal = "BUY" | "SELL" | "HOLD"
 
@@ -489,7 +491,36 @@ export default function TradingPage() {
         </div>
 
         {/* Markets */}
-        <TabsContent value="markets" className="mt-6">
+        <TabsContent value="markets" className="mt-6 space-y-6">
+          {/* Real-time TradingView chart — switch instruments via the watchlist. */}
+          <Card className="bg-card border-border overflow-hidden">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg font-semibold">Live Chart</CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">Real-time market data · TradingView</p>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[420px] w-full">
+                <TradingViewWidget
+                  scriptSrc="embed-widget-advanced-chart.js"
+                  config={{
+                    autosize: true,
+                    symbol: tradingViewSymbol("XAU/USD"),
+                    interval: "60",
+                    timezone: "Etc/UTC",
+                    theme: "dark",
+                    style: "1",
+                    locale: "en",
+                    hide_side_toolbar: true,
+                    allow_symbol_change: true,
+                    watchlist: INSTRUMENT_SYMBOLS.map((s) => tradingViewSymbol(s)),
+                    support_host: "https://www.tradingview.com",
+                  }}
+                  height="100%"
+                />
+              </div>
+            </CardContent>
+          </Card>
+
           <Card className="bg-card border-border">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <div>

@@ -1,55 +1,83 @@
 import { NextResponse } from "next/server"
 import { YAHOO_SYMBOLS, type MarketQuoteMap } from "@/lib/market-symbols"
 
-// Live market data is fetched server-side from Yahoo Finance's public chart
-// endpoint (no API key required). Fetching on the server avoids browser CORS
-// restrictions and lets us cache responses so we don't hammer the upstream.
+// Numeric market data (used by the currency converter and trade tickets) is
+// fetched server-side from Yahoo Finance's public *batch* spark endpoint — one
+// request returns every requested symbol, which avoids the per-symbol rate
+// limiting (HTTP 429) we hit when calling the chart endpoint in parallel.
+// Results are cached in-memory for a short window so repeated client polls and
+// multiple users share a single upstream call.
 export const runtime = "nodejs"
-// Revalidate the upstream fetches every 20s; quotes are near-real-time.
-const REVALIDATE_SECONDS = 20
 
-type YahooChartResponse = {
-  chart?: {
+const CACHE_TTL_MS = 15_000
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
+
+type SparkResponse = {
+  spark?: {
     result?: Array<{
-      meta?: {
-        regularMarketPrice?: number
-        chartPreviousClose?: number
-        previousClose?: number
-      }
+      symbol?: string
+      response?: Array<{
+        meta?: {
+          regularMarketPrice?: number
+          chartPreviousClose?: number
+          previousClose?: number
+        }
+      }>
     }>
   }
 }
 
-async function fetchQuote(yahooSymbol: string): Promise<{ price: number; changePct: number } | null> {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
-    yahooSymbol,
-  )}?interval=1d&range=1d`
-  try {
-    const res = await fetch(url, {
-      headers: {
-        // Yahoo rejects requests without a browser-like User-Agent.
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-        Accept: "application/json",
-      },
-      next: { revalidate: REVALIDATE_SECONDS },
-    })
-    if (!res.ok) return null
-    const json = (await res.json()) as YahooChartResponse
-    const meta = json.chart?.result?.[0]?.meta
-    if (!meta || typeof meta.regularMarketPrice !== "number") return null
-    const price = meta.regularMarketPrice
-    const prevClose =
-      typeof meta.chartPreviousClose === "number"
-        ? meta.chartPreviousClose
-        : typeof meta.previousClose === "number"
-          ? meta.previousClose
-          : price
-    const changePct = prevClose > 0 ? ((price - prevClose) / prevClose) * 100 : 0
-    return { price, changePct: Number(changePct.toFixed(2)) }
-  } catch {
-    return null
+// Module-level cache shared across requests on the same server instance.
+const cache = new Map<string, { quote: { price: number; changePct: number }; ts: number }>()
+
+type SparkMeta = NonNullable<
+  NonNullable<NonNullable<SparkResponse["spark"]>["result"]>[number]["response"]
+>[number]["meta"]
+
+function toQuote(meta: SparkMeta) {
+  if (!meta || typeof meta.regularMarketPrice !== "number") return null
+  const price = meta.regularMarketPrice
+  const prevClose =
+    typeof meta.chartPreviousClose === "number"
+      ? meta.chartPreviousClose
+      : typeof meta.previousClose === "number"
+        ? meta.previousClose
+        : price
+  const changePct = prevClose > 0 ? ((price - prevClose) / prevClose) * 100 : 0
+  return { price, changePct: Number(changePct.toFixed(2)) }
+}
+
+// Fetch many Yahoo symbols in a single request, retrying on the alternate host.
+async function fetchBatch(yahooSymbols: string[]): Promise<Record<string, { price: number; changePct: number }>> {
+  const out: Record<string, { price: number; changePct: number }> = {}
+  if (yahooSymbols.length === 0) return out
+  const query = yahooSymbols.map((s) => encodeURIComponent(s)).join(",")
+  const hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
+
+  for (const host of hosts) {
+    try {
+      const res = await fetch(
+        `https://${host}/v7/finance/spark?symbols=${query}&interval=1d&range=1d`,
+        {
+          headers: { "User-Agent": UA, Accept: "application/json" },
+          cache: "no-store",
+        },
+      )
+      if (!res.ok) continue
+      const json = (await res.json()) as SparkResponse
+      const results = json.spark?.result ?? []
+      for (const r of results) {
+        const meta = r.response?.[0]?.meta
+        const quote = toQuote(meta)
+        if (r.symbol && quote) out[r.symbol] = quote
+      }
+      if (Object.keys(out).length > 0) return out
+    } catch {
+      // try next host
+    }
   }
+  return out
 }
 
 export async function GET(request: Request) {
@@ -59,30 +87,45 @@ export async function GET(request: Request) {
     .map((s) => s.trim())
     .filter(Boolean)
 
-  // Default to the full universe when no specific symbols are requested.
   const displaySymbols = requested.length > 0 ? requested : Object.keys(YAHOO_SYMBOLS)
-
-  // De-duplicate and keep only symbols we know how to map.
   const unique = Array.from(new Set(displaySymbols)).filter((s) => YAHOO_SYMBOLS[s])
 
-  const results = await Promise.all(
-    unique.map(async (display) => {
-      const quote = await fetchQuote(YAHOO_SYMBOLS[display])
-      return [display, quote] as const
-    }),
-  )
-
+  const now = Date.now()
   const quotes: MarketQuoteMap = {}
-  for (const [display, quote] of results) {
-    if (quote) quotes[display] = quote
+  const staleYahoo: string[] = []
+
+  // Serve fresh cache hits immediately; collect the rest for a batch fetch.
+  for (const display of unique) {
+    const yahoo = YAHOO_SYMBOLS[display]
+    const cached = cache.get(yahoo)
+    if (cached && now - cached.ts < CACHE_TTL_MS) {
+      quotes[display] = cached.quote
+    } else {
+      staleYahoo.push(yahoo)
+    }
+  }
+
+  if (staleYahoo.length > 0) {
+    const fetched = await fetchBatch(staleYahoo)
+    for (const display of unique) {
+      const yahoo = YAHOO_SYMBOLS[display]
+      const q = fetched[yahoo]
+      if (q) {
+        cache.set(yahoo, { quote: q, ts: now })
+        quotes[display] = q
+      } else {
+        // Fall back to the last known value if the upstream omitted it.
+        const cached = cache.get(yahoo)
+        if (cached) quotes[display] = cached.quote
+      }
+    }
   }
 
   return NextResponse.json(
     { quotes, updatedAt: new Date().toISOString() },
     {
       headers: {
-        // Allow the CDN/browser to reuse for a short window with SWR semantics.
-        "Cache-Control": `public, s-maxage=${REVALIDATE_SECONDS}, stale-while-revalidate=60`,
+        "Cache-Control": "public, s-maxage=15, stale-while-revalidate=60",
       },
     },
   )
