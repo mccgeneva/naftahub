@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import {
   Award,
   BadgeCheck,
@@ -91,6 +92,7 @@ export default function CertificatesPage() {
   const { balanceFor, totalIn, currencies } = useLedger()
   const { requests, hydrated, addRequest, recordDownload } = useCertificateRequests()
   const logActivity = useActivityLog()
+  const router = useRouter()
 
   // ---- Account holder + banking snapshot fields ----------------------------
   const banking = (user.banking ?? []) as { label: string; value: string }[]
@@ -352,7 +354,16 @@ export default function CertificatesPage() {
                 return (
                   <div
                     key={req.id}
-                    className="flex flex-col gap-3 rounded-lg border border-border bg-secondary/30 p-4 sm:flex-row sm:items-center sm:justify-between"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => router.push(`/dashboard/certificates/${encodeURIComponent(req.id)}`)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        router.push(`/dashboard/certificates/${encodeURIComponent(req.id)}`)
+                      }
+                    }}
+                    className="flex cursor-pointer flex-col gap-3 rounded-lg border border-border bg-secondary/30 p-4 transition-colors hover:border-primary/40 hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div className="flex items-start gap-3">
                       <div className="rounded-lg bg-primary/10 p-2">
@@ -372,7 +383,7 @@ export default function CertificatesPage() {
                         </p>
                       </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2" onClick={(e) => e.stopPropagation()}>
                       <Badge variant="secondary" className={cn("shrink-0", statusStyles[req.status])}>
                         {req.status === "pending" && <Clock className="mr-1 h-3 w-3" />}
                         {req.status === "approved" && <Check className="mr-1 h-3 w-3" />}

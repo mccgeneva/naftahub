@@ -137,7 +137,7 @@ export function PortfolioOverview() {
             {currencyBalances.map((cb) => (
               <Link
                 key={cb.currency}
-                href={`/dashboard/accounts?currency=${cb.currency}`}
+                href={`/dashboard/accounts/${cb.currency === "EUR" ? "ACC-001" : `ACC-${cb.currency}`}`}
                 aria-label={`View ${cb.name} account`}
                 className="group rounded-lg border border-border bg-secondary/40 p-4 transition-colors hover:border-primary/40 hover:bg-secondary/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
