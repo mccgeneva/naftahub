@@ -3,6 +3,8 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { scopedKey } from "@/lib/user-scope"
 import { buildInstrumentIdentifiers } from "@/lib/instrument-identifiers"
+import { mirrorSubmission } from "@/lib/approval-sync"
+import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 
 /**
  * Ensure an instrument carries the full identifier set. Records created before

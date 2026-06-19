@@ -2,6 +2,8 @@
 
 import { createContext, useContext, useEffect, useState } from "react"
 import { scopedKey } from "@/lib/user-scope"
+import { mirrorSubmission } from "@/lib/approval-sync"
+import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 
 export type LeverageRequestStatus =
   | "pending" // activation requested, awaiting admin
@@ -88,6 +90,8 @@ export const RISK_THRESHOLDS = {
 
 export interface LeverageRequest {
   id: string
+  /** DB approval id once mirrored, so admin decisions can be reconciled back. */
+  approvalId?: string
   account: LeverageAccountKey
   accountLabel: string
   equity: number // client's own allocated funds (base margin)
@@ -271,6 +275,10 @@ export function LeverageRequestsProvider({ children }: { children: React.ReactNo
     }
   }, [hydrated])
 
+  // Reconcile administrator decisions on activation requests (pending →
+  // approved/rejected) made cross-client in the DB back into local records.
+  useApprovalReconcile("leverage", hydrated, requests, setRequests)
+
   const addRequest: LeverageRequestsContextValue["addRequest"] = (request) => {
     const full: LeverageRequest = {
       ...request,
@@ -278,6 +286,18 @@ export function LeverageRequestsProvider({ children }: { children: React.ReactNo
       submittedAt: new Date().toISOString(),
     }
     setRequests((prev) => [full, ...prev])
+    // Mirror the activation request into the DB for cross-client review.
+    void mirrorSubmission({
+      kind: "leverage",
+      title: `${full.accountLabel} · 1:${full.leverageRatio}`,
+      summary: `${full.currency} ${full.equity.toLocaleString("en-US")} equity at 1:${full.leverageRatio} on ${full.accountLabel} (buying power ${full.currency} ${full.buyingPower.toLocaleString("en-US")})`,
+      amount: full.equity,
+      currency: full.currency,
+      payload: { localId: full.id, account: full.account, leverageRatio: full.leverageRatio, instrumentType: full.instrumentType },
+    }).then((approvalId) => {
+      if (!approvalId) return
+      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+    })
     return full
   }
 

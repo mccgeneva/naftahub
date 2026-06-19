@@ -2,11 +2,15 @@
 
 import { createContext, useContext, useEffect, useState } from "react"
 import { scopedKey } from "@/lib/user-scope"
+import { mirrorSubmission } from "@/lib/approval-sync"
+import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 
 export type PPPRequestStatus = "pending" | "approved" | "rejected"
 
 export interface PPPRequest {
   id: string
+  /** DB approval id once mirrored, so admin decisions can be reconciled back. */
+  approvalId?: string
   programId: string
   programName: string
   expectedReturn: string
@@ -95,6 +99,9 @@ export function PPPRequestsProvider({ children }: { children: React.ReactNode })
     }
   }, [hydrated])
 
+  // Reconcile administrator decisions made cross-client (in the DB) back here.
+  useApprovalReconcile("ppp", hydrated, requests, setRequests)
+
   const addRequest: PPPRequestsContextValue["addRequest"] = (request) => {
     const full: PPPRequest = {
       ...request,
@@ -102,6 +109,18 @@ export function PPPRequestsProvider({ children }: { children: React.ReactNode })
       submittedAt: new Date().toISOString(),
     }
     setRequests((prev) => [full, ...prev])
+    // Mirror into the DB so the Administrator can review it cross-client.
+    void mirrorSubmission({
+      kind: "ppp",
+      title: full.programName,
+      summary: `${full.currency} ${full.amount.toLocaleString("en-US")} into ${full.programName} (${full.expectedReturn} ${full.returnFrequency})`,
+      amount: full.amount,
+      currency: full.currency,
+      payload: { localId: full.id, programId: full.programId, sourceOfFunds: full.sourceOfFunds },
+    }).then((approvalId) => {
+      if (!approvalId) return
+      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+    })
     return full
   }
 

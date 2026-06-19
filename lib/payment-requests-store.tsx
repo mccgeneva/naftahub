@@ -3,11 +3,15 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { generateUetr } from "@/lib/swift-gpi"
 import { scopedKey } from "@/lib/user-scope"
+import { mirrorSubmission } from "@/lib/approval-sync"
+import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 
 export type PaymentRequestStatus = "pending" | "approved" | "rejected"
 
 export interface PaymentRequest {
   id: string
+  /** DB approval id once mirrored, so admin decisions can be reconciled back. */
+  approvalId?: string
   uetr: string // SWIFT gpi Unique End-to-End Transaction Reference (UUID v4)
   beneficiary: string
   beneficiaryCountry: string
@@ -121,8 +125,27 @@ export function PaymentRequestsProvider({ children }: { children: React.ReactNod
       submittedAt: new Date().toISOString(),
     }
     setRequests((prev) => [full, ...prev])
+    // Mirror into the DB-backed approvals backbone so the Administrator can see
+    // and decide this payment cross-client. We do NOT attach a server-side
+    // ledger effect: the client ledger still lives in localStorage, so the
+    // debit is applied locally on reconcile to avoid double counting.
+    void mirrorSubmission({
+      kind: "payment",
+      title: `Payment to ${full.beneficiary}`,
+      summary: `${full.currency} ${full.amount.toLocaleString("en-US")} to ${full.beneficiary}${full.reference ? ` · ${full.reference}` : ""}`,
+      amount: full.total,
+      currency: full.currency,
+      payload: { localId: full.id, uetr: full.uetr, iban: full.iban, swiftCode: full.swiftCode },
+    }).then((approvalId) => {
+      if (!approvalId) return
+      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+    })
     return full
   }
+
+  // Reconcile administrator decisions made cross-client (in the DB) back into
+  // the local records, so the client sees approve/reject outcomes here too.
+  useApprovalReconcile("payment", hydrated, requests, setRequests)
 
   const approveRequest: PaymentRequestsContextValue["approveRequest"] = (id, routing) => {
     let updated: PaymentRequest | null = null
