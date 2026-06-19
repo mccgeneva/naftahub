@@ -70,6 +70,7 @@ import {
 } from "@/lib/monetization-requests-store"
 import { generateInstrumentCertificate } from "@/lib/certificate-pdf"
 import { generateMt760, generateMt799 } from "@/lib/swift-mt"
+import { buildInstrumentIdentifiers } from "@/lib/instrument-identifiers"
 
 const MONETIZATION_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "AED", "SGD"]
 
@@ -257,6 +258,11 @@ export default function InstrumentsPage() {
     const expiry = new Date(now)
     expiry.setFullYear(expiry.getFullYear() + 1)
 
+    // Generate the full set of securities/settlement identifiers (valid ISIN,
+    // Common Code, serial, governing rules) and the issuing bank's verified BIC
+    // and registered address so the instrument and its certificate are complete.
+    const identifiers = buildInstrumentIdentifiers(issuingBank, meta.short, now)
+
     const newInstrument = addInstrument({
       id: `${meta.short}-${now.getTime().toString().slice(-6)}`,
       type: meta.short,
@@ -272,6 +278,7 @@ export default function InstrumentsPage() {
       assignable: true,
       monetizable: true,
       tradeType,
+      ...identifiers,
     })
 
     const tradeTypeLabel = tradeTypeLabels[tradeType] ?? "(not specified)"
@@ -565,6 +572,17 @@ export default function InstrumentsPage() {
       expiryDate: instrument.expiryDate,
       assignable: instrument.assignable,
       monetizable: instrument.monetizable,
+      isin: instrument.isin,
+      commonCode: instrument.commonCode,
+      cusip: instrument.cusip,
+      serialNumber: instrument.serialNumber,
+      issuerBic: instrument.issuerBic,
+      issuerAddress: instrument.issuerAddress,
+      issuerCountry: instrument.issuerCountry,
+      placeOfIssue: instrument.placeOfIssue,
+      governingLaw: instrument.governingLaw,
+      deliveryMethod: instrument.deliveryMethod,
+      form: instrument.form,
     })
     toast.success("Certificate downloaded", {
       description: `The certificate for ${instrument.id} has been generated as a PDF.`,
@@ -1334,24 +1352,57 @@ export default function InstrumentsPage() {
                 <p className="mt-1 text-2xl font-bold text-foreground">
                   {formatCurrency(viewTarget.faceValue, viewTarget.currency)}
                 </p>
+                {viewTarget.isin && (
+                  <p className="mt-1 font-mono text-xs tracking-wider text-muted-foreground">
+                    ISIN {viewTarget.isin}
+                  </p>
+                )}
               </div>
+              {(viewTarget.isin || viewTarget.serialNumber) && (
+                <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2">
+                  {(
+                    [
+                      ["ISIN", viewTarget.isin],
+                      ["Common Code", viewTarget.commonCode],
+                      ["CUSIP", viewTarget.cusip],
+                      ["Serial / Reference", viewTarget.serialNumber],
+                      ["SWIFT / BIC", viewTarget.issuerBic],
+                      ["Governing Rules", viewTarget.governingLaw],
+                      ["Delivery", viewTarget.deliveryMethod],
+                      ["Form", viewTarget.form],
+                    ] as [string, string | undefined][]
+                  )
+                    .filter(([, value]) => Boolean(value))
+                    .map(([label, value]) => (
+                      <div key={label} className="bg-card p-3">
+                        <p className="text-xs text-muted-foreground">{label}</p>
+                        <p className="mt-0.5 font-mono text-sm font-medium text-foreground break-words">{value}</p>
+                      </div>
+                    ))}
+                </div>
+              )}
               <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2">
-                {[
-                  ["Issuing Bank", viewTarget.issuer],
-                  ["Credit Rating", viewTarget.rating],
-                  ["Purpose", viewTarget.purpose],
-                  ["Status", viewTarget.status.charAt(0).toUpperCase() + viewTarget.status.slice(1)],
-                  ["Issued Date", viewTarget.issuedDate],
-                  ["Expiry Date", viewTarget.expiryDate],
-                  ["Days Remaining", `${viewTarget.daysRemaining} days`],
-                  ["Assignable", viewTarget.assignable ? "Yes" : "No"],
-                  ["Monetizable", viewTarget.monetizable ? "Yes" : "No"],
-                ].map(([label, value]) => (
-                  <div key={label} className="bg-card p-3">
-                    <p className="text-xs text-muted-foreground">{label}</p>
-                    <p className="mt-0.5 text-sm font-medium text-foreground break-words">{value}</p>
-                  </div>
-                ))}
+                {(
+                  [
+                    ["Issuing Bank", viewTarget.issuer],
+                    ["Registered Office", viewTarget.issuerAddress],
+                    ["Credit Rating", viewTarget.rating],
+                    ["Purpose", viewTarget.purpose],
+                    ["Status", viewTarget.status.charAt(0).toUpperCase() + viewTarget.status.slice(1)],
+                    ["Issued Date", viewTarget.issuedDate],
+                    ["Expiry Date", viewTarget.expiryDate],
+                    ["Days Remaining", `${viewTarget.daysRemaining} days`],
+                    ["Assignable", viewTarget.assignable ? "Yes" : "No"],
+                    ["Monetizable", viewTarget.monetizable ? "Yes" : "No"],
+                  ] as [string, string | undefined][]
+                )
+                  .filter(([, value]) => Boolean(value))
+                  .map(([label, value]) => (
+                    <div key={label} className="bg-card p-3">
+                      <p className="text-xs text-muted-foreground">{label}</p>
+                      <p className="mt-0.5 text-sm font-medium text-foreground break-words">{value}</p>
+                    </div>
+                  ))}
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setViewTarget(null)}>
