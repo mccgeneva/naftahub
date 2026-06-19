@@ -1,11 +1,12 @@
 "use client"
 
-import { BadgeCheck } from "lucide-react"
+import { BadgeCheck, FileText, ExternalLink } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { useCurrentUser } from "@/lib/use-current-user"
+import { KYC_DOCUMENT_LABELS, blobFileUrl } from "@/lib/kyc-types"
 
 function InfoList({ items }: { items: { label: string; value: string; icon: React.ElementType }[] }) {
   return (
@@ -137,6 +138,49 @@ export default function ProfilePage() {
                 <p className="text-muted-foreground">Given Names: <span className="text-foreground font-medium">{user.passportMeta.givenNames}</span></p>
                 <p className="text-muted-foreground">Valid until: <span className="text-foreground font-medium">{user.passportMeta.validUntil}</span></p>
               </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* KYC Documents */}
+      {user.kycDocuments && user.kycDocuments.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">KYC Documents</CardTitle>
+            <CardDescription>Identity and compliance documents on file</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {user.kycDocuments.map((doc) => (
+                <a
+                  key={doc.pathname}
+                  href={blobFileUrl(doc.pathname)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group flex flex-col overflow-hidden rounded-lg border border-border bg-secondary/30 transition-colors hover:border-primary"
+                >
+                  <div className="relative aspect-[3/4] w-full overflow-hidden bg-secondary">
+                    <img
+                      src={blobFileUrl(doc.pathname) || "/placeholder.svg"}
+                      alt={doc.label}
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-2 p-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-foreground">
+                          {KYC_DOCUMENT_LABELS[doc.type]}
+                        </p>
+                        <p className="truncate text-xs text-muted-foreground">{doc.label}</p>
+                      </div>
+                    </div>
+                    <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  </div>
+                </a>
+              ))}
             </div>
           </CardContent>
         </Card>

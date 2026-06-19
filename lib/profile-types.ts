@@ -25,6 +25,7 @@ import {
   Hash,
 } from "lucide-react"
 import type { ProfileItem, UserProfile } from "@/lib/users"
+import type { KycDocument } from "@/lib/kyc-types"
 
 /** A profile row without its (non-serializable) icon component. */
 export interface SerializableProfileItem {
@@ -61,6 +62,10 @@ export interface SerializableUserProfile {
   banking: SerializableProfileItem[]
   passportImage?: string
   passportMeta?: UserProfile["passportMeta"]
+  /** KYC documents extracted from an uploaded onboarding PDF. */
+  kycDocuments?: KycDocument[]
+  /** Blob pathname of the original uploaded KYC PDF. */
+  kycPdfPathname?: string
 }
 
 // Pick a sensible icon for a profile row based on its label so hydrated dynamic
