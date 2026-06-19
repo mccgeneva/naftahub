@@ -69,9 +69,11 @@ export function Instruments() {
             const progressPercent = Math.min(100, (instrument.daysRemaining / 365) * 100)
 
             return (
-              <div
+              <Link
                 key={instrument.id}
-                className="rounded-lg border border-border bg-secondary/30 p-4"
+                href={`/dashboard/instruments?id=${instrument.id}`}
+                aria-label={`View instrument ${instrument.id}`}
+                className="block rounded-lg border border-border bg-secondary/30 p-4 transition-colors hover:border-primary/40 hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
@@ -170,7 +172,7 @@ export function Instruments() {
                   </div>
                   <Progress value={progressPercent} className="h-1" />
                 </div>
-              </div>
+              </Link>
             )
           })}
           </div>
