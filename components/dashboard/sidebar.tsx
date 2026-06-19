@@ -33,6 +33,7 @@ import {
   ScrollText,
   Award,
   LogOut,
+  MessageSquareText,
   type LucideIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -60,6 +61,7 @@ const navGroups: NavGroup[] = [
     icon: Building2,
     items: [
       { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
+      { title: "Bankeka Messenger", href: "/dashboard/bankeka", icon: MessageSquareText, badge: "BBM" },
       { title: "Payments & Payees", href: "/dashboard/payments", icon: ArrowLeftRight },
       { title: "Send Money", href: "/dashboard/send", icon: Send, badge: "P2P" },
       { title: "Beneficiaries", href: "/dashboard/beneficiaries", icon: Users },

@@ -30,6 +30,7 @@ import {
   ScrollText,
   Award,
   LogOut,
+  MessageSquareText,
   type LucideIcon,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -54,8 +55,9 @@ const navGroups: NavGroup[] = [
   {
     label: "Banking",
     items: [
-      { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
-      { title: "Payments & Payees", href: "/dashboard/payments", icon: ArrowLeftRight },
+        { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
+        { title: "Bankeka Messenger", href: "/dashboard/bankeka", icon: MessageSquareText, badge: "BBM" },
+        { title: "Payments & Payees", href: "/dashboard/payments", icon: ArrowLeftRight },
       { title: "Send Money", href: "/dashboard/send", icon: Send, badge: "P2P" },
       { title: "Beneficiaries", href: "/dashboard/beneficiaries", icon: Users },
       { title: "Transactions", href: "/dashboard/transactions", icon: CreditCard },
