@@ -1,6 +1,7 @@
 "use client"
 
-import { ArrowUpRight, ArrowDownRight, TrendingUp, Wallet, Building2, FileText } from "lucide-react"
+import Link from "next/link"
+import { ArrowUpRight, ArrowDownRight, TrendingUp, Wallet, Building2, FileText, ChevronRight } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import { useLedger, convertCurrency } from "@/lib/ledger-store"
@@ -92,6 +93,7 @@ export function PortfolioOverview() {
       trend: "up" as const,
       icon: FileText,
       description: "SBLC, MTN, BG",
+      href: "/dashboard/instruments",
     },
     {
       title: "Volume (30d)",
@@ -100,6 +102,7 @@ export function PortfolioOverview() {
       trend: "up" as const,
       icon: TrendingUp,
       description: "Payments received",
+      href: "/dashboard/transactions",
     },
     {
       title: "Bank Partners",
@@ -108,6 +111,7 @@ export function PortfolioOverview() {
       trend: "up" as const,
       icon: Building2,
       description: "Active connections",
+      href: "/dashboard/beneficiaries",
     },
   ]
 
@@ -131,63 +135,82 @@ export function PortfolioOverview() {
         <CardContent>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {currencyBalances.map((cb) => (
-              <div
+              <Link
                 key={cb.currency}
-                className="rounded-lg border border-border bg-secondary/40 p-4"
+                href={`/dashboard/accounts?currency=${cb.currency}`}
+                aria-label={`View ${cb.name} account`}
+                className="group rounded-lg border border-border bg-secondary/40 p-4 transition-colors hover:border-primary/40 hover:bg-secondary/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <div className="flex items-center gap-2">
                   <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-primary/15 px-1.5 text-xs font-semibold text-primary">
                     {cb.currency}
                   </span>
                   <span className="text-xs text-muted-foreground">{cb.name}</span>
+                  <ChevronRight className="ml-auto h-3.5 w-3.5 text-muted-foreground/50 transition-colors group-hover:text-primary" />
                 </div>
                 <div className="mt-2 text-xl font-bold text-foreground break-all">
                   {cb.formatted}
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
-          <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
-            <span className="text-xs text-muted-foreground">
+          <Link
+            href="/dashboard/accounts"
+            className="group mt-4 flex items-center justify-between border-t border-border pt-3 transition-colors hover:text-primary focus-visible:outline-none"
+          >
+            <span className="text-xs text-muted-foreground transition-colors group-hover:text-primary">
               Total across {heldCurrencies} currencies (EUR equivalent)
             </span>
-            <span className="text-sm font-bold text-foreground">{formatEur(totalBalance)}</span>
-          </div>
+            <span className="flex items-center gap-1 text-sm font-bold text-foreground transition-colors group-hover:text-primary">
+              {formatEur(totalBalance)}
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 transition-colors group-hover:text-primary" />
+            </span>
+          </Link>
         </CardContent>
       </Card>
 
       {/* Stat cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       {stats.map((stat) => (
-        <Card key={stat.title} className="bg-card border-border">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              {stat.title}
-            </CardTitle>
-            <div className="rounded-lg bg-secondary p-2">
-              <stat.icon className="h-4 w-4 text-primary" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-foreground">{stat.value}</div>
-            <div className="flex items-center gap-2 mt-1">
-              <div
-                className={cn(
-                  "flex items-center text-xs font-medium",
-                  stat.trend === "up" ? "text-green-500" : "text-red-500"
-                )}
-              >
-                {stat.trend === "up" ? (
-                  <ArrowUpRight className="h-3 w-3 mr-0.5" />
-                ) : (
-                  <ArrowDownRight className="h-3 w-3 mr-0.5" />
-                )}
-                {stat.change}
+        <Link
+          key={stat.title}
+          href={stat.href}
+          aria-label={`View ${stat.title}`}
+          className="group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Card className="h-full bg-card border-border transition-colors group-hover:border-primary/40 group-hover:bg-secondary/30">
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                {stat.title}
+              </CardTitle>
+              <div className="rounded-lg bg-secondary p-2 transition-colors group-hover:bg-primary/15">
+                <stat.icon className="h-4 w-4 text-primary" />
               </div>
-              <span className="text-xs text-muted-foreground">{stat.description}</span>
-            </div>
-          </CardContent>
-        </Card>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div className="text-2xl font-bold text-foreground">{stat.value}</div>
+                <ChevronRight className="h-4 w-4 text-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-primary" />
+              </div>
+              <div className="flex items-center gap-2 mt-1">
+                <div
+                  className={cn(
+                    "flex items-center text-xs font-medium",
+                    stat.trend === "up" ? "text-green-500" : "text-red-500"
+                  )}
+                >
+                  {stat.trend === "up" ? (
+                    <ArrowUpRight className="h-3 w-3 mr-0.5" />
+                  ) : (
+                    <ArrowDownRight className="h-3 w-3 mr-0.5" />
+                  )}
+                  {stat.change}
+                </div>
+                <span className="text-xs text-muted-foreground">{stat.description}</span>
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
       ))}
       </div>
     </div>
