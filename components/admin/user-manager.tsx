@@ -86,7 +86,7 @@ export function UserManager() {
   const [nationality, setNationality] = useState("")
   const [address, setAddress] = useState("")
   const [website, setWebsite] = useState("")
-  const [accountBadge, setAccountBadge] = useState("Client Account")
+  const [accountBadge, setAccountBadge] = useState("PRO Account")
   const [creating, setCreating] = useState(false)
 
   // Edit form
@@ -146,7 +146,7 @@ export function UserManager() {
     setNationality("")
     setAddress("")
     setWebsite("")
-    setAccountBadge("Client Account")
+    setAccountBadge("PRO Account")
   }
 
   const handleCreate = async () => {
@@ -205,7 +205,9 @@ export function UserManager() {
     setEditCompany(u.company)
     setEditRole(u.role)
     setEditEmail(u.email)
-    setEditBadge("")
+    // Coerce any legacy/blank badge to one of the two valid tiers so the editor
+    // always shows a real account type.
+    setEditBadge(u.accountBadge?.toLowerCase().includes("avant") ? "Avant-garde Account" : "PRO Account")
   }
 
   const handleEdit = async () => {
@@ -483,11 +485,8 @@ export function UserManager() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Client Account">Client Account</SelectItem>
                     <SelectItem value="PRO Account">PRO Account</SelectItem>
                     <SelectItem value="Avant-garde Account">Avant-garde Account</SelectItem>
-                    <SelectItem value="Institutional">Institutional</SelectItem>
-                    <SelectItem value="Private Client">Private Client</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -585,13 +584,16 @@ export function UserManager() {
                 <Input id="ue-role" value={editRole} onChange={(e) => setEditRole(e.target.value)} />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="ue-badge">Account tier (optional)</Label>
-                <Input
-                  id="ue-badge"
-                  placeholder="Leave blank to keep current"
-                  value={editBadge}
-                  onChange={(e) => setEditBadge(e.target.value)}
-                />
+                <Label htmlFor="ue-badge">Account tier</Label>
+                <Select value={editBadge} onValueChange={setEditBadge}>
+                  <SelectTrigger id="ue-badge" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="PRO Account">PRO Account</SelectItem>
+                    <SelectItem value="Avant-garde Account">Avant-garde Account</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <div className="space-y-2">

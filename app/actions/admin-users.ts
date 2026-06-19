@@ -40,9 +40,21 @@ export interface AdminUserView {
   fullName: string
   company: string
   role: string
+  accountBadge: string
   createdAt: string
   updatedAt: string
   createdBy: string
+}
+
+// Client accounts can only ever be one of two membership tiers. Anything else
+// (legacy "Client Account", a blank value, etc.) is normalised to PRO so a
+// client never sees an account type the platform does not offer.
+export const ACCOUNT_TIERS = ["PRO Account", "Avant-garde Account"] as const
+
+export function normalizeAccountBadge(badge: string | undefined | null): string {
+  const v = (badge ?? "").trim().toLowerCase()
+  if (v.includes("avant") || v.includes("institutional")) return "Avant-garde Account"
+  return "PRO Account"
 }
 
 export type AdminUsersResult =
@@ -68,6 +80,7 @@ function toView(rec: DynamicUserRecord): AdminUserView {
     fullName: rec.profile.fullName,
     company: rec.profile.company,
     role: rec.profile.role,
+    accountBadge: normalizeAccountBadge(rec.profile.accountBadge),
     createdAt: rec.createdAt,
     updatedAt: rec.updatedAt,
     createdBy: rec.createdBy,
@@ -196,7 +209,7 @@ function buildProfile(input: CreateUserInput, id: string, email: string, passwor
     company,
     role,
     headerTag: `${company.toUpperCase().slice(0, 18)} · CLIENT`,
-    accountBadge: input.accountBadge || "Client Account",
+    accountBadge: normalizeAccountBadge(input.accountBadge),
     accountEmail: email,
     supportEmail: email,
     cardHolderPerson: (fullName || company).toUpperCase(),
@@ -344,7 +357,7 @@ export async function editUser(input: EditUserInput): Promise<AdminUserMutation>
       profile.headerTag = `${input.company.trim().toUpperCase().slice(0, 18)} · CLIENT`
     }
     if (input.role?.trim()) profile.role = input.role.trim()
-    if (input.accountBadge?.trim()) profile.accountBadge = input.accountBadge.trim()
+    if (input.accountBadge?.trim()) profile.accountBadge = normalizeAccountBadge(input.accountBadge)
 
     let email = existing.email
     if (input.email?.trim() && input.email.trim().toLowerCase() !== existing.email.toLowerCase()) {
@@ -411,7 +424,10 @@ export async function getMyProfile(): Promise<SerializableUserProfile | null> {
     const session = await resolveCurrentSession()
     if (!session || session.kind !== "dynamic") return null
     const rec = await getDynamicUserById(session.id)
-    return rec?.profile ?? null
+    if (!rec) return null
+    // Guarantee the client only ever sees a real account tier (PRO / Avant-garde),
+    // even for accounts created before the tier was restricted.
+    return { ...rec.profile, accountBadge: normalizeAccountBadge(rec.profile.accountBadge) }
   } catch {
     return null
   }
@@ -448,7 +464,9 @@ export async function getMyIdentity(): Promise<MyIdentity | null> {
     }
     const rec = await getDynamicUserById(session.id)
     if (!rec) return null
-    return { kind: "dynamic", id: session.id, profile: rec.profile }
+    // Coerce the stored badge so legacy/blank tiers resolve to PRO / Avant-garde.
+    const profile = { ...rec.profile, accountBadge: normalizeAccountBadge(rec.profile.accountBadge) }
+    return { kind: "dynamic", id: session.id, profile }
   } catch {
     return null
   }
