@@ -152,6 +152,59 @@ export function InstrumentRequestsProvider({ children }: { children: React.React
     approvedStatus: "active",
   })
 
+  // Materialise administrator-ISSUED instruments (cross-device, read-only for
+  // the client). Clients can no longer create instruments themselves; the
+  // administrator issues them through the approvals backbone, which delivers
+  // the full instrument in the approval payload (`issuedByAdmin`). We pull any
+  // approved, admin-issued instrument that is not already in the local
+  // portfolio and add it as an active holding. Deduped by id so repeated polls
+  // never create duplicates.
+  useEffect(() => {
+    if (!hydrated) return
+    let cancelled = false
+    const pull = async () => {
+      try {
+        const res = await fetch("/api/approvals?kind=instrument")
+        if (!res.ok) return
+        const data = (await res.json()) as {
+          ok: boolean
+          items: { id: string; status: string; decidedAt?: string; payload?: Record<string, unknown> }[]
+        }
+        const issued = (data.items ?? []).filter((it) => {
+          const p = it.payload as { issuedByAdmin?: boolean; instrument?: unknown } | undefined
+          return it.status === "approved" && !!p?.issuedByAdmin && !!p.instrument
+        })
+        if (!issued.length || cancelled) return
+        setInstruments((prev) => {
+          const have = new Set(prev.map((i) => i.id))
+          const additions: Instrument[] = []
+          for (const it of issued) {
+            const inst = (it.payload as { instrument?: Instrument }).instrument
+            if (!inst?.id || have.has(inst.id)) continue
+            additions.push(
+              ensureIdentifiers({
+                ...inst,
+                status: "active",
+                approvalId: it.id,
+                decidedAt: it.decidedAt ?? new Date().toISOString(),
+              }),
+            )
+            have.add(inst.id)
+          }
+          return additions.length ? [...additions, ...prev] : prev
+        })
+      } catch {
+        // ignore network/parse errors — the next poll retries
+      }
+    }
+    void pull()
+    const id = setInterval(pull, 30000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [hydrated])
+
   const addInstrument: InstrumentRequestsContextValue["addInstrument"] = (instrument) => {
     const full: Instrument = {
       ...instrument,

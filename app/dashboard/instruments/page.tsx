@@ -167,22 +167,14 @@ const purposeNames: Record<string, string> = {
 }
 
 export default function InstrumentsPage() {
-  const [isNewInstrumentOpen, setIsNewInstrumentOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [filterType, setFilterType] = useState("all")
   const [filterStatus, setFilterStatus] = useState("all")
-  const { instruments, addInstrument, cancelInstrument, deleteInstrument } =
-    useInstrumentRequests()
+  // Read-only portfolio: clients can no longer create, cancel, or delete
+  // instruments. Bank instruments are issued and managed exclusively by the
+  // administrator; the client view only displays them.
+  const { instruments } = useInstrumentRequests()
   const { addRequest: addMonetizationRequest } = useMonetizationRequests()
-
-  // New trade form state
-  const [tradeType, setTradeType] = useState("")
-  const [instrumentType, setInstrumentType] = useState("")
-  const [faceValue, setFaceValue] = useState("")
-  const [currency, setCurrency] = useState("eur")
-  const [issuingBank, setIssuingBank] = useState("")
-  const [purpose, setPurpose] = useState("")
-  const [formError, setFormError] = useState<string | null>(null)
 
   // View Details + Assign/Transfer/Monetize dialogs
   const [viewTarget, setViewTarget] = useState<Instrument | null>(null)
@@ -231,118 +223,6 @@ export default function InstrumentsPage() {
     })
   }
 
-  const resetForm = () => {
-    setTradeType("")
-    setInstrumentType("")
-    setFaceValue("")
-    setCurrency("eur")
-    setIssuingBank("")
-    setPurpose("")
-    setFormError(null)
-  }
-
-  const handleSubmitRequest = () => {
-    const numericValue = Number.parseFloat(faceValue.replace(/[^0-9.]/g, ""))
-    if (!instrumentType) {
-      setFormError("Please select an instrument type.")
-      return
-    }
-    if (!faceValue || Number.isNaN(numericValue) || numericValue <= 0) {
-      setFormError("Please enter a valid face value greater than 0.")
-      return
-    }
-    if (!issuingBank) {
-      setFormError("Please select an issuing bank.")
-      return
-    }
-
-    const meta = typeMeta[instrumentType]
-    const now = new Date()
-    const expiry = new Date(now)
-    expiry.setFullYear(expiry.getFullYear() + 1)
-
-    // Generate the full set of securities/settlement identifiers (valid ISIN,
-    // Common Code, serial, governing rules) and the issuing bank's verified BIC
-    // and registered address so the instrument and its certificate are complete.
-    const identifiers = buildInstrumentIdentifiers(issuingBank, meta.short, now)
-
-    const newInstrument = addInstrument({
-      id: `${meta.short}-${now.getTime().toString().slice(-6)}`,
-      type: meta.short,
-      typeFull: meta.full,
-      issuer: bankNames[issuingBank] ?? "—",
-      faceValue: numericValue,
-      currency: currency.toUpperCase(),
-      issuedDate: now.toISOString().split("T")[0],
-      expiryDate: expiry.toISOString().split("T")[0],
-      daysRemaining: 365,
-      rating: "AAA+",
-      purpose: purposeNames[purpose] ?? "Trade Finance",
-      assignable: true,
-      monetizable: true,
-      tradeType,
-      ...identifiers,
-    })
-
-    const tradeTypeLabel = tradeTypeLabels[tradeType] ?? "(not specified)"
-    const formattedFace = `${currency.toUpperCase()} ${numericValue.toLocaleString()}`
-    logActivity({
-      action: `Submitted a ${meta.short} request of ${formattedFace} from ${newInstrument.issuer} for Administrator approval`,
-      category: "Bank Instruments",
-      details: {
-        summary: `Client submitted a request to ${tradeTypeLabel} a ${meta.full} (${meta.short}) with a face value of ${formattedFace}, issued by ${newInstrument.issuer}, for ${newInstrument.purpose}. The request is pending mandatory Administrator approval before the instrument is issued.`,
-        referenceId: newInstrument.id,
-        instrumentType: `${meta.short} — ${meta.full}`,
-        tradeType: tradeTypeLabel,
-        faceValue: formattedFace,
-        currency: currency.toUpperCase(),
-        issuingBank: newInstrument.issuer,
-        purpose: newInstrument.purpose,
-        creditRating: newInstrument.rating,
-        issuedDate: newInstrument.issuedDate,
-        expiryDate: newInstrument.expiryDate,
-        status: "Pending Administrator Approval",
-      },
-    })
-    toast.success("Instrument request submitted for approval", {
-      description: `Your ${meta.short} request for ${formattedFace} is pending Administrator approval. It will be issued once approved.`,
-    })
-    resetForm()
-    setIsNewInstrumentOpen(false)
-  }
-
-  const handleCancelOrder = (instrument: Instrument) => {
-    cancelInstrument(instrument.id)
-    logActivity({
-      action: `Cancelled ${instrument.type} order ${instrument.id} (${formatCurrency(instrument.faceValue, instrument.currency)})`,
-      category: "Bank Instruments",
-      details: {
-        summary: `Client cancelled the ${instrument.typeFull} (${instrument.type}) order ${instrument.id} with a face value of ${formatCurrency(instrument.faceValue, instrument.currency)}, issued by ${instrument.issuer}. The order is retained as cancelled.`,
-        referenceId: instrument.id,
-        instrumentType: `${instrument.type} — ${instrument.typeFull}`,
-        faceValue: formatCurrency(instrument.faceValue, instrument.currency),
-        issuingBank: instrument.issuer,
-        previousStatus: instrument.status,
-        newStatus: "Cancelled",
-      },
-    })
-  }
-
-  const handleDeleteOrder = (instrument: Instrument) => {
-    deleteInstrument(instrument.id)
-    logActivity({
-      action: `Deleted ${instrument.type} order ${instrument.id} (${formatCurrency(instrument.faceValue, instrument.currency)})`,
-      category: "Bank Instruments",
-      details: {
-        summary: `Client permanently deleted the ${instrument.typeFull} (${instrument.type}) order ${instrument.id} with a face value of ${formatCurrency(instrument.faceValue, instrument.currency)}, issued by ${instrument.issuer}.`,
-        referenceId: instrument.id,
-        instrumentType: `${instrument.type} — ${instrument.typeFull}`,
-        faceValue: formatCurrency(instrument.faceValue, instrument.currency),
-        issuingBank: instrument.issuer,
-        action: "Permanently removed from list",
-      },
-    })
-  }
 
   const viewInstrument = (instrument: Instrument) => {
     router.push(`/dashboard/instruments/${encodeURIComponent(instrument.id)}`)
@@ -751,150 +631,6 @@ export default function InstrumentsPage() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          <Dialog
-            open={isNewInstrumentOpen}
-            onOpenChange={(open) => {
-              setIsNewInstrumentOpen(open)
-              if (!open) resetForm()
-            }}
-          >
-            <DialogTrigger asChild>
-              <Button size="sm">
-                <Plus className="mr-2 h-4 w-4" />
-                New Trade
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[500px]">
-              <DialogHeader>
-                <DialogTitle>Trade Bank Instrument</DialogTitle>
-                <DialogDescription>
-                  Purchase, lease, or assign a bank instrument
-                </DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label>Trade Type</Label>
-                  <Select value={tradeType} onValueChange={setTradeType}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select trade type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="purchase">
-                        Purchase (23% of face value)
-                      </SelectItem>
-                      <SelectItem value="lease">
-                        Lease (4% of face value)
-                      </SelectItem>
-                      <SelectItem value="assign">
-                        Assignee (0.2% of face value)
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Instrument Type *</Label>
-                  <Select value={instrumentType} onValueChange={setInstrumentType}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select instrument" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="sblc">
-                        SBLC - Stand-by Letter of Credit
-                      </SelectItem>
-                      <SelectItem value="mtn">MTN - Medium Term Note</SelectItem>
-                      <SelectItem value="bg">BG - Bank Guarantee</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="grid gap-2">
-                    <Label>Face Value *</Label>
-                    <Input
-                      placeholder="50,000,000"
-                      type="text"
-                      value={faceValue}
-                      onChange={(e) => setFaceValue(e.target.value)}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>Currency</Label>
-                    <Select value={currency} onValueChange={setCurrency}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="EUR" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="eur">EUR</SelectItem>
-                        <SelectItem value="usd">USD</SelectItem>
-                        <SelectItem value="gbp">GBP</SelectItem>
-                        <SelectItem value="chf">CHF</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Issuing Bank *</Label>
-                  <Select value={issuingBank} onValueChange={setIssuingBank}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select bank" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="natwest">NatWest Bank PLC</SelectItem>
-                      <SelectItem value="jpmorgan">JP Morgan Chase</SelectItem>
-                      <SelectItem value="ubs">UBS Switzerland</SelectItem>
-                      <SelectItem value="hsbc">HSBC London</SelectItem>
-                      <SelectItem value="deutsche">Deutsche Bank AG</SelectItem>
-                      <SelectItem value="barclays">Barclays Bank</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Purpose</Label>
-                  <Select value={purpose} onValueChange={setPurpose}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select purpose" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="trade">Trade Finance</SelectItem>
-                      <SelectItem value="investment">Investment</SelectItem>
-                      <SelectItem value="commodity">Commodity Trading</SelectItem>
-                      <SelectItem value="performance">
-                        Performance Guarantee
-                      </SelectItem>
-                      <SelectItem value="ppp">PPP/Yield Program</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3">
-                  <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                  <p className="text-xs text-muted-foreground text-pretty">
-                    All bank instrument requests require mandatory Administrator approval.
-                    Submitting this form creates a pending request — the instrument is only issued
-                    once an Administrator approves it.
-                  </p>
-                </div>
-                {formError && (
-                  <p className="text-sm text-destructive" role="alert">
-                    {formError}
-                  </p>
-                )}
-              </div>
-              <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setIsNewInstrumentOpen(false)
-                    resetForm()
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button onClick={handleSubmitRequest}>
-                  <ShieldCheck className="mr-2 h-4 w-4" />
-                  Submit for Approval
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
         </div>
       </div>
 
@@ -1144,22 +880,6 @@ export default function InstrumentsPage() {
                               <Download className="mr-2 h-4 w-4" />
                               Download Certificate
                             </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            {instrument.status !== "cancelled" && (
-                              <DropdownMenuItem
-                                onClick={() => handleCancelOrder(instrument)}
-                              >
-                                <XCircle className="mr-2 h-4 w-4" />
-                                Cancel Order
-                              </DropdownMenuItem>
-                            )}
-                            <DropdownMenuItem
-                              onClick={() => handleDeleteOrder(instrument)}
-                              className="text-red-500 focus:text-red-500"
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete Order
-                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </div>
@@ -1347,22 +1067,6 @@ export default function InstrumentsPage() {
                             <DropdownMenuItem onClick={() => viewInstrument(instrument)}>
                               <ExternalLink className="mr-2 h-4 w-4" />
                               View Details
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            {instrument.status !== "cancelled" && (
-                              <DropdownMenuItem
-                                onClick={() => handleCancelOrder(instrument)}
-                              >
-                                <XCircle className="mr-2 h-4 w-4" />
-                                Cancel Order
-                              </DropdownMenuItem>
-                            )}
-                            <DropdownMenuItem
-                              onClick={() => handleDeleteOrder(instrument)}
-                              className="text-red-500 focus:text-red-500"
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete Order
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
