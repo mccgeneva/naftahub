@@ -14,6 +14,16 @@ async function getSessionUser(): Promise<UserProfile | undefined> {
   return session?.profile
 }
 
+/**
+ * The id whose ledger the signed-in session operates on. For a Sub-account this
+ * is its Master's id (shared balance); for everyone else, their own id. Returns
+ * undefined when there is no valid session.
+ */
+async function getDataOwnerId(): Promise<string | undefined> {
+  const session = await resolveCurrentSession()
+  return session?.dataOwnerId
+}
+
 async function requireAdmin(passcode: string): Promise<UserProfile> {
   const user = await getSessionUser()
   if (!user) throw new Error("Your session has expired. Please sign in again.")
@@ -124,24 +134,28 @@ async function upsertEntry(userId: string, entry: LedgerEntry): Promise<void> {
 
 // --- Customer-facing (own ledger only) --------------------------------------
 
-/** Return the signed-in user's ledger entries, scoped to their session. */
+/**
+ * Return the signed-in user's ledger entries. Scoped to the data-owner id, so a
+ * Sub-account transparently reads its Master's shared balance.
+ */
 export async function getMyLedger(): Promise<LedgerEntry[]> {
-  const user = await getSessionUser()
-  if (!user) return []
+  const ownerId = await getDataOwnerId()
+  if (!ownerId) return []
   try {
-    return await readLedger(user.id)
+    return await readLedger(ownerId)
   } catch (err) {
     console.log("[v0] getMyLedger query failed:", (err as Error).message)
     return []
   }
 }
 
-/** Persist (insert or update) a single ledger entry for the signed-in user. */
+/** Persist (insert or update) a single ledger entry for the signed-in user
+ *  (or, for a sub, the shared Master ledger). */
 export async function persistMyLedgerEntry(entry: LedgerEntry): Promise<{ ok: boolean }> {
-  const user = await getSessionUser()
-  if (!user) return { ok: false }
+  const ownerId = await getDataOwnerId()
+  if (!ownerId) return { ok: false }
   try {
-    await upsertEntry(user.id, entry)
+    await upsertEntry(ownerId, entry)
     return { ok: true }
   } catch (err) {
     console.log("[v0] persistMyLedgerEntry failed:", (err as Error).message)
@@ -149,13 +163,14 @@ export async function persistMyLedgerEntry(entry: LedgerEntry): Promise<{ ok: bo
   }
 }
 
-/** Remove a single ledger entry for the signed-in user. */
+/** Remove a single ledger entry for the signed-in user (shared Master ledger
+ *  for a sub). */
 export async function removeMyLedgerEntry(entryId: string): Promise<{ ok: boolean }> {
-  const user = await getSessionUser()
-  if (!user) return { ok: false }
+  const ownerId = await getDataOwnerId()
+  if (!ownerId) return { ok: false }
   try {
     await ensureTable()
-    await query(`DELETE FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [user.id, entryId])
+    await query(`DELETE FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [ownerId, entryId])
     return { ok: true }
   } catch (err) {
     console.log("[v0] removeMyLedgerEntry failed:", (err as Error).message)

@@ -1,13 +1,14 @@
 "use server"
 
 import { query } from "@/lib/db"
-import { type UserProfile } from "@/lib/users"
 import { resolveCurrentSession } from "@/lib/session-user"
 import type { Instrument } from "@/lib/instrument-requests-store"
 
-async function getSessionUser(): Promise<UserProfile | undefined> {
+/** Id whose instruments this session operates on — the Master's id for a
+ *  Sub-account (shared bank instruments), otherwise the account's own id. */
+async function getDataOwnerId(): Promise<string | undefined> {
   const session = await resolveCurrentSession()
-  return session?.profile
+  return session?.dataOwnerId
 }
 
 function rowToInstrument(row: Record<string, unknown>): Instrument {
@@ -27,22 +28,24 @@ async function readInstruments(userId: string): Promise<Instrument[]> {
   return rows.map(rowToInstrument)
 }
 
-/** Return the signed-in user's instrument requests. */
+/** Return the signed-in user's instrument requests (the shared Master portfolio
+ *  for a Sub-account). */
 export async function getMyInstruments(): Promise<Instrument[]> {
-  const user = await getSessionUser()
-  if (!user) return []
+  const ownerId = await getDataOwnerId()
+  if (!ownerId) return []
   try {
-    return await readInstruments(user.id)
+    return await readInstruments(ownerId)
   } catch (err) {
     console.log("[v0] getMyInstruments query failed:", (err as Error).message)
     return []
   }
 }
 
-/** Insert or update a single instrument request for the signed-in user. */
+/** Insert or update a single instrument request for the signed-in user (shared
+ *  Master portfolio for a sub). */
 export async function saveInstrumentRequest(instrument: Instrument): Promise<{ ok: boolean }> {
-  const user = await getSessionUser()
-  if (!user) return { ok: false }
+  const ownerId = await getDataOwnerId()
+  if (!ownerId) return { ok: false }
   try {
     await query(
       `INSERT INTO instrument_requests
@@ -55,7 +58,7 @@ export async function saveInstrumentRequest(instrument: Instrument): Promise<{ o
          updated_at = now(),
          payload = EXCLUDED.payload`,
       [
-        user.id,
+        ownerId,
         instrument.id,
         instrument.status,
         instrument.submittedAt ?? null,
@@ -70,13 +73,14 @@ export async function saveInstrumentRequest(instrument: Instrument): Promise<{ o
   }
 }
 
-/** Remove a single instrument request for the signed-in user. */
+/** Remove a single instrument request for the signed-in user (shared Master
+ *  portfolio for a sub). */
 export async function removeInstrumentRequest(requestId: string): Promise<{ ok: boolean }> {
-  const user = await getSessionUser()
-  if (!user) return { ok: false }
+  const ownerId = await getDataOwnerId()
+  if (!ownerId) return { ok: false }
   try {
     await query(`DELETE FROM instrument_requests WHERE user_id = $1 AND request_id = $2`, [
-      user.id,
+      ownerId,
       requestId,
     ])
     return { ok: true }

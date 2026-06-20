@@ -38,6 +38,20 @@ export interface SerializableProfileItem {
  * server-only DB layer. */
 export type UserStatus = "active" | "suspended" | "inactive"
 
+/**
+ * Position of an account within the referral hierarchy.
+ *  - "master" — a standalone / sponsor account others are linked under.
+ *  - "sub"    — a Sub-account (S): independent login, but shares the Master's
+ *               balance & bank instruments and routes outgoing payments through
+ *               the Master for consent (in addition to admin approval).
+ *  - "child"  — a Child-account (C): a fully independent account linked to a
+ *               Master for referral attribution / network visibility only.
+ *
+ * Defined in this client-safe module so both the admin UI and the server may
+ * import it without pulling in any server-only dependency.
+ */
+export type AccountRelationship = "master" | "sub" | "child"
+
 /** A full UserProfile with all icon components stripped — safe to send from a
  * Server Action to the client. */
 export interface SerializableUserProfile {
@@ -66,6 +80,17 @@ export interface SerializableUserProfile {
   kycDocuments?: KycDocument[]
   /** Blob pathname of the original uploaded KYC PDF. */
   kycPdfPathname?: string
+  // --- Referral hierarchy ---------------------------------------------------
+  /** Where this account sits in the referral hierarchy. Absent ⇒ "master"
+   *  (a standalone account), so legacy accounts behave exactly as before. */
+  relationship?: AccountRelationship
+  /** The Master (sponsor / referrer) account id this account is linked under.
+   *  Only meaningful for "sub" and "child" accounts. */
+  masterId?: string
+  /** Display name of the Master account (denormalised for cheap UI labelling). */
+  masterName?: string
+  /** Login email of the Master account (denormalised for audit / display). */
+  masterEmail?: string
 }
 
 // Pick a sensible icon for a profile row based on its label so hydrated dynamic

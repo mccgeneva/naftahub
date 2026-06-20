@@ -19,7 +19,21 @@ export type { ApprovalKind }
  * shares one table, one query path, and one audit trail.
  */
 
-export type ApprovalStatus = "pending" | "approved" | "rejected" | "cancelled"
+/**
+ * Lifecycle of a request:
+ *  - "pending"          — awaiting the administrator's decision.
+ *  - "awaiting_master"  — admin approved, but a Sub-account's Master must also
+ *                          consent before the money moves. Treated as "still
+ *                          pending" by the client reconcile (no side effect yet)
+ *                          and excluded from the admin's pending queue.
+ *  - "approved"         — all required gates cleared; the ledger effect applies.
+ *  - "rejected"         — declined by the admin OR the Master.
+ *  - "cancelled"        — withdrawn by the owning client.
+ */
+export type ApprovalStatus = "pending" | "awaiting_master" | "approved" | "rejected" | "cancelled"
+
+/** A single party's verdict in the (possibly) two-gate decision. */
+export type GateDecision = "pending" | "approved" | "rejected"
 
 /**
  * Optional financial effect applied to the owner's server-authoritative ledger
@@ -54,6 +68,20 @@ export interface ApprovalRequest {
   decidedBy: string | null
   decidedAt: string | null
   createdAt: string
+  // --- Dual-gate (Sub-account) consent --------------------------------------
+  /** When true, a Master must also approve before the request executes. */
+  requiresMasterApproval: boolean
+  /** The Master account responsible for the second gate. */
+  masterId: string | null
+  /** The Master's verdict on the second gate. */
+  masterDecision: GateDecision
+  masterDecidedAt: string | null
+  /** The administrator's verdict on the first gate (mirrors `status` for
+   *  single-gate requests, distinct for dual-gate ones). */
+  adminDecision: GateDecision
+  /** Who actually initiated the request (the Sub-account), for audit. */
+  initiatedById: string | null
+  initiatedByName: string | null
 }
 
 export interface NewApprovalRequest {
@@ -66,6 +94,10 @@ export interface NewApprovalRequest {
   currency?: string | null
   payload?: Record<string, unknown>
   ledgerEffect?: LedgerEffect | null
+  requiresMasterApproval?: boolean
+  masterId?: string | null
+  initiatedById?: string | null
+  initiatedByName?: string | null
 }
 
 let ensured = false
@@ -90,10 +122,21 @@ async function ensureTable(): Promise<void> {
        created_at    timestamptz NOT NULL DEFAULT now()
      )`,
   )
-  // Indexes that match our two hot read paths: a client's own list, and the
-  // admin's global pending queue.
+  // Dual-gate (Sub-account) consent columns. Added via IF NOT EXISTS so the
+  // table migrates forward in place without dropping existing requests.
+  await query(`ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS requires_master_approval boolean NOT NULL DEFAULT false`)
+  await query(`ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS master_id text`)
+  await query(`ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS master_decision text NOT NULL DEFAULT 'pending'`)
+  await query(`ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS master_decided_at timestamptz`)
+  await query(`ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS admin_decision text NOT NULL DEFAULT 'pending'`)
+  await query(`ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS initiated_by_id text`)
+  await query(`ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS initiated_by_name text`)
+
+  // Indexes that match our hot read paths: a client's own list, the admin's
+  // global pending queue, and a Master's consent queue.
   await query(`CREATE INDEX IF NOT EXISTS approval_requests_user_idx ON approval_requests (user_id, created_at DESC)`)
   await query(`CREATE INDEX IF NOT EXISTS approval_requests_status_idx ON approval_requests (status, created_at DESC)`)
+  await query(`CREATE INDEX IF NOT EXISTS approval_requests_master_idx ON approval_requests (master_id, created_at DESC)`)
   ensured = true
 }
 
@@ -114,7 +157,36 @@ function rowToRequest(row: Record<string, unknown>): ApprovalRequest {
     decidedBy: (row.decided_by as string) ?? null,
     decidedAt: row.decided_at ? new Date(row.decided_at as string).toISOString() : null,
     createdAt: row.created_at ? new Date(row.created_at as string).toISOString() : new Date().toISOString(),
+    requiresMasterApproval: Boolean(row.requires_master_approval),
+    masterId: (row.master_id as string) ?? null,
+    masterDecision: ((row.master_decision as GateDecision) ?? "pending") || "pending",
+    masterDecidedAt: row.master_decided_at ? new Date(row.master_decided_at as string).toISOString() : null,
+    adminDecision: ((row.admin_decision as GateDecision) ?? "pending") || "pending",
+    initiatedById: (row.initiated_by_id as string) ?? null,
+    initiatedByName: (row.initiated_by_name as string) ?? null,
   }
+}
+
+/**
+ * Combine the two gate verdicts into the request's overall status.
+ *  - Any rejection ⇒ rejected.
+ *  - Admin approved + (no Master gate OR Master approved) ⇒ approved.
+ *  - Admin approved + Master gate still open ⇒ awaiting_master.
+ *  - Otherwise still pending the administrator.
+ */
+export function combineStatus(
+  adminDecision: GateDecision,
+  masterDecision: GateDecision,
+  requiresMaster: boolean,
+): ApprovalStatus {
+  if (adminDecision === "rejected" || (requiresMaster && masterDecision === "rejected")) {
+    return "rejected"
+  }
+  if (adminDecision === "approved") {
+    if (!requiresMaster || masterDecision === "approved") return "approved"
+    return "awaiting_master"
+  }
+  return "pending"
 }
 
 function genId(kind: ApprovalKind): string {
@@ -126,10 +198,12 @@ function genId(kind: ApprovalKind): string {
 export async function insertApproval(req: NewApprovalRequest): Promise<ApprovalRequest> {
   await ensureTable()
   const id = req.id ?? genId(req.kind)
+  const requiresMaster = Boolean(req.requiresMasterApproval && req.masterId)
   const { rows } = await query(
     `INSERT INTO approval_requests
-       (id, user_id, kind, status, title, summary, amount, currency, payload, ledger_effect)
-     VALUES ($1,$2,$3,'pending',$4,$5,$6,$7,$8::jsonb,$9::jsonb)
+       (id, user_id, kind, status, title, summary, amount, currency, payload, ledger_effect,
+        requires_master_approval, master_id, initiated_by_id, initiated_by_name)
+     VALUES ($1,$2,$3,'pending',$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13)
      RETURNING *`,
     [
       id,
@@ -141,6 +215,10 @@ export async function insertApproval(req: NewApprovalRequest): Promise<ApprovalR
       req.currency ?? null,
       JSON.stringify(req.payload ?? {}),
       req.ledgerEffect ? JSON.stringify(req.ledgerEffect) : null,
+      requiresMaster,
+      requiresMaster ? req.masterId : null,
+      req.initiatedById ?? null,
+      req.initiatedByName ?? null,
     ],
   )
   return rowToRequest(rows[0])
@@ -222,6 +300,90 @@ export async function decideApproval(
     [id, decision, decidedBy, note?.trim() || null],
   )
   return rows.length ? rowToRequest(rows[0]) : null
+}
+
+/**
+ * Record the ADMINISTRATOR's verdict (first gate). Recomputes the overall
+ * status from both gates so a dual-gate request lands on "awaiting_master"
+ * rather than "approved" until the Master also consents. Only acts while the
+ * request is still open (pending / awaiting_master).
+ */
+export async function recordAdminDecision(
+  id: string,
+  decision: "approved" | "rejected",
+  decidedBy: string,
+  note?: string,
+): Promise<ApprovalRequest | null> {
+  await ensureTable()
+  const existing = await getApprovalById(id)
+  if (!existing) return null
+  if (existing.status !== "pending" && existing.status !== "awaiting_master") return null
+  const status = combineStatus(decision, existing.masterDecision, existing.requiresMasterApproval)
+  const { rows } = await query(
+    `UPDATE approval_requests
+        SET admin_decision = $2, status = $3, decided_by = $4, decided_at = now(), decision_note = $5
+      WHERE id = $1 AND status IN ('pending','awaiting_master')
+      RETURNING *`,
+    [id, decision, status, decidedBy, note?.trim() || null],
+  )
+  return rows.length ? rowToRequest(rows[0]) : null
+}
+
+/**
+ * Record the MASTER's verdict (second gate) for a Sub-account request.
+ * Recomputes the overall status; money only moves once BOTH gates are approved.
+ * Only acts on requests that actually require the Master and are still open.
+ */
+export async function recordMasterDecision(
+  id: string,
+  masterId: string,
+  decision: "approved" | "rejected",
+  note?: string,
+): Promise<ApprovalRequest | null> {
+  await ensureTable()
+  const existing = await getApprovalById(id)
+  if (!existing) return null
+  if (!existing.requiresMasterApproval || existing.masterId !== masterId) return null
+  if (existing.status !== "pending" && existing.status !== "awaiting_master") return null
+  const status = combineStatus(existing.adminDecision, decision, true)
+  // Preserve any administrator note; only append the Master's note when given.
+  const mergedNote = note?.trim() ? `${existing.decisionNote ? `${existing.decisionNote} · ` : ""}Master: ${note.trim()}` : existing.decisionNote
+  const { rows } = await query(
+    `UPDATE approval_requests
+        SET master_decision = $2, master_decided_at = now(), status = $3, decision_note = $4
+      WHERE id = $1 AND master_id = $5 AND requires_master_approval = true
+        AND status IN ('pending','awaiting_master')
+      RETURNING *`,
+    [id, decision, status, mergedNote, masterId],
+  )
+  return rows.length ? rowToRequest(rows[0]) : null
+}
+
+/**
+ * The consent queue for a Master: every Sub-account request routed to them for
+ * a second-gate decision, newest first. Optionally restrict to those still
+ * awaiting the Master's verdict.
+ */
+export async function listApprovalsForMaster(
+  masterId: string,
+  opts?: { pendingOnly?: boolean },
+): Promise<ApprovalRequest[]> {
+  await ensureTable()
+  const { rows } = opts?.pendingOnly
+    ? await query(
+        `SELECT * FROM approval_requests
+          WHERE master_id = $1 AND requires_master_approval = true AND master_decision = 'pending'
+            AND status IN ('pending','awaiting_master')
+          ORDER BY created_at DESC`,
+        [masterId],
+      )
+    : await query(
+        `SELECT * FROM approval_requests
+          WHERE master_id = $1 AND requires_master_approval = true
+          ORDER BY created_at DESC`,
+        [masterId],
+      )
+  return rows.map(rowToRequest)
 }
 
 /** Client-side cancellation of their own still-pending request. */

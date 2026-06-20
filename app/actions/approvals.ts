@@ -1,7 +1,7 @@
 "use server"
 
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
-import { resolveCurrentSession, resolveAccountProfileById } from "@/lib/session-user"
+import { resolveCurrentSession, resolveAccountProfileById, resolveDataOwnerIdFor } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import { upsertLedgerEntry } from "@/lib/ledger-db"
 import type { LedgerEntry } from "@/lib/ledger-store"
@@ -10,8 +10,11 @@ import {
   insertApproval,
   listApprovalsForUser,
   listAllApprovals,
+  listApprovalsForMaster,
   countPendingByKind,
   decideApproval,
+  recordAdminDecision,
+  recordMasterDecision,
   cancelApproval,
   getApprovalById,
   type ApprovalRequest,
@@ -19,6 +22,7 @@ import {
   type LedgerEffect,
 } from "@/lib/approvals-db"
 import { KIND_LABELS, KIND_HREF, type ApprovalKind } from "@/lib/approval-kinds"
+import { MASTER_CONSENT_KINDS } from "@/lib/account-hierarchy"
 
 // --- Auth helpers -----------------------------------------------------------
 
@@ -52,6 +56,12 @@ export async function submitApproval(input: SubmitApprovalInput): Promise<Submit
     return { ok: false, error: "Unknown request type." }
   }
 
+  // A Sub-account's outgoing payments must clear a second gate: their Master's
+  // consent (in addition to administrator approval). Detected here from the
+  // authoritative session, so no client can opt out of the Master gate.
+  const requiresMasterApproval =
+    session.relationship === "sub" && !!session.masterId && MASTER_CONSENT_KINDS.has(input.kind)
+
   try {
     const request = await insertApproval({
       userId: session.id,
@@ -62,7 +72,28 @@ export async function submitApproval(input: SubmitApprovalInput): Promise<Submit
       currency: input.currency ?? null,
       payload: input.payload ?? {},
       ledgerEffect: input.ledgerEffect ?? null,
+      requiresMasterApproval,
+      masterId: requiresMasterApproval ? session.masterId : null,
+      initiatedById: requiresMasterApproval ? session.id : null,
+      initiatedByName: requiresMasterApproval ? session.profile.fullName : null,
     })
+
+    // Let the Master know one of their Sub-accounts needs their consent.
+    if (requiresMasterApproval && session.masterId) {
+      try {
+        await insertNotification({
+          userId: session.masterId,
+          tone: "warning",
+          title: "Sub-account payment needs your approval",
+          body: `${session.profile.fullName} requested an outgoing payment ("${
+            input.title?.trim() || KIND_LABELS[input.kind]
+          }") that requires your consent.`,
+          href: "/dashboard/network",
+        })
+      } catch (err) {
+        console.log("[v0] master consent notification failed:", (err as Error).message)
+      }
+    }
 
     // NOTE: We intentionally do NOT emit an activity-log email here. The
     // client flow that mirrors the submission (e.g. the Payments page) already

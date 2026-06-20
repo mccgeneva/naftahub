@@ -1,13 +1,14 @@
 "use server"
 
 import { query } from "@/lib/db"
-import { type UserProfile } from "@/lib/users"
 import { resolveCurrentSession } from "@/lib/session-user"
 import type { LeverageRequest } from "@/lib/leverage-requests-store"
 
-async function getSessionUser(): Promise<UserProfile | undefined> {
+/** Id whose leverage book this session operates on — the Master's id for a
+ *  Sub-account (leverage draws against the shared balance), else own id. */
+async function getDataOwnerId(): Promise<string | undefined> {
   const session = await resolveCurrentSession()
-  return session?.profile
+  return session?.dataOwnerId
 }
 
 function rowToRequest(row: Record<string, unknown>): LeverageRequest {
@@ -29,22 +30,23 @@ async function readRequests(userId: string): Promise<LeverageRequest[]> {
   return rows.map(rowToRequest)
 }
 
-/** Return the signed-in user's leverage requests. */
+/** Return the signed-in user's leverage requests (shared Master book for a sub). */
 export async function getMyLeverage(): Promise<LeverageRequest[]> {
-  const user = await getSessionUser()
-  if (!user) return []
+  const ownerId = await getDataOwnerId()
+  if (!ownerId) return []
   try {
-    return await readRequests(user.id)
+    return await readRequests(ownerId)
   } catch (err) {
     console.log("[v0] getMyLeverage query failed:", (err as Error).message)
     return []
   }
 }
 
-/** Insert or update a single leverage request for the signed-in user. */
+/** Insert or update a single leverage request for the signed-in user (shared
+ *  Master book for a sub). */
 export async function saveLeverageRequest(request: LeverageRequest): Promise<{ ok: boolean }> {
-  const user = await getSessionUser()
-  if (!user) return { ok: false }
+  const ownerId = await getDataOwnerId()
+  if (!ownerId) return { ok: false }
   try {
     await query(
       `INSERT INTO leverage_requests
@@ -58,7 +60,7 @@ export async function saveLeverageRequest(request: LeverageRequest): Promise<{ o
          updated_at = now(),
          payload = EXCLUDED.payload`,
       [
-        user.id,
+        ownerId,
         request.id,
         request.status,
         request.submittedAt ?? null,
@@ -74,13 +76,14 @@ export async function saveLeverageRequest(request: LeverageRequest): Promise<{ o
   }
 }
 
-/** Remove a single leverage request for the signed-in user. */
+/** Remove a single leverage request for the signed-in user (shared Master book
+ *  for a sub). */
 export async function removeLeverageRequest(requestId: string): Promise<{ ok: boolean }> {
-  const user = await getSessionUser()
-  if (!user) return { ok: false }
+  const ownerId = await getDataOwnerId()
+  if (!ownerId) return { ok: false }
   try {
     await query(`DELETE FROM leverage_requests WHERE user_id = $1 AND request_id = $2`, [
-      user.id,
+      ownerId,
       requestId,
     ])
     return { ok: true }
