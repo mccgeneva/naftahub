@@ -68,10 +68,15 @@ const IBAN_LENGTHS: Record<string, number> = {
   SE: 24, SI: 19, SK: 24,
 }
 
-// How many leading BBAN characters identify the bank, per country.
+// How many leading BBAN characters identify the bank, per country (ISO 13616
+// national bank-identifier lengths). Complete for every country in
+// IBAN_LENGTHS so a valid IBAN always yields a bank code for directory lookup.
 const IBAN_BANK_CODE_LENGTH: Record<string, number> = {
-  DE: 8, CH: 5, GB: 4, FR: 5, AT: 5, NL: 4, ES: 4, IT: 5, BE: 3, AE: 3,
-  LI: 5, LU: 3, MC: 5, PT: 4, IE: 6, SA: 2, QA: 4,
+  AD: 4, AE: 3, AT: 5, BE: 3, BG: 4, BH: 4, CH: 5, CY: 3, CZ: 4,
+  DE: 8, DK: 4, EE: 2, ES: 4, FI: 3, FR: 5, GB: 4, GR: 3, HR: 7,
+  HU: 3, IE: 4, IL: 3, IT: 5, KW: 4, LI: 5, LT: 5, LU: 3, LV: 4,
+  MC: 5, MT: 4, NL: 4, NO: 4, PL: 8, PT: 4, QA: 4, RO: 4, SA: 2,
+  SE: 3, SI: 5, SK: 4,
 }
 
 // Curated bank directory. Each entry can be matched by BIC (full or 6-char
@@ -114,6 +119,37 @@ const BANK_DIRECTORY: DirectoryEntry[] = [
   { name: "ING Bank N.V.", city: "Amsterdam", countryCode: "NL", bicPrefixes: ["INGBNL"], primaryBic: "INGBNL2A", address: "Bijlmerdreef 106", postalCode: "1102 CT", ibanBankCodes: [{ country: "NL", code: "INGB" }] },
   { name: "CaixaBank S.A.", city: "Barcelona", countryCode: "ES", bicPrefixes: ["CAIXES"], primaryBic: "CAIXESBB", address: "Calle Pintor Sorolla 2-4", postalCode: "46002", ibanBankCodes: [{ country: "ES", code: "2100" }] },
   { name: "UniCredit S.p.A.", city: "Milan", countryCode: "IT", bicPrefixes: ["UNCRIT"], primaryBic: "UNCRITMM", address: "Piazza Gae Aulenti 3", postalCode: "20154", ibanBankCodes: [{ country: "IT", code: "02008" }] },
+
+  // --- Pan-European fintech / e-money institutions (issue IBANs across many
+  //     countries; matched by their national bank code where applicable) ---
+  { name: "Revolut Bank UAB", city: "Vilnius", countryCode: "LT", bicPrefixes: ["REVOLT", "REVO"], primaryBic: "REVOLT21", address: "Konstitucijos pr. 21B", postalCode: "08130", ibanBankCodes: [{ country: "LT", code: "32500" }] },
+  { name: "UAB Paysera LT", city: "Vilnius", countryCode: "LT", bicPrefixes: ["EVIULT"], primaryBic: "EVIULT2V", address: "Pilaitės pr. 16", postalCode: "04352", ibanBankCodes: [{ country: "LT", code: "35000" }] },
+  { name: "Wise Europe SA", city: "Brussels", countryCode: "BE", bicPrefixes: ["TRWIBE"], primaryBic: "TRWIBEB1", address: "Avenue Louise 54", postalCode: "1050", ibanBankCodes: [{ country: "BE", code: "967" }] },
+  { name: "N26 Bank AG", city: "Berlin", countryCode: "DE", bicPrefixes: ["NTSBDE"], primaryBic: "NTSBDEB1", address: "Voltairestraße 8", postalCode: "10179", ibanBankCodes: [{ country: "DE", code: "10011001" }] },
+
+  // --- Lithuania (LT) ---
+  { name: "AB SEB bankas", city: "Vilnius", countryCode: "LT", bicPrefixes: ["CBVILT"], primaryBic: "CBVILT2X", address: "Konstitucijos pr. 24", postalCode: "08105", ibanBankCodes: [{ country: "LT", code: "70440" }] },
+  { name: "Swedbank AB (Lithuania)", city: "Vilnius", countryCode: "LT", bicPrefixes: ["HABALT"], primaryBic: "HABALT22", address: "Konstitucijos pr. 20A", postalCode: "03502", ibanBankCodes: [{ country: "LT", code: "73000" }] },
+  { name: "Luminor Bank AS Lithuania", city: "Vilnius", countryCode: "LT", bicPrefixes: ["AGBLLT"], primaryBic: "AGBLLT2X", address: "Konstitucijos pr. 21A", postalCode: "03601", ibanBankCodes: [{ country: "LT", code: "21400" }] },
+  { name: "Šiaulių bankas AB", city: "Šiauliai", countryCode: "LT", bicPrefixes: ["CBSBLT"], primaryBic: "CBSBLT26", address: "Tilžės g. 149", postalCode: "76348", ibanBankCodes: [{ country: "LT", code: "71800" }] },
+
+  // --- Latvia (LV, 4-letter bank code) ---
+  { name: "Swedbank AS (Latvia)", city: "Riga", countryCode: "LV", bicPrefixes: ["HABALV"], primaryBic: "HABALV22", address: "Balasta dambis 1A", postalCode: "LV-1048", ibanBankCodes: [{ country: "LV", code: "HABA" }] },
+  { name: "SEB banka AS", city: "Riga", countryCode: "LV", bicPrefixes: ["UNLALV"], primaryBic: "UNLALV2X", address: "Meistaru iela 1, Valdlauči", postalCode: "LV-1076", ibanBankCodes: [{ country: "LV", code: "UNLA" }] },
+  { name: "Luminor Bank AS (Latvia)", city: "Riga", countryCode: "LV", bicPrefixes: ["RIKOLV"], primaryBic: "RIKOLV2X", address: "Skanstes iela 12", postalCode: "LV-1013", ibanBankCodes: [{ country: "LV", code: "RIKO" }] },
+
+  // --- Estonia (EE, 2-digit bank code) ---
+  { name: "Swedbank AS (Estonia)", city: "Tallinn", countryCode: "EE", bicPrefixes: ["HABAEE"], primaryBic: "HABAEE2X", address: "Liivalaia 8", postalCode: "15040", ibanBankCodes: [{ country: "EE", code: "22" }] },
+  { name: "AS SEB Pank", city: "Tallinn", countryCode: "EE", bicPrefixes: ["EEUHEE"], primaryBic: "EEUHEE2X", address: "Tornimäe 2", postalCode: "15010", ibanBankCodes: [{ country: "EE", code: "10" }] },
+  { name: "AS LHV Pank", city: "Tallinn", countryCode: "EE", bicPrefixes: ["LHVBEE"], primaryBic: "LHVBEE22", address: "Tartu mnt 2", postalCode: "10145", ibanBankCodes: [{ country: "EE", code: "77" }] },
+
+  // --- Poland (PL, bank identified by first 3 of the 8-digit code; we match
+  //     the common full settlement codes of the largest banks) ---
+  { name: "PKO Bank Polski", city: "Warsaw", countryCode: "PL", bicPrefixes: ["BPKOPL"], primaryBic: "BPKOPLPW", address: "ul. Puławska 15", postalCode: "02-515", ibanBankCodes: [{ country: "PL", code: "10201026" }] },
+
+  // --- Ireland (IE, 4-letter bank code) ---
+  { name: "Allied Irish Banks plc", city: "Dublin", countryCode: "IE", bicPrefixes: ["AIBKIE"], primaryBic: "AIBKIE2D", address: "10 Molesworth Street", postalCode: "D02 R126", ibanBankCodes: [{ country: "IE", code: "AIBK" }] },
+  { name: "Bank of Ireland", city: "Dublin", countryCode: "IE", bicPrefixes: ["BOFIIE"], primaryBic: "BOFIIE2D", address: "40 Mespil Road", postalCode: "D04 C2N4", ibanBankCodes: [{ country: "IE", code: "BOFI" }] },
 ]
 
 function normalize(value: string): string {
