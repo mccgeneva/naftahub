@@ -593,3 +593,103 @@ export async function listSelectableClients(passcode: string): Promise<Selectabl
     return []
   }
 }
+
+/**
+ * Master candidates for the admin's relationship picker: every active account
+ * that is itself a top-level Master (so the hierarchy stays two levels deep).
+ * Passcode-gated. `excludeId` omits the account currently being edited.
+ */
+export async function listMasterCandidates(passcode: string, excludeId?: string): Promise<SelectableClient[]> {
+  try {
+    requireAdmin(passcode)
+    return (await listDynamicUsers())
+      .filter(
+        (u) =>
+          u.status === "active" &&
+          u.id !== excludeId &&
+          effectiveRelationship(u.profile.relationship) === "master",
+      )
+      .map((u) => ({
+        id: u.id,
+        fullName: u.profile.fullName,
+        company: u.profile.company,
+        email: u.email,
+        kind: "dynamic" as const,
+      }))
+  } catch {
+    return []
+  }
+}
+
+/** A linked account in a Master's network, as shown in "My Network". */
+export interface NetworkMember {
+  id: string
+  fullName: string
+  company: string
+  email: string
+  relationship: AccountRelationship
+  accountBadge: string
+  status: UserStatus
+  createdAt: string
+}
+
+/**
+ * The signed-in Master's network: every sub/child account linked under them.
+ * Resolved from the current session (no passcode — this is a client-facing
+ * view), so a client only ever sees their OWN dependants.
+ */
+export async function getMyNetwork(): Promise<NetworkMember[]> {
+  const { resolveCurrentSession } = await import("@/lib/session-user")
+  const session = await resolveCurrentSession()
+  if (!session) return []
+  try {
+    return (await listDynamicUsers())
+      .filter((u) => u.profile.masterId === session.id)
+      .map((u) => ({
+        id: u.id,
+        fullName: u.profile.fullName,
+        company: u.profile.company,
+        email: u.email,
+        relationship: effectiveRelationship(u.profile.relationship),
+        accountBadge: normalizeAccountBadge(u.profile.accountBadge),
+        status: u.status,
+        createdAt: u.createdAt,
+      }))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName))
+  } catch (err) {
+    console.log("[v0] getMyNetwork failed:", (err as Error).message)
+    return []
+  }
+}
+
+/** Lightweight hierarchy summary for the signed-in account (for dashboards). */
+export interface MyHierarchyInfo {
+  relationship: AccountRelationship
+  masterId?: string
+  masterName?: string
+  masterEmail?: string
+  networkCount: number
+}
+
+/** Returns the signed-in account's hierarchy position + dependant count. */
+export async function getMyHierarchyInfo(): Promise<MyHierarchyInfo | null> {
+  const { resolveCurrentSession } = await import("@/lib/session-user")
+  const session = await resolveCurrentSession()
+  if (!session) return null
+  const relationship = session.relationship
+  let networkCount = 0
+  if (relationship === "master") {
+    try {
+      networkCount = (await listDynamicUsers()).filter((u) => u.profile.masterId === session.id).length
+    } catch {
+      networkCount = 0
+    }
+  }
+  return {
+    relationship,
+    masterId: session.masterId,
+    masterName: session.profile.masterName,
+    masterEmail: session.profile.masterEmail,
+    networkCount,
+  }
+}

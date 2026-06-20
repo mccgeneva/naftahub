@@ -51,9 +51,12 @@ import {
   resetUserPassword,
   updateUserStatus,
   removeUser,
+  listMasterCandidates,
   type AdminUserView,
+  type SelectableClient,
 } from "@/app/actions/admin-users"
-import type { UserStatus } from "@/lib/profile-types"
+import type { UserStatus, AccountRelationship } from "@/lib/profile-types"
+import { RELATIONSHIP_OPTIONS, relationshipLabel, relationshipCode } from "@/lib/account-hierarchy"
 import { upload } from "@vercel/blob/client"
 import {
   type KycAnalysisResult,
@@ -97,7 +100,12 @@ export function UserManager() {
   const [address, setAddress] = useState("")
   const [website, setWebsite] = useState("")
   const [accountBadge, setAccountBadge] = useState("PRO Account")
+  const [relationship, setRelationship] = useState<AccountRelationship>("master")
+  const [masterId, setMasterId] = useState<string>("")
   const [creating, setCreating] = useState(false)
+
+  // Master candidates for the relationship picker (top-level accounts only).
+  const [masters, setMasters] = useState<SelectableClient[]>([])
 
   // KYC PDF auto-fill
   const [kycAnalyzing, setKycAnalyzing] = useState(false)
@@ -112,6 +120,8 @@ export function UserManager() {
   const [editRole, setEditRole] = useState("")
   const [editEmail, setEditEmail] = useState("")
   const [editBadge, setEditBadge] = useState("")
+  const [editRelationship, setEditRelationship] = useState<AccountRelationship>("master")
+  const [editMasterId, setEditMasterId] = useState<string>("")
   const [savingEdit, setSavingEdit] = useState(false)
 
   // Reset password dialog
@@ -139,6 +149,8 @@ export function UserManager() {
         setUsers(res.users)
       })
       .finally(() => setLoading(false))
+    // Refresh the Master candidate list alongside the user table.
+    listMasterCandidates(ADMIN_PASSCODE).then(setMasters)
   }
 
   useEffect(() => {
@@ -168,6 +180,8 @@ export function UserManager() {
     setAddress("")
     setWebsite("")
     setAccountBadge("PRO Account")
+    setRelationship("master")
+    setMasterId("")
     setKycResult(null)
     setKycFileName("")
     setKycAnalyzing(false)
@@ -272,6 +286,10 @@ export function UserManager() {
       toast.error("Enter at least a full name or a company.")
       return
     }
+    if (relationship !== "master" && !masterId) {
+      toast.error("Select a Master account for a sub or child account.")
+      return
+    }
     setCreating(true)
     const res = await createUser({
       passcode: ADMIN_PASSCODE,
@@ -285,6 +303,8 @@ export function UserManager() {
       address: address.trim() || undefined,
       website: website.trim() || undefined,
       accountBadge: accountBadge.trim() || undefined,
+      relationship,
+      masterId: relationship !== "master" ? masterId : undefined,
       passportImage: kycResult?.passportImagePathname
         ? blobFileUrl(kycResult.passportImagePathname)
         : undefined,
@@ -332,10 +352,16 @@ export function UserManager() {
     // Coerce any legacy/blank badge to one of the two valid tiers so the editor
     // always shows a real account type.
     setEditBadge(u.accountBadge?.toLowerCase().includes("avant") ? "Avant-garde Account" : "PRO Account")
+    setEditRelationship(u.relationship)
+    setEditMasterId(u.masterId ?? "")
   }
 
   const handleEdit = async () => {
     if (!editTarget) return
+    if (editRelationship !== "master" && !editMasterId) {
+      toast.error("Select a Master account for a sub or child account.")
+      return
+    }
     setSavingEdit(true)
     const res = await editUser({
       passcode: ADMIN_PASSCODE,
@@ -345,6 +371,8 @@ export function UserManager() {
       role: editRole.trim() || undefined,
       email: editEmail.trim() || undefined,
       accountBadge: editBadge.trim() || undefined,
+      relationship: editRelationship,
+      masterId: editRelationship !== "master" ? editMasterId : undefined,
       adminName: "Administrator",
     })
     setSavingEdit(false)
@@ -518,11 +546,25 @@ export function UserManager() {
                       <Badge variant="outline" className={cn("text-[10px]", meta.className)}>
                         {meta.label}
                       </Badge>
+                      {u.relationship !== "master" && (
+                        <Badge
+                          variant="outline"
+                          className="border-primary/30 bg-primary/10 text-[10px] text-primary"
+                        >
+                          {relationshipCode(u.relationship)} · {relationshipLabel(u.relationship)}
+                        </Badge>
+                      )}
                     </div>
                     <p className="truncate text-sm text-muted-foreground">{u.company}</p>
                     <p className="truncate text-xs text-muted-foreground">
                       {u.email} · {u.role} · created {fmtDate(u.createdAt)}
                     </p>
+                    {u.relationship !== "master" && u.masterName && (
+                      <p className="truncate text-xs text-primary/80">
+                        Linked to {u.masterName}
+                        {u.relationship === "sub" ? " · shares balance & instruments" : ""}
+                      </p>
+                    )}
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
                     <Button variant="outline" size="sm" onClick={() => openReset(u)}>
@@ -718,6 +760,55 @@ export function UserManager() {
                 </Select>
               </div>
             </div>
+            {/* Referral hierarchy placement */}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="um-relationship">Account type</Label>
+                <Select value={relationship} onValueChange={(v) => setRelationship(v as AccountRelationship)}>
+                  <SelectTrigger id="um-relationship" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {RELATIONSHIP_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {RELATIONSHIP_OPTIONS.find((o) => o.value === relationship)?.description}
+                </p>
+              </div>
+              {relationship !== "master" && (
+                <div className="space-y-2">
+                  <Label htmlFor="um-master">Master account</Label>
+                  <Select value={masterId} onValueChange={setMasterId}>
+                    <SelectTrigger id="um-master" className="w-full">
+                      <SelectValue placeholder="Select a Master account" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {masters.length === 0 ? (
+                        <SelectItem value="__none__" disabled>
+                          No Master accounts available
+                        </SelectItem>
+                      ) : (
+                        masters.map((m) => (
+                          <SelectItem key={m.id} value={m.id}>
+                            {m.fullName} {m.company ? `— ${m.company}` : ""}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {relationship === "sub"
+                      ? "Shares this Master's balance and bank instruments."
+                      : "Linked to this Master for referral attribution only."}
+                  </p>
+                </div>
+              )}
+            </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="um-email">Login email (optional)</Label>
@@ -826,6 +917,52 @@ export function UserManager() {
             <div className="space-y-2">
               <Label htmlFor="ue-email">Login email</Label>
               <Input id="ue-email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} />
+            </div>
+            {/* Referral hierarchy placement */}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="ue-relationship">Account type</Label>
+                <Select
+                  value={editRelationship}
+                  onValueChange={(v) => setEditRelationship(v as AccountRelationship)}
+                >
+                  <SelectTrigger id="ue-relationship" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {RELATIONSHIP_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {editRelationship !== "master" && (
+                <div className="space-y-2">
+                  <Label htmlFor="ue-master">Master account</Label>
+                  <Select value={editMasterId} onValueChange={setEditMasterId}>
+                    <SelectTrigger id="ue-master" className="w-full">
+                      <SelectValue placeholder="Select a Master account" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {masters.filter((m) => m.id !== editTarget?.id).length === 0 ? (
+                        <SelectItem value="__none__" disabled>
+                          No Master accounts available
+                        </SelectItem>
+                      ) : (
+                        masters
+                          .filter((m) => m.id !== editTarget?.id)
+                          .map((m) => (
+                            <SelectItem key={m.id} value={m.id}>
+                              {m.fullName} {m.company ? `— ${m.company}` : ""}
+                            </SelectItem>
+                          ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
           </div>
           <DialogFooter>

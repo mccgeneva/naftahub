@@ -68,6 +68,12 @@ export interface UserProfile {
   kycDocuments?: import("@/lib/kyc-types").KycDocument[]
   /** Blob pathname of the original uploaded KYC PDF. */
   kycPdfPathname?: string
+
+  // --- Referral hierarchy (see lib/profile-types.ts for semantics) ---
+  relationship?: import("@/lib/profile-types").AccountRelationship
+  masterId?: string
+  masterName?: string
+  masterEmail?: string
 }
 
 // The primary account keeps the legacy, un-suffixed localStorage keys so data
