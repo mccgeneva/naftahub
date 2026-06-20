@@ -761,7 +761,15 @@ export function UserManager() {
               </div>
             </div>
             {/* Referral hierarchy placement */}
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-3">
+              <div className="space-y-0.5">
+                <p className="text-sm font-medium text-foreground">Account hierarchy & linking</p>
+                <p className="text-xs text-muted-foreground">
+                  To link this client under a Master account, set the type to Sub or Child and choose the
+                  Master below. Leave as Master / Standalone for an independent account.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="um-relationship">Account type</Label>
                 <Select value={relationship} onValueChange={(v) => setRelationship(v as AccountRelationship)}>
@@ -808,6 +816,7 @@ export function UserManager() {
                   </p>
                 </div>
               )}
+              </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-2">
@@ -919,7 +928,15 @@ export function UserManager() {
               <Input id="ue-email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} />
             </div>
             {/* Referral hierarchy placement */}
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-3">
+              <div className="space-y-0.5">
+                <p className="text-sm font-medium text-foreground">Account hierarchy & linking</p>
+                <p className="text-xs text-muted-foreground">
+                  Set the type to Sub or Child and choose a Master to link this account, or Master /
+                  Standalone to keep it independent.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="ue-relationship">Account type</Label>
                 <Select
@@ -963,6 +980,7 @@ export function UserManager() {
                   </Select>
                 </div>
               )}
+              </div>
             </div>
           </div>
           <DialogFooter>
