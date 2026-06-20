@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import {
   FileText,
@@ -16,6 +16,7 @@ import {
   Building2,
   Calendar,
   TrendingUp,
+  Layers,
   ArrowRight,
   XCircle,
   Ban,
@@ -63,6 +64,7 @@ import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { toast } from "sonner"
 import { useInstrumentRequests, type Instrument } from "@/lib/instrument-requests-store"
+import { useLeverageRequests } from "@/lib/leverage-requests-store"
 import {
   useMonetizationRequests,
   type MonetizationStructure,
@@ -142,6 +144,24 @@ export default function InstrumentsPage() {
   // administrator; the client view only displays them.
   const { instruments } = useInstrumentRequests()
   const { addRequest: addMonetizationRequest } = useMonetizationRequests()
+  const { requests: leverageRequests } = useLeverageRequests()
+
+  // Map each pledged instrument id -> its active leverage line, so a BG that was
+  // pledged to an approved leverage facility (e.g. 1:5) surfaces its leveraged
+  // value (face value × ratio) directly on the instrument. Only "approved"
+  // (live) lines count toward the leveraged figure.
+  const leverageByInstrument = useMemo(() => {
+    const map = new Map<string, (typeof leverageRequests)[number]>()
+    for (const req of leverageRequests) {
+      if (req.status !== "approved" || !req.pledgedInstrumentId) continue
+      // If several lines reference the same instrument, keep the most recent.
+      const existing = map.get(req.pledgedInstrumentId)
+      if (!existing || new Date(req.submittedAt) > new Date(existing.submittedAt)) {
+        map.set(req.pledgedInstrumentId, req)
+      }
+    }
+    return map
+  }, [leverageRequests])
 
   // View Details + Assign/Transfer/Monetize dialogs
   const [viewTarget, setViewTarget] = useState<Instrument | null>(null)
@@ -536,6 +556,17 @@ export default function InstrumentsPage() {
   const pendingValue = pendingItems.reduce((sum, i) => sum + i.faceValue, 0)
   const primaryCurrency = instruments[0]?.currency ?? "EUR"
 
+  // Total leveraged facility: for each instrument with an approved leverage line,
+  // count its leveraged value (buyingPower = face × ratio); otherwise the face
+  // value. This is what the client's instruments are actually worth as trading
+  // collateral once leverage is applied (e.g. €50M BG at 1:5 -> €250M).
+  const leveragedInstruments = instruments.filter((i) => leverageByInstrument.has(i.id))
+  const totalLeveragedValue = instruments.reduce((sum, i) => {
+    const line = leverageByInstrument.get(i.id)
+    return sum + (line ? line.buyingPower : i.faceValue)
+  }, 0)
+  const hasLeverage = leveragedInstruments.length > 0
+
   const stats = [
     {
       title: "Total Face Value",
@@ -544,13 +575,21 @@ export default function InstrumentsPage() {
       icon: FileText,
       color: "text-primary",
     },
-    {
-      title: "Active Instruments",
-      value: `${activeCount}`,
-      subtext: "Ready for trading",
-      icon: CheckCircle2,
-      color: "text-green-400",
-    },
+    hasLeverage
+      ? {
+          title: "Leveraged Facility",
+          value: formatCurrency(totalLeveragedValue, primaryCurrency),
+          subtext: `${leveragedInstruments.length} leveraged instrument${leveragedInstruments.length === 1 ? "" : "s"}`,
+          icon: Layers,
+          color: "text-primary",
+        }
+      : {
+          title: "Active Instruments",
+          value: `${activeCount}`,
+          subtext: "Ready for trading",
+          icon: CheckCircle2,
+          color: "text-green-400",
+        },
     {
       title: "Pending Issuance",
       value: `${pendingItems.length}`,
@@ -864,6 +903,26 @@ export default function InstrumentsPage() {
                           </span>
                         </div>
 
+                        {leverageByInstrument.has(instrument.id) && (
+                          <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+                            <div className="flex items-center justify-between">
+                              <span className="flex items-center gap-1.5 text-xs font-medium text-primary">
+                                <Layers className="h-3.5 w-3.5" />
+                                Leveraged 1:{leverageByInstrument.get(instrument.id)!.leverageRatio}
+                              </span>
+                              <span className="text-lg font-bold text-primary">
+                                {formatCurrency(
+                                  leverageByInstrument.get(instrument.id)!.buyingPower,
+                                  instrument.currency
+                                )}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-[10px] text-muted-foreground">
+                              Total trading facility after leverage
+                            </p>
+                          </div>
+                        )}
+
                         <div className="flex items-center justify-between">
                           <span className="text-xs text-muted-foreground">
                             Issuer
@@ -1002,6 +1061,20 @@ export default function InstrumentsPage() {
                         </div>
                       </div>
                       <div className="flex items-center gap-6">
+                        {leverageByInstrument.has(instrument.id) && (
+                          <div className="text-right">
+                            <p className="flex items-center justify-end gap-1 text-lg font-bold text-primary">
+                              <Layers className="h-4 w-4" />
+                              {formatCurrency(
+                                leverageByInstrument.get(instrument.id)!.buyingPower,
+                                instrument.currency
+                              )}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Leveraged 1:{leverageByInstrument.get(instrument.id)!.leverageRatio}
+                            </p>
+                          </div>
+                        )}
                         <div className="text-right">
                           <p className="text-lg font-bold text-foreground">
                             {formatCurrency(
@@ -1010,7 +1083,7 @@ export default function InstrumentsPage() {
                             )}
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            Expires {instrument.expiryDate}
+                            {leverageByInstrument.has(instrument.id) ? "Face value" : `Expires ${instrument.expiryDate}`}
                           </p>
                         </div>
                         <Badge
@@ -1079,6 +1152,23 @@ export default function InstrumentsPage() {
                   </p>
                 )}
               </div>
+              {leverageByInstrument.has(viewTarget.id) && (
+                <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 text-center">
+                  <p className="flex items-center justify-center gap-1.5 text-xs font-medium text-primary">
+                    <Layers className="h-3.5 w-3.5" />
+                    Leveraged Trading Facility (1:{leverageByInstrument.get(viewTarget.id)!.leverageRatio})
+                  </p>
+                  <p className="mt-1 text-2xl font-bold text-primary">
+                    {formatCurrency(
+                      leverageByInstrument.get(viewTarget.id)!.buyingPower,
+                      viewTarget.currency
+                    )}
+                  </p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {formatCurrency(viewTarget.faceValue, viewTarget.currency)} face value × {leverageByInstrument.get(viewTarget.id)!.leverageRatio} leverage
+                  </p>
+                </div>
+              )}
               {(viewTarget.isin || viewTarget.serialNumber) && (
                 <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2">
                   {(
