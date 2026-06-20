@@ -66,6 +66,7 @@ import {
   partnerBankByKey,
   suggestedBankFor,
 } from "@/lib/gateway-store"
+import { getAllGatewayAccountsAdmin } from "@/app/actions/gateway"
 import { useInstrumentRequests, type Instrument } from "@/lib/instrument-requests-store"
 import {
   useMonetizationRequests,
@@ -265,6 +266,31 @@ export default function AdminPage() {
         if (!cancelled && res.ok) setPendingKycCount(res.beneficiaries.length)
       } catch {
         // Non-fatal: the KYC tile just shows 0 if the count can't be loaded.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [unlocked])
+
+  // Count of Payment Gateway account requests awaiting an administrator decision
+  // (across EVERY client). Gateway requests live in their own DB table, separate
+  // from the approvals backbone, so without this the command center and the
+  // Payment Gateway tile would never surface them — the admin would see
+  // "nothing to approve" even while clients have pending requests. Refetched on
+  // unlock so the figure is current.
+  const [pendingGatewayCount, setPendingGatewayCount] = useState(0)
+  useEffect(() => {
+    if (!unlocked) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await getAllGatewayAccountsAdmin(ADMIN_PASSCODE)
+        if (!cancelled && res.ok) {
+          setPendingGatewayCount(res.accounts.filter((a) => a.status === "pending").length)
+        }
+      } catch {
+        // Non-fatal: the Payment Gateway tile just shows 0 if it can't load.
       }
     })()
     return () => {
@@ -1639,6 +1665,7 @@ export default function AdminPage() {
     kind?: ApprovalKind
   }[] = [
     { id: "section-kyc", view: "kyc", label: "KYC Verification", count: pendingKycCount, icon: ShieldCheck },
+    { id: "section-gateway", view: "gateway", label: "Gateway Accounts", count: pendingGatewayCount, icon: Globe },
     { id: "section-payments", view: "approvals", kind: "payment", label: "Outgoing Payments", count: dbPending.payment ?? 0, icon: ArrowUpRight },
     { id: "section-instruments", view: "approvals", kind: "instrument", label: "Bank Instruments", count: dbPending.instrument ?? 0, icon: FileText },
     { id: "section-ppp", view: "approvals", kind: "ppp", label: "Yield / PPP", count: dbPending.ppp ?? 0, icon: TrendingUp },
@@ -1698,7 +1725,7 @@ export default function AdminPage() {
         { id: "membership", label: "Membership Upgrades", description: "Approve tiers and validate deposits.", icon: Award, count: 0 },
         { id: "balances", label: "Balances & Transactions", description: "Credit, debit, adjust and reverse.", icon: Wallet, count: 0 },
         { id: "kyc", label: "KYC / Beneficiaries", description: "Verify beneficiaries and KYC documents.", icon: BadgeCheck, count: pendingKycCount },
-        { id: "gateway", label: "Payment Gateway", description: "Configure partner banks and routing.", icon: Settings, count: 0 },
+        { id: "gateway", label: "Payment Gateway", description: "Approve client account requests; configure partner banks and routing.", icon: Settings, count: pendingGatewayCount },
         { id: "reconciliation", label: "Reconciliation", description: "Automated payment reconciliation engine.", icon: Repeat, count: 0 },
         { id: "treasury", label: "Treasury Services", description: "Security deposits and 1:10 leverage.", icon: Landmark, count: 0 },
         { id: "certificates", label: "Certificates", description: "Issue and re-issue official certificates.", icon: ScrollText, count: 0 },
