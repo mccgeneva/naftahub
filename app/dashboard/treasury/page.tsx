@@ -63,6 +63,7 @@ const statusConfig: Record<
 const txnConfig: Record<TreasuryTransaction["type"], { label: string; sign: "in" | "out" | "neutral" }> = {
   deposit: { label: "Security Deposit", sign: "in" },
   leverage: { label: "Leverage Drawdown", sign: "in" },
+  collateral: { label: "SKR Collateral", sign: "in" },
   fee: { label: "Debit Cycle Fee", sign: "out" },
   adjustment: { label: "Adjustment", sign: "neutral" },
   settlement: { label: "Settlement", sign: "out" },
