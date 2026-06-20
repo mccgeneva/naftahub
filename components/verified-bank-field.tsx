@@ -103,7 +103,7 @@ export function VerifiedBankField({
       if (kind === "iban" && isGenericBankInfo(info)) {
         try {
           const ext = await resolveIbanExternal(trimmed)
-          if (ext && (ext.name || ext.bic || ext.city || ext.postalCode)) {
+          if (ext && (ext.name || ext.bic || ext.city || ext.postalCode || ext.address)) {
             info = {
               name: ext.name ?? info?.name ?? "Registered institution",
               country: info?.country ?? "",
@@ -111,6 +111,7 @@ export function VerifiedBankField({
               bic: ext.bic ?? info?.bic,
               city: ext.city ?? info?.city,
               postalCode: ext.postalCode ?? info?.postalCode,
+              address: ext.address ?? info?.address,
             }
           }
         } catch {
