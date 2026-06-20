@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { ArrowDownLeft, ArrowUpRight, Trash2, Wallet, Plus, Loader2, Pencil, Undo2 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -37,6 +37,8 @@ import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
 import { getActiveUserId } from "@/lib/user-scope"
 import { useActivityLog } from "@/components/activity-tracker"
+import { VerifiedBankField } from "@/components/verified-bank-field"
+import type { BankInfo } from "@/lib/iban-swift"
 
 /** Generate a unique receipt/reference id, matching the platform's style. */
 function generateReceiptId(prefix = "ADM"): string {
@@ -57,6 +59,12 @@ const fmt = (value: number, currency: string) =>
 const fmtDate = (iso: string) => {
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB")
+}
+
+/** Compose a single-line bank address from resolved directory info. */
+const formatBankAddress = (info: BankInfo): string => {
+  const cityLine = [info.postalCode, info.city].filter(Boolean).join(" ")
+  return [info.address, cityLine, info.country].filter(Boolean).join(", ")
 }
 
 export function BalanceManager() {
@@ -91,7 +99,15 @@ export function BalanceManager() {
   const [date, setDate] = useState(todayISO())
   const [counterparty, setCounterparty] = useState("")
   const [account, setAccount] = useState("")
-  const [bank, setBank] = useState("")
+  // Bank details — auto-resolved from the IBAN above, each manually overridable.
+  const [swift, setSwift] = useState("")
+  const [bankName, setBankName] = useState("")
+  const [bankAddress, setBankAddress] = useState("")
+  // The last values we auto-filled from an IBAN lookup. A field is only
+  // overwritten by a new lookup when the admin hasn't manually edited it (i.e.
+  // it still equals what we last auto-filled, or is empty), so manual overrides
+  // always win.
+  const autoFilledRef = useRef({ swift: "", bankName: "", bankAddress: "" })
   const [reference, setReference] = useState("")
   const [description, setDescription] = useState("")
 
@@ -155,11 +171,35 @@ export function BalanceManager() {
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]))
   }, [entries])
 
+  // Auto-fill SWIFT/BIC, bank name and bank address from a resolved IBAN — but
+  // never clobber a field the admin has manually overridden.
+  const handleResolvedBank = (info: BankInfo | null) => {
+    if (!info) return
+    const resolvedSwift = info.bic ?? ""
+    const resolvedName = info.name ?? ""
+    const resolvedAddress = formatBankAddress(info)
+    // Snapshot the previous auto-filled values BEFORE updating the ref, so the
+    // functional setState comparisons use stable values (not the new ones).
+    const prev = autoFilledRef.current
+    if (resolvedSwift) setSwift((cur) => (cur === "" || cur === prev.swift ? resolvedSwift : cur))
+    if (resolvedName) setBankName((cur) => (cur === "" || cur === prev.bankName ? resolvedName : cur))
+    if (resolvedAddress)
+      setBankAddress((cur) => (cur === "" || cur === prev.bankAddress ? resolvedAddress : cur))
+    autoFilledRef.current = {
+      swift: resolvedSwift || prev.swift,
+      bankName: resolvedName || prev.bankName,
+      bankAddress: resolvedAddress || prev.bankAddress,
+    }
+  }
+
   const resetForm = () => {
     setAmount("")
     setCounterparty("")
     setAccount("")
-    setBank("")
+    setSwift("")
+    setBankName("")
+    setBankAddress("")
+    autoFilledRef.current = { swift: "", bankName: "", bankAddress: "" }
     setReference("")
     setDescription("")
     setDate(todayISO())
@@ -189,6 +229,16 @@ export function BalanceManager() {
     const id = reference.trim() || generateReceiptId(isIncoming ? "PPY" : "OUT")
     const isoDate = date ? new Date(`${date}T12:00:00`).toISOString() : new Date().toISOString()
 
+    // Compose the resolved/overridden bank details into the single ledger
+    // `bank` field (no schema change): "Name · SWIFT XXX · Address".
+    const composedBank = [
+      bankName.trim(),
+      swift.trim() ? `SWIFT ${swift.trim().toUpperCase()}` : "",
+      bankAddress.trim(),
+    ]
+      .filter(Boolean)
+      .join(" · ")
+
     setSaving(true)
     const res = await addLedgerEntryForUserAdmin(ADMIN_PASSCODE, targetUserId, {
       id,
@@ -199,7 +249,7 @@ export function BalanceManager() {
       date: isoDate,
       counterparty: counterparty.trim(),
       account: account.trim() || undefined,
-      bank: bank.trim() || undefined,
+      bank: composedBank || undefined,
       reference: id,
       comment: description.trim() || undefined,
       category: isIncoming ? "Incoming Payment" : "Outgoing Payment",
@@ -229,7 +279,9 @@ export function BalanceManager() {
         amount: fmt(numeric, currency),
         counterparty: counterparty.trim() || "(none)",
         counterpartyAccount: account.trim() || "(none)",
-        counterpartyBank: bank.trim() || "(none)",
+        counterpartyBankName: bankName.trim() || "(none)",
+        counterpartySwift: swift.trim().toUpperCase() || "(none)",
+        counterpartyBankAddress: bankAddress.trim() || "(none)",
         status,
         valueDate: fmtDate(isoDate),
       },
@@ -489,36 +541,66 @@ export function BalanceManager() {
               onChange={(e) => setCounterparty(e.target.value)}
             />
           </div>
+          <VerifiedBankField
+            id="bm-account"
+            label={isIncoming ? "Sender IBAN / account" : "Beneficiary IBAN / account"}
+            kind="iban"
+            lenient
+            value={account}
+            onChange={setAccount}
+            onResolved={handleResolvedBank}
+            placeholder="e.g. DE77202208000056457149"
+          />
+        </div>
+
+        {/* Bank details — auto-resolved from the IBAN above, each overridable. */}
+        <div className="space-y-3 rounded-lg border border-border bg-secondary/30 p-3">
+          <p className="text-xs font-medium text-muted-foreground">
+            Bank details{" "}
+            <span className="font-normal">
+              — auto-filled from the IBAN when recognised. Edit any field to override.
+            </span>
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="bm-bank-name">Bank name</Label>
+              <Input
+                id="bm-bank-name"
+                placeholder="e.g. Deutsche Bank AG"
+                value={bankName}
+                onChange={(e) => setBankName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="bm-swift">SWIFT / BIC</Label>
+              <Input
+                id="bm-swift"
+                className="font-mono uppercase"
+                placeholder="e.g. DEUTDEFF"
+                value={swift}
+                onChange={(e) => setSwift(e.target.value)}
+              />
+            </div>
+          </div>
           <div className="space-y-2">
-            <Label htmlFor="bm-account">{isIncoming ? "Sender IBAN / account" : "Beneficiary IBAN / account"}</Label>
+            <Label htmlFor="bm-bank-address">Bank address</Label>
             <Input
-              id="bm-account"
-              placeholder="e.g. DE77202208000056457149"
-              value={account}
-              onChange={(e) => setAccount(e.target.value)}
+              id="bm-bank-address"
+              placeholder="Street, postal code city, country"
+              value={bankAddress}
+              onChange={(e) => setBankAddress(e.target.value)}
             />
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor="bm-bank">Bank (BIC / SWIFT optional)</Label>
-            <Input
-              id="bm-bank"
-              placeholder="e.g. Banking Circle — German Branch (SXPYDEHHXXX)"
-              value={bank}
-              onChange={(e) => setBank(e.target.value)}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="bm-reference">Reference / receipt no. (optional)</Label>
-            <Input
-              id="bm-reference"
-              placeholder="Auto-generated if left blank"
-              value={reference}
-              onChange={(e) => setReference(e.target.value)}
-            />
-          </div>
+        <div className="space-y-2">
+          <Label htmlFor="bm-reference">Reference / receipt no. (optional)</Label>
+          <Input
+            id="bm-reference"
+            placeholder="Auto-generated if left blank"
+            value={reference}
+            onChange={(e) => setReference(e.target.value)}
+          />
         </div>
 
         <div className="space-y-2">
