@@ -156,10 +156,12 @@ export function VerifiedBankField({
             <p className="text-sm font-medium text-foreground">{bank.name}</p>
           </div>
           <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            {(bank.city || bank.branch) && (
+            {(bank.address || bank.postalCode || bank.city || bank.branch) && (
               <span className="inline-flex items-center gap-1">
                 <MapPin className="h-3 w-3" aria-hidden />
-                {[bank.city, bank.branch].filter(Boolean).join(" · ")}
+                {[bank.address, [bank.postalCode, bank.city].filter(Boolean).join(" "), bank.branch]
+                  .filter(Boolean)
+                  .join(" · ")}
               </span>
             )}
             <span className="inline-flex items-center gap-1">
