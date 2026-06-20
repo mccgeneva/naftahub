@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { Building2, Plus, Search, Copy, Check, Shield } from "lucide-react"
@@ -10,7 +10,7 @@ import { useCurrentUser } from "@/lib/use-current-user"
 import { VerifiedBankField } from "@/components/verified-bank-field"
 import { CountryCombobox } from "@/components/country-combobox"
 import { getCountryByCode } from "@/lib/countries"
-import { validateIban, validateBic } from "@/lib/iban-swift"
+import { validateIban, validateBic, isGenericBankInfo, type BankInfo } from "@/lib/iban-swift"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -51,6 +51,10 @@ export default function BankAccountsPage() {
   const [newIban, setNewIban] = useState("")
   const [newSwift, setNewSwift] = useState("")
   const [newCountry, setNewCountry] = useState("")
+  const [newBankName, setNewBankName] = useState("")
+  // Tracks the values we last auto-filled from an IBAN lookup so a fresh lookup
+  // never clobbers something the user typed manually (manual edits always win).
+  const autoFilledRef = useRef({ bankName: "", swift: "", country: "" })
   const [addError, setAddError] = useState<string | null>(null)
   const logActivity = useActivityLog()
   const user = useCurrentUser()
@@ -59,6 +63,33 @@ export default function BankAccountsPage() {
   // per-account detail page so both surfaces render identical data).
   const bankAccounts = useBankAccounts()
   const router = useRouter()
+
+  // Auto-fill Bank Name, SWIFT/BIC and Country from the resolved IBAN. Country
+  // always fills (we know it from the IBAN); Bank Name/SWIFT fill only when a
+  // real institution resolved (not the generic structural fallback). Each field
+  // is only overwritten when empty or still equal to what we last auto-filled,
+  // so manual edits are preserved.
+  const handleResolvedBank = (info: BankInfo | null) => {
+    if (!info) return
+    const prev = autoFilledRef.current
+    const next = { ...prev }
+
+    if (info.countryCode) {
+      setNewCountry((cur) => (cur === "" || cur === prev.country ? info.countryCode : cur))
+      next.country = info.countryCode
+    }
+    if (!isGenericBankInfo(info)) {
+      if (info.name) {
+        setNewBankName((cur) => (cur === "" || cur === prev.bankName ? info.name : cur))
+        next.bankName = info.name
+      }
+      if (info.bic) {
+        setNewSwift((cur) => (cur === "" || cur === prev.swift ? info.bic! : cur))
+        next.swift = info.bic
+      }
+    }
+    autoFilledRef.current = next
+  }
 
   const handleAddAccount = () => {
     const ibanCheck = validateIban(newIban)
@@ -86,6 +117,8 @@ export default function BankAccountsPage() {
     setNewIban("")
     setNewSwift("")
     setNewCountry("")
+    setNewBankName("")
+    autoFilledRef.current = { bankName: "", swift: "", country: "" }
     toast.success("Account submitted for review", {
       description: "Our onboarding team will verify and activate the account.",
     })
@@ -152,7 +185,12 @@ export default function BankAccountsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label className="text-zinc-300">Bank Name</Label>
-                  <Input placeholder="e.g., UBS AG" className="bg-zinc-800 border-zinc-700" />
+                  <Input
+                    placeholder="e.g., UBS AG"
+                    className="bg-zinc-800 border-zinc-700"
+                    value={newBankName}
+                    onChange={(e) => setNewBankName(e.target.value)}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label className="text-zinc-300" htmlFor="new-account-country">
@@ -197,10 +235,7 @@ export default function BankAccountsPage() {
                   placeholder="e.g., CH93 0027 3273 0786 5420 0"
                   value={newIban}
                   onChange={setNewIban}
-                  onResolved={(info) => {
-                    // Auto-fill the SWIFT/BIC field from the resolved IBAN.
-                    if (info?.bic && !newSwift.trim()) setNewSwift(info.bic)
-                  }}
+                  onResolved={handleResolvedBank}
                   inputClassName="bg-zinc-800 border-zinc-700"
                 />
                 <VerifiedBankField
