@@ -330,9 +330,17 @@ export default function InstrumentsPage() {
   }
 
   const monetizeAdvanceRate = Number.parseFloat(monetizeForm.advanceRate)
+  // Monetize against the leveraged value when the instrument is pledged to an
+  // approved leverage line (e.g. €50M BG at 1:5 -> €250M), otherwise face value.
+  const monetizeLeverageLine = monetizeTarget
+    ? leverageByInstrument.get(monetizeTarget.id)
+    : undefined
+  const monetizeBaseValue = monetizeTarget
+    ? (monetizeLeverageLine?.buyingPower ?? monetizeTarget.faceValue)
+    : 0
   const monetizeProceeds =
     monetizeTarget && Number.isFinite(monetizeAdvanceRate)
-      ? Math.round(monetizeTarget.faceValue * (monetizeAdvanceRate / 100))
+      ? Math.round(monetizeBaseValue * (monetizeAdvanceRate / 100))
       : 0
   const canSubmitMonetization =
     !!monetizeTarget &&
@@ -360,6 +368,8 @@ export default function InstrumentsPage() {
       issuer: instrument.issuer,
       faceValue: instrument.faceValue,
       currency: instrument.currency,
+      monetizedValue: monetizeBaseValue,
+      leverageRatio: monetizeLeverageLine?.leverageRatio,
       structure: monetizeForm.structure,
       advanceRatePercent: monetizeAdvanceRate,
       grossProceeds: monetizeProceeds,
@@ -1316,6 +1326,23 @@ export default function InstrumentsPage() {
                 ))}
               </div>
 
+              {monetizeLeverageLine && (
+                <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5 text-sm font-medium text-primary">
+                      <Layers className="h-4 w-4" />
+                      Leveraged collateral value (1:{monetizeLeverageLine.leverageRatio})
+                    </span>
+                    <span className="text-lg font-bold text-primary">
+                      {formatCurrency(monetizeBaseValue, monetizeTarget.currency)}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {`Monetization is applied to the leveraged value (${formatCurrency(monetizeTarget.faceValue, monetizeTarget.currency)} face × ${monetizeLeverageLine.leverageRatio}), not just the face value.`}
+                  </p>
+                </div>
+              )}
+
               {/* Structure & economics */}
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2 sm:col-span-2">
@@ -1381,7 +1408,7 @@ export default function InstrumentsPage() {
                 <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 sm:col-span-2">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">
-                      Estimated gross proceeds ({monetizeForm.advanceRate || "0"}% of face value)
+                      {`Estimated gross proceeds (${monetizeForm.advanceRate || "0"}% of ${monetizeLeverageLine ? "leveraged value" : "face value"} ${formatCurrency(monetizeBaseValue, monetizeForm.proceedsCurrency)})`}
                     </span>
                     <span className="text-lg font-semibold text-foreground">
                       {formatCurrency(monetizeProceeds, monetizeForm.proceedsCurrency)}

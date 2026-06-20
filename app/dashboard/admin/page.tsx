@@ -1129,7 +1129,7 @@ export default function AdminPage() {
         ? `${request.receivingBank}${request.receivingBankBic ? ` (${request.receivingBankBic})` : ""}`
         : undefined,
       reference: request.mt760Ref || request.id,
-      comment: `Monetization of ${request.instrumentTypeFull} (${request.instrumentType}) ${request.instrumentId} issued by ${request.issuer}. Structure: ${MONETIZATION_STRUCTURE_LABELS[request.structure]} at ${request.advanceRatePercent}% LTV on ${formatCurrency(request.faceValue, request.currency)} face value. UETR ${request.uetr}.${request.mt760Ref ? ` MT760 ${request.mt760Ref}.` : ""}`,
+      comment: `Monetization of ${request.instrumentTypeFull} (${request.instrumentType}) ${request.instrumentId} issued by ${request.issuer}. Structure: ${MONETIZATION_STRUCTURE_LABELS[request.structure]} at ${request.advanceRatePercent}% LTV on ${formatCurrency(request.monetizedValue, request.currency)}${request.leverageRatio ? ` leveraged value (${formatCurrency(request.faceValue, request.currency)} face × ${request.leverageRatio})` : " face value"}. UETR ${request.uetr}.${request.mt760Ref ? ` MT760 ${request.mt760Ref}.` : ""}`,
       category: "Instrument Monetization",
     })
 
@@ -3529,10 +3529,21 @@ export default function AdminPage() {
                           {formatCurrency(r.faceValue, r.currency)}
                         </span>
                       </div>
+                      {r.leverageRatio ? (
+                        <div className="flex items-center gap-2">
+                          <Layers className="h-4 w-4 text-primary" />
+                          <span className="text-muted-foreground">Leveraged Value:</span>
+                          <span className="font-medium text-primary">
+                            {formatCurrency(r.monetizedValue, r.currency)} (1:{r.leverageRatio})
+                          </span>
+                        </div>
+                      ) : null}
                       <div className="flex items-center gap-2">
                         <FileText className="h-4 w-4 text-muted-foreground" />
                         <span className="text-muted-foreground">Advance Rate:</span>
-                        <span className="text-foreground">{r.advanceRatePercent}% LTV</span>
+                        <span className="text-foreground">
+                          {r.advanceRatePercent}% LTV on {formatCurrency(r.monetizedValue, r.currency)}
+                        </span>
                       </div>
                       <div className="flex items-center gap-2">
                         <Globe className="h-4 w-4 text-muted-foreground" />
