@@ -155,7 +155,14 @@ export function MonetizationRequestsProvider({ children }: { children: React.Rea
       submittedAt: new Date().toISOString(),
     }
     setRequests((prev) => [full, ...prev])
-    // Mirror into the DB so the Administrator can review it cross-client.
+    // Mirror into the DB so the Administrator can review it cross-client. We
+    // attach a server-side ledger effect (a CREDIT for the gross proceeds) so
+    // that when the admin approves — in a DIFFERENT browser/session via the
+    // pending-approvals queue — the proceeds are posted to the OWNER's server
+    // ledger. The client's LedgerProvider pulls that via getMyLedger() on
+    // hydrate/refresh, so the approved monetization shows up as available funds.
+    // The local store only tracks request status; it never posts to the ledger
+    // itself (no onNewlyApproved callback), so there is no double counting.
     void mirrorSubmission({
       kind: "monetization",
       title: `${full.instrumentTypeFull} · ${full.issuer}`,
@@ -163,6 +170,18 @@ export function MonetizationRequestsProvider({ children }: { children: React.Rea
       amount: full.grossProceeds,
       currency: full.proceedsCurrency,
       payload: { localId: full.id, uetr: full.uetr, structure: full.structure, instrumentId: full.instrumentId },
+      ledgerEffect: {
+        direction: "credit",
+        amount: full.grossProceeds,
+        currency: full.proceedsCurrency,
+        status: "completed",
+        counterparty: full.monetizationPlatform || full.issuer,
+        bank: full.receivingBank
+          ? `${full.receivingBank}${full.receivingBankBic ? ` (${full.receivingBankBic})` : ""}`
+          : undefined,
+        reference: full.mt760Ref || full.uetr,
+        category: "Instrument Monetization",
+      },
     }).then((approvalId) => {
       if (!approvalId) return
       setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
