@@ -10,8 +10,10 @@ import {
   validateBic,
   lookupBankByIban,
   lookupBankByBic,
+  isGenericBankInfo,
   type BankInfo,
 } from "@/lib/iban-swift"
+import { resolveIbanExternal } from "@/app/actions/bank-resolve"
 
 type VerifiedBankFieldProps = {
   id: string
@@ -92,8 +94,30 @@ export function VerifiedBankField({
     setError(undefined)
     const ticket = ++requestRef.current
     const timer = setTimeout(async () => {
-      const info =
+      let info =
         kind === "iban" ? await lookupBankByIban(trimmed) : await lookupBankByBic(trimmed)
+
+      // For IBANs not in the curated directory, enrich the generic fallback
+      // with the external bank registry (server action). Failures are ignored
+      // so the field still resolves with the structural label.
+      if (kind === "iban" && isGenericBankInfo(info)) {
+        try {
+          const ext = await resolveIbanExternal(trimmed)
+          if (ext && (ext.name || ext.bic || ext.city || ext.postalCode)) {
+            info = {
+              name: ext.name ?? info?.name ?? "Registered institution",
+              country: info?.country ?? "",
+              countryCode: info?.countryCode ?? "",
+              bic: ext.bic ?? info?.bic,
+              city: ext.city ?? info?.city,
+              postalCode: ext.postalCode ?? info?.postalCode,
+            }
+          }
+        } catch {
+          // keep the offline result
+        }
+      }
+
       if (ticket !== requestRef.current) return // superseded by newer input
       setBank(info)
       setStatus("valid")
