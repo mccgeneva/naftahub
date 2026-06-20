@@ -21,7 +21,21 @@ import { MobileSidebar } from "./mobile-sidebar"
 import { logout } from "@/app/actions/auth"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { BankekaHeaderButton } from "@/components/bankeka/bankeka-header-button"
-import { getMyNotifications, markMyNotificationsRead } from "@/app/actions/notifications"
+import type { NotificationsSnapshot } from "@/app/actions/notifications"
+
+/** SWR fetcher: read notifications via the Route Handler (never the Server
+ * Action) so polling can never block navigation. Always resolves to a usable
+ * snapshot. */
+async function fetchNotifications(): Promise<NotificationsSnapshot> {
+  try {
+    const res = await fetch("/api/notifications")
+    if (!res.ok) return { items: [], unread: 0 }
+    const data = (await res.json()) as { ok: boolean; items?: NotificationsSnapshot["items"]; unread?: number }
+    return { items: data.items ?? [], unread: data.unread ?? 0 }
+  } catch {
+    return { items: [], unread: 0 }
+  }
+}
 
 /** Relative "time ago" label for a notification timestamp. */
 function timeAgo(iso: string): string {
@@ -77,12 +91,15 @@ export function DashboardHeader() {
 
   // Live notifications from the DB (cross-device). Polls so a decision made by
   // an admin shows up shortly after, even without a page reload.
-  // Poll on a fixed interval only. We intentionally disable revalidateOnFocus:
-  // Next.js serializes Server Actions and queues client navigations behind any
-  // in-flight one, so firing this (plus the per-store reconcilers) on every
-  // window focus could stall navigation until a hard refresh. The 30s interval
-  // is enough to surface an administrator decision shortly after it is made.
-  const { data, mutate } = useSWR("my-notifications", getMyNotifications, {
+  //
+  // CRITICAL: we poll a Route Handler (`/api/notifications`) with plain fetch,
+  // NOT the `getMyNotifications` Server Action. Next.js runs Server Actions
+  // through a single serialized queue and locks client navigation behind any
+  // in-flight one — so a slow/cold serverless DB call on this 30s poll would
+  // freeze every Link/router navigation until a hard refresh. A Route Handler
+  // has no such coupling: a slow DB only makes this background fetch slow.
+  // revalidateOnFocus stays off for the same historical reason.
+  const { data, mutate } = useSWR<NotificationsSnapshot>("my-notifications", fetchNotifications, {
     refreshInterval: 30000,
     revalidateOnFocus: false,
   })
@@ -90,7 +107,7 @@ export function DashboardHeader() {
   const unread = data?.unread ?? 0
 
   const markAllRead = async () => {
-    // Optimistically clear the unread badge, then persist.
+    // Optimistically clear the unread badge, then persist via the Route Handler.
     mutate(
       (prev) =>
         prev
@@ -98,7 +115,15 @@ export function DashboardHeader() {
           : prev,
       false,
     )
-    await markMyNotificationsRead()
+    try {
+      await fetch("/api/notifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+    } catch {
+      // ignore — the next poll reconciles state
+    }
     mutate()
   }
   return (
