@@ -11,6 +11,7 @@ import { VerifiedBankField } from "@/components/verified-bank-field"
 import { CountryCombobox } from "@/components/country-combobox"
 import { getCountryByCode } from "@/lib/countries"
 import { validateIban, validateBic, isGenericBankInfo, type BankInfo } from "@/lib/iban-swift"
+import { mirrorSubmission } from "@/lib/approval-sync"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -52,6 +53,14 @@ export default function BankAccountsPage() {
   const [newSwift, setNewSwift] = useState("")
   const [newCountry, setNewCountry] = useState("")
   const [newBankName, setNewBankName] = useState("")
+  const [newAccountName, setNewAccountName] = useState("")
+  const [newAccountType, setNewAccountType] = useState("")
+  const [newCurrency, setNewCurrency] = useState("")
+  const [newAccountNumber, setNewAccountNumber] = useState("")
+  const [newDailyLimit, setNewDailyLimit] = useState("")
+  const [newRating, setNewRating] = useState("")
+  const [newBranchAddress, setNewBranchAddress] = useState("")
+  const [submitting, setSubmitting] = useState(false)
   // Tracks the values we last auto-filled from an IBAN lookup so a fresh lookup
   // never clobbers something the user typed manually (manual edits always win).
   const autoFilledRef = useRef({ bankName: "", swift: "", country: "" })
@@ -91,7 +100,12 @@ export default function BankAccountsPage() {
     autoFilledRef.current = next
   }
 
-  const handleAddAccount = () => {
+  const handleAddAccount = async () => {
+    if (submitting) return
+    if (!newBankName.trim()) {
+      setAddError("Bank Name is required.")
+      return
+    }
     const ibanCheck = validateIban(newIban)
     if (!ibanCheck.valid) {
       setAddError(`IBAN: ${ibanCheck.error}`)
@@ -103,21 +117,77 @@ export default function BankAccountsPage() {
       return
     }
     setAddError(null)
+
+    const countryName = newCountry ? getCountryByCode(newCountry)?.name ?? newCountry : "Not specified"
+    const dailyLimitNum = newDailyLimit ? Number(newDailyLimit.replace(/[^0-9.]/g, "")) : null
+    // Everything the administrator needs to review and activate the account.
+    const payload = {
+      bankName: newBankName.trim(),
+      accountName: newAccountName.trim() || null,
+      accountType: newAccountType || null,
+      country: countryName,
+      countryCode: newCountry || null,
+      iban: newIban.trim(),
+      swift: newSwift.trim().toUpperCase(),
+      currency: newCurrency || null,
+      accountNumber: newAccountNumber.trim() || null,
+      dailyLimit: dailyLimitNum,
+      rating: newRating || null,
+      branchAddress: newBranchAddress.trim() || null,
+    }
+    const summary = `Register ${newBankName.trim()}${
+      newCurrency ? ` (${newCurrency})` : ""
+    } — IBAN ${newIban.trim()}, SWIFT ${newSwift.trim().toUpperCase()}, ${countryName}.`
+
+    setSubmitting(true)
+
+    // Audit log (attributed to the signed-in client).
     logActivity({
       action: "Submitted a new bank account registration",
       category: "Bank Accounts",
       details: {
-        summary:
-          "Client submitted a request to register a new bank account on the platform.",
-        country: newCountry ? getCountryByCode(newCountry)?.name ?? newCountry : "Not specified",
+        summary: "Client submitted a request to register a new bank account on the platform.",
+        bank: newBankName.trim(),
+        country: countryName,
+        iban: newIban.trim(),
         submittedAt: new Date().toLocaleString("en-GB"),
       },
     })
+
+    // Persist to the cross-client approvals backbone so the administrator can
+    // see and decide on it from the Pending Approvals queue (DB-backed, not
+    // per-browser). Without this the request was never recorded anywhere the
+    // admin could act on.
+    const approvalId = await mirrorSubmission({
+      kind: "bank_account",
+      title: `${newBankName.trim()}${newAccountName.trim() ? ` · ${newAccountName.trim()}` : ""}`,
+      summary,
+      amount: dailyLimitNum,
+      currency: newCurrency || null,
+      payload,
+    })
+
+    setSubmitting(false)
+
+    if (!approvalId) {
+      setAddError(
+        "We couldn't submit your account for review right now. Please try again in a moment.",
+      )
+      return
+    }
+
     setIsAddDialogOpen(false)
     setNewIban("")
     setNewSwift("")
     setNewCountry("")
     setNewBankName("")
+    setNewAccountName("")
+    setNewAccountType("")
+    setNewCurrency("")
+    setNewAccountNumber("")
+    setNewDailyLimit("")
+    setNewRating("")
+    setNewBranchAddress("")
     autoFilledRef.current = { bankName: "", swift: "", country: "" }
     toast.success("Account submitted for review", {
       description: "Our onboarding team will verify and activate the account.",
@@ -209,11 +279,16 @@ export default function BankAccountsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label className="text-zinc-300">Account Name</Label>
-                  <Input placeholder="e.g., MCC Primary Operations" className="bg-zinc-800 border-zinc-700" />
+                  <Input
+                    placeholder="e.g., MCC Primary Operations"
+                    className="bg-zinc-800 border-zinc-700"
+                    value={newAccountName}
+                    onChange={(e) => setNewAccountName(e.target.value)}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label className="text-zinc-300">Account Type</Label>
-                  <Select>
+                  <Select value={newAccountType} onValueChange={setNewAccountType}>
                     <SelectTrigger className="bg-zinc-800 border-zinc-700">
                       <SelectValue placeholder="Select type" />
                     </SelectTrigger>
@@ -252,7 +327,7 @@ export default function BankAccountsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label className="text-zinc-300">Currency</Label>
-                  <Select>
+                  <Select value={newCurrency} onValueChange={setNewCurrency}>
                     <SelectTrigger className="bg-zinc-800 border-zinc-700">
                       <SelectValue placeholder="Select currency" />
                     </SelectTrigger>
@@ -271,17 +346,28 @@ export default function BankAccountsPage() {
                 </div>
                 <div className="space-y-2">
                   <Label className="text-zinc-300">Account Number</Label>
-                  <Input placeholder="Account number" className="bg-zinc-800 border-zinc-700" />
+                  <Input
+                    placeholder="Account number"
+                    className="bg-zinc-800 border-zinc-700"
+                    value={newAccountNumber}
+                    onChange={(e) => setNewAccountNumber(e.target.value)}
+                  />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label className="text-zinc-300">Daily Limit</Label>
-                  <Input type="number" placeholder="50000000" className="bg-zinc-800 border-zinc-700" />
+                  <Input
+                    type="number"
+                    placeholder="50000000"
+                    className="bg-zinc-800 border-zinc-700"
+                    value={newDailyLimit}
+                    onChange={(e) => setNewDailyLimit(e.target.value)}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label className="text-zinc-300">Bank Rating</Label>
-                  <Select>
+                  <Select value={newRating} onValueChange={setNewRating}>
                     <SelectTrigger className="bg-zinc-800 border-zinc-700">
                       <SelectValue placeholder="Select rating" />
                     </SelectTrigger>
@@ -299,7 +385,12 @@ export default function BankAccountsPage() {
               </div>
               <div className="space-y-2">
                 <Label className="text-zinc-300">Branch Address</Label>
-                <Textarea placeholder="Full branch address" className="bg-zinc-800 border-zinc-700" />
+                <Textarea
+                  placeholder="Full branch address"
+                  className="bg-zinc-800 border-zinc-700"
+                  value={newBranchAddress}
+                  onChange={(e) => setNewBranchAddress(e.target.value)}
+                />
               </div>
               <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
                 <Shield className="h-4 w-4 mt-0.5 shrink-0 text-amber-400" />
@@ -322,8 +413,9 @@ export default function BankAccountsPage() {
               <Button
                 className="bg-amber-500 hover:bg-amber-600 text-zinc-900"
                 onClick={handleAddAccount}
+                disabled={submitting}
               >
-                Add Account
+                {submitting ? "Submitting…" : "Add Account"}
               </Button>
             </DialogFooter>
           </DialogContent>
