@@ -1,7 +1,5 @@
 "use client"
 
-import { submitApproval } from "@/app/actions/approvals"
-import { listMyApprovals } from "@/app/actions/approvals"
 import type { ApprovalKind } from "@/lib/approval-kinds"
 import type { LedgerEffect } from "@/lib/approvals-db"
 
@@ -36,8 +34,18 @@ export interface MirrorInput {
  */
 export async function mirrorSubmission(input: MirrorInput): Promise<string | null> {
   try {
-    const res = await submitApproval(input)
-    return res.ok ? res.request.id : null
+    // POST to a Route Handler instead of invoking the Server Action directly.
+    // Server Actions are serialized with client navigations by Next.js, so a
+    // slow/unreachable DB on submit would freeze navigation until a hard
+    // refresh. A plain fetch has no such coupling.
+    const res = await fetch("/api/approvals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as { ok: boolean; request?: { id: string } }
+    return data.ok && data.request ? data.request.id : null
   } catch {
     return null
   }
@@ -87,7 +95,16 @@ export async function reconcileFromDb<T extends Reconcilable>(
   let changed = false
   const newlyApproved: T[] = []
   try {
-    const remote = await listMyApprovals(kind)
+    // Read decisions via a Route Handler (see mirrorSubmission for why). This
+    // poll runs in ~12 stores on an interval; if it were a Server Action a slow
+    // DB read could block navigation each time it fired.
+    const res = await fetch(`/api/approvals?kind=${encodeURIComponent(kind)}`)
+    if (!res.ok) return { records, changed, newlyApproved }
+    const data = (await res.json()) as {
+      ok: boolean
+      items: { id: string; status: string; decidedAt?: string; decisionNote?: string }[]
+    }
+    const remote = data.items ?? []
     if (!remote.length) return { records, changed, newlyApproved }
     const byId = new Map(remote.map((r) => [r.id, r]))
     const next = records.map((rec) => {
