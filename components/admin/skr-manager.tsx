@@ -49,10 +49,6 @@ import { listSelectableClients, type SelectableClient } from "@/app/actions/admi
 // id no longer resolves to an account. Never a real account.
 const FALLBACK_CLIENT: SelectableClient = { id: "", fullName: "—", company: "—", email: "", kind: "dynamic" }
 import {
-  getSkrRecordsForUser,
-  setSkrRecordsForUser,
-  getSkrRequestsForUser,
-  setSkrRequestsForUser,
   generateSkrId,
   generateSkrRef,
   formatSkrValue,
@@ -61,6 +57,12 @@ import {
   type SkrStatus,
   type SkrRequest,
 } from "@/lib/skr-store"
+import {
+  adminListSkrRecords,
+  adminReplaceSkrRecords,
+  adminListSkrRequests,
+  adminReplaceSkrRequests,
+} from "@/app/actions/skr"
 
 const CURRENCIES = ["USD", "EUR", "GBP", "CHF", "AED", "SGD"]
 const STATUSES: SkrStatus[] = ["active", "pending", "matured", "transferred", "suspended", "cancelled"]
@@ -147,12 +149,27 @@ export function SkrManager() {
     }
   }, [])
 
-  // Load the selected client's SKR data from their namespace.
+  // Load the selected client's SKR data from the server (durable, cross-device).
   const reload = (userId: string) => {
+    if (!userId) {
+      setRecords([])
+      setRequests([])
+      return
+    }
     setLoading(true)
-    setRecords(getSkrRecordsForUser(userId))
-    setRequests(getSkrRequestsForUser(userId))
-    setLoading(false)
+    Promise.all([
+      adminListSkrRecords(ADMIN_PASSCODE, userId),
+      adminListSkrRequests(ADMIN_PASSCODE, userId),
+    ])
+      .then(([rec, req]) => {
+        // Ignore a stale response if the admin switched clients meanwhile.
+        if (userId !== targetUserId) return
+        if (rec.ok) setRecords(rec.items.map((r) => r.data as unknown as SkrRecord))
+        else toast.error("Could not load SKR records", { description: rec.error })
+        if (req.ok) setRequests(req.items.map((r) => r.data as unknown as SkrRequest))
+      })
+      .catch((err) => toast.error("Could not load SKR data", { description: (err as Error).message }))
+      .finally(() => setLoading(false))
   }
 
   useEffect(() => {
@@ -160,13 +177,24 @@ export function SkrManager() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetUserId])
 
+  const toRecordItems = (list: SkrRecord[]) =>
+    list.map((r) => ({ id: r.id, data: r as unknown as Record<string, unknown>, status: r.status }))
+  const toRequestItems = (list: SkrRequest[]) =>
+    list.map((r) => ({ id: r.id, data: r as unknown as Record<string, unknown>, status: r.status }))
+
+  // Records are administrator-owned: write the authoritative full set to the
+  // client's server namespace, then reflect locally if it's the active view.
   const persistRecords = (userId: string, next: SkrRecord[]) => {
-    setSkrRecordsForUser(userId, next)
     if (userId === targetUserId) setRecords(next)
+    void adminReplaceSkrRecords(ADMIN_PASSCODE, userId, toRecordItems(next)).then((res) => {
+      if (!res.ok) toast.error("Could not save to the server", { description: res.error })
+    })
   }
   const persistRequests = (next: SkrRequest[]) => {
-    setSkrRequestsForUser(targetUserId, next)
     setRequests(next)
+    void adminReplaceSkrRequests(ADMIN_PASSCODE, targetUserId, toRequestItems(next)).then((res) => {
+      if (!res.ok) toast.error("Could not save to the server", { description: res.error })
+    })
   }
 
   const totalByCurrency = useMemo(() => {
@@ -461,7 +489,7 @@ export function SkrManager() {
 
   // --- Transfer between internal accounts ------------------------------------
 
-  const submitTransfer = () => {
+  const submitTransfer = async () => {
     if (!transferTarget) return
     if (!transferToUserId || transferToUserId === targetUserId) {
       toast.error("Select a different destination account.")
@@ -469,12 +497,21 @@ export function SkrManager() {
     }
     const destUser = clients.find((c) => c.id === transferToUserId) ?? FALLBACK_CLIENT
 
+    // Fetch the destination owner's current portfolio from the server first, so
+    // the transfer is atomic from the admin's perspective and never clobbers the
+    // destination's existing receipts.
+    const destRes = await adminListSkrRecords(ADMIN_PASSCODE, transferToUserId)
+    if (!destRes.ok) {
+      toast.error("Could not reach the destination account", { description: destRes.error })
+      return
+    }
+    const destRecords = destRes.items.map((r) => r.data as unknown as SkrRecord)
+
     // Remove from current owner.
     const remaining = records.filter((r) => r.id !== transferTarget.id)
     persistRecords(targetUserId, remaining)
 
     // Append to destination owner's namespace with a transfer transaction.
-    const destRecords = getSkrRecordsForUser(transferToUserId)
     const moved: SkrRecord = {
       ...transferTarget,
       assignedUserId: transferToUserId,
@@ -492,7 +529,17 @@ export function SkrManager() {
         ...transferTarget.transactions,
       ],
     }
-    setSkrRecordsForUser(transferToUserId, [moved, ...destRecords])
+    const destSave = await adminReplaceSkrRecords(
+      ADMIN_PASSCODE,
+      transferToUserId,
+      toRecordItems([moved, ...destRecords]),
+    )
+    if (!destSave.ok) {
+      toast.error("Transfer could not be completed", { description: destSave.error })
+      // Roll the receipt back onto the source so nothing is lost.
+      persistRecords(targetUserId, records)
+      return
+    }
 
     toast.success("SKR transferred", {
       description: `${transferTarget.id} moved to ${destUser.fullName}.`,

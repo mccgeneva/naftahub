@@ -1,0 +1,231 @@
+import "server-only"
+import { pool, query } from "@/lib/db"
+
+/**
+ * Server-side persistence for the SKR (Safe Keeping Receipt) trading platform.
+ *
+ * SKR records and client requests were originally per-browser localStorage
+ * lists. Because records are administrator-managed and *assigned to a specific
+ * client* (and clients sign in on their own devices), localStorage made the
+ * data neither durable nor visible cross-device — an admin could assign an SKR
+ * on one browser that the client could never see on another. They are now
+ * persisted in Neon, keyed by the owning client's user id, exactly like
+ * client_beneficiaries.
+ *
+ * The full record / request object is stored as JSONB so the rich shape in
+ * lib/skr-store.tsx (documents, transactions, etc.) can evolve without
+ * migrations. The `status` column mirrors the JSON status for queryability.
+ */
+
+let ready: Promise<void> | null = null
+
+async function ensureTables(): Promise<void> {
+  if (!ready) {
+    ready = (async () => {
+      await query(`
+        CREATE TABLE IF NOT EXISTS client_skr_records (
+          id           TEXT PRIMARY KEY,
+          user_id      TEXT NOT NULL,
+          data         JSONB NOT NULL,
+          status       TEXT NOT NULL DEFAULT 'active',
+          created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+      `)
+      await query(`CREATE INDEX IF NOT EXISTS client_skr_records_user_idx ON client_skr_records (user_id);`)
+      await query(`
+        CREATE TABLE IF NOT EXISTS client_skr_requests (
+          id           TEXT PRIMARY KEY,
+          user_id      TEXT NOT NULL,
+          data         JSONB NOT NULL,
+          status       TEXT NOT NULL DEFAULT 'pending',
+          created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+      `)
+      await query(`CREATE INDEX IF NOT EXISTS client_skr_requests_user_idx ON client_skr_requests (user_id);`)
+    })().catch((err) => {
+      ready = null
+      throw err
+    })
+  }
+  return ready
+}
+
+export interface StoredSkr {
+  id: string
+  userId: string
+  data: Record<string, unknown>
+  status: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface SkrItemInput {
+  id: string
+  data: Record<string, unknown>
+  status: string
+}
+
+function toStored(row: Record<string, unknown>): StoredSkr {
+  return {
+    id: row.id as string,
+    userId: row.user_id as string,
+    data: row.data as Record<string, unknown>,
+    status: row.status as string,
+    createdAt: (row.created_at as Date).toISOString(),
+    updatedAt: (row.updated_at as Date).toISOString(),
+  }
+}
+
+// --- SKR records (administrator-owned, assigned to a client) ----------------
+
+/** List every SKR record assigned to a single client. */
+export async function listSkrRecordsForUser(userId: string): Promise<StoredSkr[]> {
+  await ensureTables()
+  const { rows } = await query(
+    `SELECT * FROM client_skr_records WHERE user_id = $1 ORDER BY created_at DESC`,
+    [userId],
+  )
+  return rows.map(toStored)
+}
+
+/**
+ * Reconcile the full set of SKR records for a client. Records are authored and
+ * owned exclusively by the administrator, so this is a straight replace inside a
+ * transaction: rows not present in `items` are removed, the rest are upserted.
+ */
+export async function replaceSkrRecordsForUser(userId: string, items: SkrItemInput[]): Promise<void> {
+  await ensureTables()
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
+    const { rows: existingRows } = await client.query(
+      `SELECT id FROM client_skr_records WHERE user_id = $1`,
+      [userId],
+    )
+    const incomingIds = new Set(items.map((i) => i.id))
+    for (const r of existingRows) {
+      const id = r.id as string
+      if (!incomingIds.has(id)) {
+        await client.query(`DELETE FROM client_skr_records WHERE id = $1 AND user_id = $2`, [id, userId])
+      }
+    }
+    for (const item of items) {
+      await client.query(
+        `INSERT INTO client_skr_records (id, user_id, data, status, updated_at)
+         VALUES ($1, $2, $3::jsonb, $4, now())
+         ON CONFLICT (id) DO UPDATE
+           SET user_id = EXCLUDED.user_id,
+               data = EXCLUDED.data,
+               status = EXCLUDED.status,
+               updated_at = now()`,
+        [item.id, userId, JSON.stringify(item.data), item.status],
+      )
+    }
+    await client.query("COMMIT")
+  } catch (err) {
+    await client.query("ROLLBACK")
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+// --- SKR client requests ----------------------------------------------------
+
+/** List every SKR request raised by a single client. */
+export async function listSkrRequestsForUser(userId: string): Promise<StoredSkr[]> {
+  await ensureTables()
+  const { rows } = await query(
+    `SELECT * FROM client_skr_requests WHERE user_id = $1 ORDER BY created_at DESC`,
+    [userId],
+  )
+  return rows.map(toStored)
+}
+
+/**
+ * Administrator-authoritative reconcile of a client's requests (used when the
+ * custody desk approves / rejects). Straight replace inside a transaction.
+ */
+export async function replaceSkrRequestsForUser(userId: string, items: SkrItemInput[]): Promise<void> {
+  await ensureTables()
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
+    const { rows: existingRows } = await client.query(
+      `SELECT id FROM client_skr_requests WHERE user_id = $1`,
+      [userId],
+    )
+    const incomingIds = new Set(items.map((i) => i.id))
+    for (const r of existingRows) {
+      const id = r.id as string
+      if (!incomingIds.has(id)) {
+        await client.query(`DELETE FROM client_skr_requests WHERE id = $1 AND user_id = $2`, [id, userId])
+      }
+    }
+    for (const item of items) {
+      await client.query(
+        `INSERT INTO client_skr_requests (id, user_id, data, status, updated_at)
+         VALUES ($1, $2, $3::jsonb, $4, now())
+         ON CONFLICT (id) DO UPDATE
+           SET data = EXCLUDED.data,
+               status = EXCLUDED.status,
+               updated_at = now()`,
+        [item.id, userId, JSON.stringify(item.data), item.status],
+      )
+    }
+    await client.query("COMMIT")
+  } catch (err) {
+    await client.query("ROLLBACK")
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+/**
+ * Client-side mirror of a user's own requests.
+ *
+ * Decisions (approve / reject + decision note + decided date) are owned by the
+ * administrator and live on the same row, so a naive replace from the client
+ * would clobber them. This performs a MERGE: brand-new requests are inserted as
+ * sent; for requests that already exist on the server we KEEP the server's
+ * status and decision fields while accepting nothing destructive from the
+ * client. Requests are never deleted here (clients cannot withdraw them).
+ */
+export async function mergeSkrRequestsForUser(userId: string, items: SkrItemInput[]): Promise<void> {
+  await ensureTables()
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
+    const { rows: existingRows } = await client.query(
+      `SELECT id, data, status FROM client_skr_requests WHERE user_id = $1`,
+      [userId],
+    )
+    const existing = new Map<string, { data: Record<string, unknown>; status: string }>(
+      existingRows.map((r) => [
+        r.id as string,
+        { data: r.data as Record<string, unknown>, status: r.status as string },
+      ]),
+    )
+    for (const item of items) {
+      if (existing.has(item.id)) {
+        // Already on the server — preserve the administrator's decision.
+        continue
+      }
+      await client.query(
+        `INSERT INTO client_skr_requests (id, user_id, data, status, updated_at)
+         VALUES ($1, $2, $3::jsonb, $4, now())
+         ON CONFLICT (id) DO NOTHING`,
+        [item.id, userId, JSON.stringify(item.data), item.status],
+      )
+    }
+    await client.query("COMMIT")
+  } catch (err) {
+    await client.query("ROLLBACK")
+    throw err
+  } finally {
+    client.release()
+  }
+}
