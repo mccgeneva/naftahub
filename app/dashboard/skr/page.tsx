@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   ShieldCheck,
   FileText,
@@ -18,6 +18,8 @@ import {
   Banknote,
   History,
   Paperclip,
+  Upload,
+  Loader2,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -49,9 +51,12 @@ import { usePdfViewer } from "@/lib/pdf-viewer"
 import { generateSkrCertificate } from "@/lib/certificate-pdf"
 import { blobFileUrl } from "@/lib/kyc-types"
 import { Award } from "lucide-react"
+import { upload } from "@vercel/blob/client"
+import { addMySkrDocument } from "@/app/actions/skr"
 import {
   useSkr,
   formatSkrValue,
+  generateSkrRef,
   SKR_STATUS_LABELS,
   type SkrRecord,
   type SkrStatus,
@@ -110,6 +115,16 @@ export default function SkrPage() {
   const [reqType, setReqType] = useState<SkrRequestType>("Statement")
   const [reqRecordId, setReqRecordId] = useState<string>("")
   const [reqMessage, setReqMessage] = useState("")
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [uploadingId, setUploadingId] = useState<string | null>(null)
+
+  // Keep the open detail modal in sync with the latest server data, so a freshly
+  // uploaded document appears immediately after the post-upload refresh.
+  useEffect(() => {
+    if (!viewTarget) return
+    const latest = records.find((r) => r.id === viewTarget.id)
+    if (latest && latest !== viewTarget) setViewTarget(latest)
+  }, [records, viewTarget])
 
   const totals = useMemo(() => {
     const byCurrency = new Map<string, number>()
@@ -126,6 +141,52 @@ export default function SkrPage() {
   }, [records])
 
   const { show } = usePdfViewer()
+
+  const uploadDocument = async (record: SkrRecord, file: File) => {
+    const MAX = 25 * 1024 * 1024
+    if (file.size > MAX) {
+      toast.error("File too large", { description: "Documents must be 25 MB or smaller." })
+      return
+    }
+    setUploadingId(record.id)
+    try {
+      const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_")
+      const result = await upload(`skr/${record.id}/${Date.now()}-${safe}`, file, {
+        access: "public",
+        handleUploadUrl: "/api/skr/blob-upload",
+      })
+      const doc = {
+        id: generateSkrRef("DOC"),
+        name: file.name,
+        docType: file.type === "application/pdf" ? "Client Document" : "Asset Photograph",
+        uploadedAt: new Date().toISOString(),
+        pathname: result.pathname,
+        url: result.url,
+        size: file.size,
+        contentType: file.type || "application/octet-stream",
+      }
+      const res = await addMySkrDocument(record.id, doc)
+      if (!res.ok) {
+        toast.error("Could not attach document", { description: res.error })
+        return
+      }
+      await refresh()
+      toast.success("Document uploaded", { description: `${file.name} added to ${record.id}.` })
+      logActivity({
+        action: `Uploaded a document to SKR ${record.id}`,
+        category: "SKR Trading",
+        details: {
+          summary: `Client uploaded supporting document "${file.name}" to safe keeping receipt ${record.id} (${record.custodian}).`,
+          referenceId: record.id,
+          document: file.name,
+        },
+      })
+    } catch (err) {
+      toast.error("Upload failed", { description: (err as Error).message })
+    } finally {
+      setUploadingId(null)
+    }
+  }
 
   const downloadStatement = (record: SkrRecord) => {
     const doc = generateTablePdf({
@@ -568,6 +629,42 @@ export default function SkrPage() {
                       ))}
                     </div>
                   )}
+
+                  <div className="mt-3">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        if (file) void uploadDocument(viewTarget, file)
+                        e.target.value = ""
+                      }}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={uploadingId === viewTarget.id}
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-full sm:w-auto"
+                    >
+                      {uploadingId === viewTarget.id ? (
+                        <>
+                          <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                          Uploading…
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="mr-1.5 h-4 w-4" />
+                          Upload document or picture
+                        </>
+                      )}
+                    </Button>
+                    <p className="mt-1.5 text-[11px] text-muted-foreground">
+                      Attach photos or PDFs evidencing the asset (max 25 MB). Images and PDFs only.
+                    </p>
+                  </div>
                 </div>
 
                 {/* Transaction history */}

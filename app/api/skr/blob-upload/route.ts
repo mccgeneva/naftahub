@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
+import { resolveCurrentSession } from "@/lib/session-user"
 
 // Token endpoint for browser → Blob direct uploads of SKR supporting documents
 // (asset photographs, custodian confirmations, certificates, etc.). Uploading
@@ -16,15 +17,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       body,
       request,
       onBeforeGenerateToken: async (pathname, clientPayload) => {
-        // Only the custody desk (admin) may upload SKR documents. The passcode
-        // is passed through clientPayload from the browser uploader.
+        // SKR documents may be uploaded by the custody desk (admin passcode) OR
+        // by the signed-in client uploading to their own receipts. Authorize if
+        // either holds.
         let passcode: string | undefined
         try {
           passcode = clientPayload ? (JSON.parse(clientPayload) as { passcode?: string }).passcode : undefined
         } catch {
           passcode = undefined
         }
-        if (passcode !== ADMIN_PASSCODE) {
+        const isAdmin = passcode === ADMIN_PASSCODE
+        const session = isAdmin ? null : await resolveCurrentSession()
+        if (!isAdmin && !session) {
           throw new Error("Unauthorized")
         }
         if (!pathname.startsWith("skr/")) {
