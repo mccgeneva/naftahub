@@ -16,6 +16,8 @@
 //  - "n" = digits 0-9
 //  - "a" = uppercase letters A-Z
 //  - "c" = alphanumeric (digits + uppercase letters)
+import { generateValidUkAccount } from "./uk-modulus"
+
 type SegmentKind = "n" | "a" | "c"
 
 interface BbanSegment {
@@ -249,7 +251,15 @@ const stem4 = (bicStem?: string) =>
 
 const BBAN_BUILDERS: Record<string, BbanBuilder> = {
   // 4-letter bank code (BIC stem) + 6-digit sort code + 8-digit account.
-  GB: (s, n) => stem4(s) + (onlyDigits(n ?? "") ? pad(n, 6) : randomChars("n", 6)) + randomChars("n", 8),
+  // The 8-digit account must satisfy the VocaLink modulus check for its sort
+  // code (the domestic check UK banks and IBAN validators apply on top of the
+  // IBAN mod-97 checksum), so we generate it from the sort code rather than at
+  // random — otherwise the IBAN is mod-97-valid but flagged "account number
+  // checksum incorrect" by external checkers.
+  GB: (s, n) => {
+    const sort = onlyDigits(n ?? "") ? pad(n, 6) : randomChars("n", 6)
+    return stem4(s) + sort + generateValidUkAccount(sort)
+  },
   IE: (s, n) => stem4(s) + (onlyDigits(n ?? "") ? pad(n, 6) : randomChars("n", 6)) + randomChars("n", 8),
   // 8-digit BLZ + 10-digit account.
   DE: (_s, n) => pad(n, 8) + randomChars("n", 10),
