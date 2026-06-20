@@ -63,15 +63,13 @@ export async function submitApproval(input: SubmitApprovalInput): Promise<Submit
       ledgerEffect: input.ledgerEffect ?? null,
     })
 
-    await logActivity({
-      action: `Submitted a ${KIND_LABELS[input.kind]} request for approval`,
-      category: "Requests",
-      details: {
-        referenceId: request.id,
-        summary: request.summary || request.title,
-        amount: request.amount != null ? `${request.currency ?? ""} ${request.amount.toLocaleString("en-US")}` : "(n/a)",
-      },
-    })
+    // NOTE: We intentionally do NOT emit an activity-log email here. The
+    // client flow that mirrors the submission (e.g. the Payments page) already
+    // logs the activity with the correct signed-in user. Logging again here
+    // produced a duplicate email — and, because this server context passes no
+    // `user`, it fell back to a hardcoded demo name, misattributing the action
+    // to the wrong client. The approvals backbone's role is DB persistence for
+    // administrator review, not activity notification.
 
     return { ok: true, request }
   } catch (err) {
