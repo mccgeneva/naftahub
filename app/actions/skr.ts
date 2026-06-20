@@ -1,0 +1,137 @@
+"use server"
+
+import {
+  listSkrRecordsForUser,
+  replaceSkrRecordsForUser,
+  listSkrRequestsForUser,
+  replaceSkrRequestsForUser,
+  mergeSkrRequestsForUser,
+  type SkrItemInput,
+} from "@/lib/skr-db"
+import { ADMIN_PASSCODE } from "@/lib/admin-config"
+import { resolveCurrentSession } from "@/lib/session-user"
+
+function requireAdmin(passcode: string): void {
+  if (String(passcode) !== ADMIN_PASSCODE) {
+    throw new Error("Administrator authorization failed.")
+  }
+}
+
+/** Replace raw DB/connection failures with a clear, actionable message. */
+function friendlyError(err: unknown): string {
+  const msg = (err as Error)?.message ?? String(err)
+  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|database|connect|pool|password authentication/i.test(msg)) {
+    return "Could not reach the database. Please confirm the Neon database is connected (DATABASE_URL) and try again."
+  }
+  return msg
+}
+
+export type SkrRow = {
+  id: string
+  data: Record<string, unknown>
+  status: string
+}
+
+export type SkrListResult = { ok: true; items: SkrRow[] } | { ok: false; error: string }
+export type SkrMutation = { ok: true } | { ok: false; error: string }
+
+function toRows(rows: { id: string; data: Record<string, unknown>; status: string }[]): SkrRow[] {
+  return rows.map((r) => ({ id: r.id, data: r.data, status: r.status }))
+}
+
+// --- Self-service (current signed-in client) -------------------------------
+
+/**
+ * Returns the current client's SKR records from the server (read-only). Used by
+ * the client store to hydrate from the durable source of truth. Returns an empty
+ * list (not an error) when there is no session or the DB is unavailable, so the
+ * client can gracefully fall back to its local cache.
+ */
+export async function getMySkrRecords(): Promise<SkrListResult> {
+  try {
+    const session = await resolveCurrentSession()
+    if (!session) return { ok: true, items: [] }
+    const rows = await listSkrRecordsForUser(session.id)
+    return { ok: true, items: toRows(rows) }
+  } catch (err) {
+    return { ok: false, error: friendlyError(err) }
+  }
+}
+
+/** Returns the current client's own SKR requests. */
+export async function getMySkrRequests(): Promise<SkrListResult> {
+  try {
+    const session = await resolveCurrentSession()
+    if (!session) return { ok: true, items: [] }
+    const rows = await listSkrRequestsForUser(session.id)
+    return { ok: true, items: toRows(rows) }
+  } catch (err) {
+    return { ok: false, error: friendlyError(err) }
+  }
+}
+
+/**
+ * Mirrors the current client's requests to the server. Non-destructive: it only
+ * inserts brand-new requests and never overwrites the administrator's decisions
+ * on existing ones (see mergeSkrRequestsForUser).
+ */
+export async function syncMySkrRequests(items: SkrItemInput[]): Promise<SkrMutation> {
+  try {
+    const session = await resolveCurrentSession()
+    if (!session) return { ok: false, error: "No active session." }
+    await mergeSkrRequestsForUser(session.id, items)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: friendlyError(err) }
+  }
+}
+
+// --- Admin management (custody desk, on behalf of any client) --------------
+
+export async function adminListSkrRecords(passcode: string, userId: string): Promise<SkrListResult> {
+  try {
+    requireAdmin(passcode)
+    const rows = await listSkrRecordsForUser(userId)
+    return { ok: true, items: toRows(rows) }
+  } catch (err) {
+    return { ok: false, error: friendlyError(err) }
+  }
+}
+
+export async function adminReplaceSkrRecords(
+  passcode: string,
+  userId: string,
+  items: SkrItemInput[],
+): Promise<SkrMutation> {
+  try {
+    requireAdmin(passcode)
+    await replaceSkrRecordsForUser(userId, items)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: friendlyError(err) }
+  }
+}
+
+export async function adminListSkrRequests(passcode: string, userId: string): Promise<SkrListResult> {
+  try {
+    requireAdmin(passcode)
+    const rows = await listSkrRequestsForUser(userId)
+    return { ok: true, items: toRows(rows) }
+  } catch (err) {
+    return { ok: false, error: friendlyError(err) }
+  }
+}
+
+export async function adminReplaceSkrRequests(
+  passcode: string,
+  userId: string,
+  items: SkrItemInput[],
+): Promise<SkrMutation> {
+  try {
+    requireAdmin(passcode)
+    await replaceSkrRequestsForUser(userId, items)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: friendlyError(err) }
+  }
+}

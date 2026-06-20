@@ -1,7 +1,12 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
-import { scopedKey, scopedKeyForUser } from "@/lib/user-scope"
+import { createContext, useContext, useCallback, useEffect, useRef, useState } from "react"
+import { scopedKey } from "@/lib/user-scope"
+import {
+  getMySkrRecords,
+  getMySkrRequests,
+  syncMySkrRequests,
+} from "@/app/actions/skr"
 
 // ---------------------------------------------------------------------------
 // SKR (Safe Keeping Receipt) Trading Platform store.
@@ -11,11 +16,12 @@ import { scopedKey, scopedKeyForUser } from "@/lib/user-scope"
 // their own records; only administrators may create, modify, delete, transfer,
 // or change the status of a record.
 //
-// Persistence mirrors the rest of the platform: per-user namespaced
-// localStorage. The active-user view is reactive (React state + cross-tab
-// resync); administrators mutate any client's namespace through the
-// `*ForUser` helpers below, which the storage event then propagates to an open
-// client view.
+// Persistence mirrors the rest of the platform: the durable source of truth is
+// Neon (lib/skr-db.ts + app/actions/skr.ts), keyed by the owning client's id,
+// so administrators can assign and manage receipts that the client then sees on
+// any device. The client view hydrates from the server and keeps a local
+// localStorage cache purely for fast first paint. Administrators read/write any
+// client's data through the passcode-gated server actions.
 // ---------------------------------------------------------------------------
 
 export type SkrStatus =
@@ -86,15 +92,17 @@ export interface SkrRequest {
   decisionNote?: string
 }
 
+// Per-user namespaced cache keys. The durable source of truth is now Neon (see
+// lib/skr-db.ts + app/actions/skr.ts); localStorage is retained only as a
+// non-authoritative cache so the client view paints instantly before the
+// server reconciliation resolves.
 const RECORDS_KEY = "mcc.skr-records.v1"
 const REQUESTS_KEY = "mcc.skr-requests.v1"
 
 const recordsKey = () => scopedKey(RECORDS_KEY)
 const requestsKey = () => scopedKey(REQUESTS_KEY)
 
-// --- Low-level, cross-user persistence helpers (used by the admin manager) ---
-
-function readJson<T>(key: string, fallback: T): T {
+function readCache<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback
   try {
     const raw = window.localStorage.getItem(key)
@@ -104,36 +112,13 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
-function writeJson(key: string, value: unknown) {
+function writeCache(key: string, value: unknown) {
   if (typeof window === "undefined") return
   try {
     window.localStorage.setItem(key, JSON.stringify(value))
-    // Fire a storage-like event in the same tab so the active-user provider can
-    // resync immediately (native storage events only fire in *other* tabs).
-    window.dispatchEvent(new StorageEvent("storage", { key }))
   } catch {
     // ignore quota/availability errors
   }
-}
-
-/** Read every SKR record for a specific client account. */
-export function getSkrRecordsForUser(userId: string): SkrRecord[] {
-  return readJson<SkrRecord[]>(scopedKeyForUser(RECORDS_KEY, userId), [])
-}
-
-/** Overwrite the SKR records for a specific client account. */
-export function setSkrRecordsForUser(userId: string, records: SkrRecord[]) {
-  writeJson(scopedKeyForUser(RECORDS_KEY, userId), records)
-}
-
-/** Read every SKR client request for a specific client account. */
-export function getSkrRequestsForUser(userId: string): SkrRequest[] {
-  return readJson<SkrRequest[]>(scopedKeyForUser(REQUESTS_KEY, userId), [])
-}
-
-/** Overwrite the SKR client requests for a specific client account. */
-export function setSkrRequestsForUser(userId: string, requests: SkrRequest[]) {
-  writeJson(scopedKeyForUser(REQUESTS_KEY, userId), requests)
 }
 
 /** Generate a unique SKR reference number. */
@@ -165,47 +150,63 @@ export function SkrProvider({ children }: { children: React.ReactNode }) {
   const [records, setRecords] = useState<SkrRecord[]>([])
   const [requests, setRequests] = useState<SkrRequest[]>([])
   const [hydrated, setHydrated] = useState(false)
+  // Skip the server-mirror that the hydration/refresh setState would trigger,
+  // so we never echo freshly-loaded data straight back to the server.
+  const skipNextSync = useRef(true)
 
-  const load = () => {
-    setRecords(readJson<SkrRecord[]>(recordsKey(), []))
-    setRequests(readJson<SkrRequest[]>(requestsKey(), []))
-  }
-
-  useEffect(() => {
-    load()
-    setHydrated(true)
+  // Reconcile records + requests with the authoritative server copy. Records are
+  // read-only for the client (administrator-owned); requests are mirrored back
+  // on change. We guard the next request-mirror so applying server data doesn't
+  // bounce straight back.
+  const reconcile = useCallback(() => {
+    return Promise.all([getMySkrRecords(), getMySkrRequests()])
+      .then(([rec, req]) => {
+        if (rec.ok) {
+          skipNextSync.current = true
+          setRecords(rec.items.map((r) => r.data as unknown as SkrRecord))
+        }
+        if (req.ok) {
+          skipNextSync.current = true
+          setRequests(req.items.map((r) => r.data as unknown as SkrRequest))
+        }
+      })
+      .catch(() => {})
   }, [])
 
-  // Persist requests on change (records are written by the admin helpers, not
-  // mutated through the reactive provider).
+  // Load once on mount: paint instantly from the local cache, then reconcile
+  // with Neon (durable, cross-device, admin-managed).
   useEffect(() => {
-    if (!hydrated) return
-    writeJson(requestsKey(), requests)
-  }, [requests, hydrated])
-
-  // Resync when records/requests change in another tab or this tab (admin
-  // writes), or when the tab regains focus.
-  useEffect(() => {
-    if (!hydrated) return
-    const resync = () => {
-      setRecords(readJson<SkrRecord[]>(recordsKey(), []))
-      setRequests(readJson<SkrRequest[]>(requestsKey(), []))
-    }
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === recordsKey() || e.key === requestsKey()) resync()
-    }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") resync()
-    }
-    window.addEventListener("storage", onStorage)
-    window.addEventListener("focus", resync)
-    document.addEventListener("visibilitychange", onVisible)
+    let active = true
+    const cachedRecords = readCache<SkrRecord[]>(recordsKey(), [])
+    const cachedRequests = readCache<SkrRequest[]>(requestsKey(), [])
+    if (cachedRecords.length) setRecords(cachedRecords)
+    if (cachedRequests.length) setRequests(cachedRequests)
+    reconcile().finally(() => {
+      if (active) setHydrated(true)
+    })
     return () => {
-      window.removeEventListener("storage", onStorage)
-      window.removeEventListener("focus", resync)
-      document.removeEventListener("visibilitychange", onVisible)
+      active = false
     }
-  }, [hydrated])
+  }, [reconcile])
+
+  // Cache records locally on change for fast subsequent paints (read-only — no
+  // server write; records are authored by the administrator).
+  useEffect(() => {
+    if (!hydrated) return
+    writeCache(recordsKey(), records)
+  }, [records, hydrated])
+
+  // Cache requests and mirror them to the server (non-destructive: only new
+  // requests are inserted; the custody desk's decisions are preserved).
+  useEffect(() => {
+    if (!hydrated) return
+    writeCache(requestsKey(), requests)
+    if (skipNextSync.current) {
+      skipNextSync.current = false
+      return
+    }
+    void syncMySkrRequests(requests.map((r) => ({ id: r.id, data: r as unknown as Record<string, unknown>, status: r.status })))
+  }, [requests, hydrated])
 
   const addRequest: SkrContextValue["addRequest"] = (input) => {
     const full: SkrRequest = {
@@ -220,7 +221,7 @@ export function SkrProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <SkrContext.Provider
-      value={{ records, requests, addRequest, hydrated, refresh: load }}
+      value={{ records, requests, addRequest, hydrated, refresh: reconcile }}
     >
       {children}
     </SkrContext.Provider>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   ShieldCheck,
   FileText,
@@ -93,8 +93,14 @@ const formatDateTime = (iso?: string) => {
 }
 
 export default function SkrPage() {
-  const { records, requests, addRequest } = useSkr()
+  const { records, requests, addRequest, refresh } = useSkr()
   const logActivity = useActivityLog()
+
+  // Pull the latest server-side portfolio when the page opens, so receipts the
+  // custody desk assigned on another device show up without a full reload.
+  useEffect(() => {
+    refresh()
+  }, [refresh])
 
   const [viewTarget, setViewTarget] = useState<SkrRecord | null>(null)
   const [requestOpen, setRequestOpen] = useState(false)
