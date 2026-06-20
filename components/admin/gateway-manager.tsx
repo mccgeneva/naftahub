@@ -55,6 +55,11 @@ import {
   rejectGatewayAccountAdmin,
   recordGatewayFundingAdmin,
 } from "@/app/actions/gateway"
+import {
+  allocateBankSlotAdmin,
+  getBankAvailabilityForCurrency,
+  type BankAvailability,
+} from "@/app/actions/bank-inventory"
 
 const typeIcons: Record<GatewayAccountType, typeof Building2> = {
   virtual_iban: Landmark,
@@ -165,6 +170,20 @@ export function GatewayManager() {
   // Approval dialog state
   const [approveTarget, setApproveTarget] = useState<GatewayAccount | null>(null)
   const [bankKey, setBankKey] = useState("")
+  // Live per-bank slot availability for the approve dialog's currency, keyed by
+  // bank key, so the picker reflects which correspondent pools have free slots.
+  const [availability, setAvailability] = useState<Map<string, BankAvailability>>(new Map())
+
+  const refreshAvailability = async (currency: string) => {
+    try {
+      const rows = await getBankAvailabilityForCurrency(currency)
+      const map = new Map<string, BankAvailability>()
+      for (const row of rows) map.set(row.bankKey, row)
+      setAvailability(map)
+    } catch {
+      setAvailability(new Map())
+    }
+  }
 
   // Reject dialog state
   const [rejectTarget, setRejectTarget] = useState<GatewayAccount | null>(null)
@@ -186,6 +205,7 @@ export function GatewayManager() {
         : suggestedBankFor(account.currency).key
     setBankKey(usable)
     setApproveTarget(account)
+    void refreshAvailability(account.currency)
   }
 
   const confirmApprove = async () => {
@@ -197,13 +217,24 @@ export function GatewayManager() {
       )
       return
     }
+    setBusy(true)
+    // Reserve one account slot from the chosen bank's currency pool BEFORE we
+    // issue any coordinates. This is the authoritative capacity gate: a
+    // disabled or exhausted pool returns an error and nothing is issued.
+    const allocation = await allocateBankSlotAdmin(ADMIN_PASSCODE, bankKey, approveTarget.currency)
+    if (!allocation.ok) {
+      setBusy(false)
+      toast.error(allocation.error)
+      void refreshAvailability(approveTarget.currency)
+      return
+    }
     const coordinates = generateCoordinates(bankKey, approveTarget.accountHolder)
     // Final safety net: never persist an account with an invalid IBAN.
     if (coordinates.scheme === "iban" && !isValidIban(coordinates.iban ?? "")) {
+      setBusy(false)
       toast.error("Generated IBAN failed validation. Please try again.")
       return
     }
-    setBusy(true)
     const res = await approveGatewayAccountAdmin(
       ADMIN_PASSCODE,
       approveTarget.userId,
@@ -218,7 +249,7 @@ export function GatewayManager() {
     setAccounts(res.accounts)
     refreshLiveIfSelf(approveTarget.userId)
     toast.success("Account approved", {
-      description: `${coordinates.partnerBankName} coordinates assigned to ${approveTarget.id}.`,
+      description: `${coordinates.partnerBankName} coordinates assigned to ${approveTarget.id} · ${allocation.remaining} ${approveTarget.currency} slot${allocation.remaining === 1 ? "" : "s"} left.`,
     })
     setApproveTarget(null)
     setBankKey("")
@@ -485,11 +516,19 @@ export function GatewayManager() {
                 {PARTNER_BANKS.map((bank) => {
                   const supports = approveTarget ? bank.currencies.includes(approveTarget.currency) : true
                   const preferred = approveTarget?.preferredBankKey === bank.key
+                  const avail = availability.get(bank.key)
+                  const exhausted = !!avail && (!avail.enabled || avail.remaining <= 0)
                   return (
-                    <SelectItem key={bank.key} value={bank.key} disabled={!supports}>
+                    <SelectItem key={bank.key} value={bank.key} disabled={!supports || exhausted}>
                       {bank.name} ({bank.country})
                       {preferred ? " · client preference" : ""}
-                      {supports ? "" : ` — cannot issue ${approveTarget?.currency}`}
+                      {!supports
+                        ? ` — cannot issue ${approveTarget?.currency}`
+                        : avail
+                          ? !avail.enabled
+                            ? " · pool disabled"
+                            : ` · ${avail.remaining} slot${avail.remaining === 1 ? "" : "s"} left`
+                          : ""}
                     </SelectItem>
                   )
                 })}
@@ -516,7 +555,17 @@ export function GatewayManager() {
             <Button variant="outline" onClick={() => setApproveTarget(null)}>
               Cancel
             </Button>
-            <Button onClick={confirmApprove} disabled={!bankKey || busy}>
+            <Button
+              onClick={confirmApprove}
+              disabled={
+                !bankKey ||
+                busy ||
+                (() => {
+                  const a = availability.get(bankKey)
+                  return !!a && (!a.enabled || a.remaining <= 0)
+                })()
+              }
+            >
               Approve & Assign
             </Button>
           </DialogFooter>
