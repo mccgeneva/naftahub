@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
 import { scopedKey, scopedKeyForUser, getActiveUserId } from "@/lib/user-scope"
 import { getMyLedger } from "@/app/actions/ledger"
+import { reconcileMyApprovedCredits } from "@/app/actions/approvals"
 import { DEMO_USER_ID } from "@/lib/users"
 
 export type LedgerDirection = "credit" | "debit"
@@ -182,8 +183,15 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
     setEntries(localEntries)
     setHydrated(true)
 
-    // Pull the authoritative server ledger and merge admin-posted entries in.
-    getMyLedger()
+    // Back-fill ledger credits for any already-approved requests (e.g. an
+    // approved instrument monetization), then pull the authoritative server
+    // ledger and merge admin-posted entries in. Reconcile first so freshly
+    // back-filled credits are included in the same fetch.
+    reconcileMyApprovedCredits()
+      .catch(() => {
+        // best-effort; reconciliation failure must not block reading the ledger
+      })
+      .then(() => getMyLedger())
       .then((serverEntries) => {
         if (cancelled || !serverEntries || serverEntries.length === 0) return
         setEntries((prev) => {
@@ -254,7 +262,11 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
     }
     setEntries(localEntries)
 
-    getMyLedger()
+    reconcileMyApprovedCredits()
+      .catch(() => {
+        // best-effort; do not block the refresh on reconciliation
+      })
+      .then(() => getMyLedger())
       .then((serverEntries) => {
         if (!serverEntries || serverEntries.length === 0) return
         setEntries((prev) => {
