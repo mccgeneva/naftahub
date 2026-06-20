@@ -1,8 +1,9 @@
 "use client"
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
-import { scopedKey, scopedKeyForUser } from "@/lib/user-scope"
+import { scopedKey, scopedKeyForUser, getActiveUserId } from "@/lib/user-scope"
 import { getMyLedger } from "@/app/actions/ledger"
+import { DEMO_USER_ID } from "@/lib/users"
 
 export type LedgerDirection = "credit" | "debit"
 export type LedgerStatus = "completed" | "hold"
@@ -24,6 +25,53 @@ export interface LedgerEntry {
 
 const KEY_BASE = "mcc.ledger.v1"
 const storageKey = () => scopedKey(KEY_BASE)
+
+// --- Privacy purge ----------------------------------------------------------
+// One-time, demo-scoped cleanup of a privacy leak: a stale instant-transfer
+// debit recorded in the demo account's *local* ledger that exposed another
+// client's name and email (Jobaida Akter / jobaida.akter1996@libero.it). Instant
+// transfers are only ever stored in localStorage (never the server ledger), so
+// the durable record is clean — this scrubs the residual client-side copy on
+// whatever device still holds it. Guarded by a marker so it runs exactly once
+// and never interferes with the user's own legitimate future activity.
+const PRIVACY_PURGE_MARKER = "mcc.ledger-privacy-purge.v1"
+const PURGE_NEEDLES = ["jobaida.akter1996@libero.it", "jobaida akter"]
+
+function entryReferencesLeakedIdentity(e: LedgerEntry): boolean {
+  const haystack = [e.counterparty, e.account, e.comment, e.reference]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+  return PURGE_NEEDLES.some((needle) => haystack.includes(needle))
+}
+
+/**
+ * Strip leaked-identity entries from the demo account's locally stored ledger.
+ * Returns the cleaned list. Writes the marker and the cleaned data back to
+ * localStorage so it is idempotent and persists across reloads.
+ */
+function purgeLeakedIdentity(local: LedgerEntry[]): LedgerEntry[] {
+  if (typeof window === "undefined") return local
+  if (getActiveUserId() !== DEMO_USER_ID) return local
+  try {
+    if (window.localStorage.getItem(scopedKey(PRIVACY_PURGE_MARKER))) return local
+  } catch {
+    return local
+  }
+  const cleaned = local.filter((e) => !entryReferencesLeakedIdentity(e))
+  try {
+    window.localStorage.setItem(
+      scopedKey(PRIVACY_PURGE_MARKER),
+      JSON.stringify({ at: new Date().toISOString(), removed: local.length - cleaned.length }),
+    )
+    if (cleaned.length !== local.length) {
+      window.localStorage.setItem(storageKey(), JSON.stringify(cleaned))
+    }
+  } catch {
+    // best-effort; marker write failure just means it may retry next load
+  }
+  return cleaned
+}
 
 /**
  * Merge server-persisted entries (written by the administrator panel into the
@@ -129,6 +177,8 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
     } catch {
       localEntries = []
     }
+    // One-time privacy purge of any leaked-identity entry before first render.
+    localEntries = purgeLeakedIdentity(localEntries)
     setEntries(localEntries)
     setHydrated(true)
 
