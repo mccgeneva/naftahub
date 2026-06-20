@@ -48,6 +48,7 @@ function emptyAccount(): TreasuryAccount {
     leverageRatio: 1,
     financedAmount: 0,
     transactionExposure: 0,
+    skrCollateral: 0,
     feeRate: DEBIT_CYCLE_FEE_RATE,
     status: "none",
     transactions: [],
@@ -65,6 +66,7 @@ function rowToAccount(row: Record<string, unknown>): TreasuryAccount {
     leverageRatio: Number(row.leverage_ratio) || 1,
     financedAmount: Number(row.financed_amount) || 0,
     transactionExposure: Number(row.transaction_exposure) || 0,
+    skrCollateral: Number(row.skr_collateral) || 0,
     feeRate: Number(row.fee_rate) || DEBIT_CYCLE_FEE_RATE,
     status: (row.status as TreasuryStatus) ?? "pending",
     establishedAt: row.established_at ? new Date(row.established_at as string).toISOString() : undefined,
@@ -151,18 +153,7 @@ export async function saveTreasuryRecordAdmin(
   // deposit, but never more than that cap allows — so reducing or removing the
   // contribution correctly leaves the deposit uncovered (a shortfall) instead of
   // being silently topped up to "fully secured".
-  const maxFinanceable = leverageEnabled ? contribution * (MAX_LEVERAGE_RATIO - 1) : 0
-  const financed = leverageEnabled ? Math.min(Math.max(0, required - contribution), maxFinanceable) : 0
-  const secured = contribution + financed
   const ratio = leverageEnabled && contribution > 0 ? Math.round((required / contribution) * 100) / 100 : 1
-
-  // Derive the stored status from the real coverage so it can never be saved as
-  // "secured" while the deposit is actually uncovered. "closed" stays explicit.
-  let status: TreasuryStatus
-  if (fields.status === "closed") status = "closed"
-  else if (required > 0 && secured >= required) status = "secured"
-  else if (secured > 0) status = "shortfall"
-  else status = "pending"
 
   const note = fields.note?.toString().trim() || null
   const now = new Date().toISOString()
@@ -171,6 +162,24 @@ export async function saveTreasuryRecordAdmin(
 
   try {
     const prev = await readAccount(userId)
+
+    // Pledged SKR collateral is preserved across administrator edits and counts
+    // toward the secured deposit, reducing the amount MCC HOLDING SA finances.
+    const collateral = Math.max(0, prev.skrCollateral || 0)
+    const maxFinanceable = leverageEnabled ? contribution * (MAX_LEVERAGE_RATIO - 1) : 0
+    const financed = leverageEnabled
+      ? Math.min(Math.max(0, required - contribution - collateral), maxFinanceable)
+      : 0
+    const secured = contribution + financed + collateral
+
+    // Derive the stored status from the real coverage so it can never be saved as
+    // "secured" while the deposit is actually uncovered. "closed" stays explicit.
+    let status: TreasuryStatus
+    if (fields.status === "closed") status = "closed"
+    else if (required > 0 && secured >= required) status = "secured"
+    else if (secured > 0) status = "shortfall"
+    else status = "pending"
+
     const establishedAt = prev.establishedAt ?? now
     // Stamp securedAt the first time the deposit becomes secured (fee accrual start).
     const securedAt = status === "secured" ? prev.securedAt ?? now : prev.securedAt ?? null
@@ -179,8 +188,8 @@ export async function saveTreasuryRecordAdmin(
       `INSERT INTO treasury_accounts
          (user_id, profile, currency, required_deposit, customer_contribution,
           leverage_enabled, leverage_ratio, financed_amount, transaction_exposure,
-          fee_rate, status, established_at, secured_at, updated_at, note)
-       VALUES ($1,$2,'EUR',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          fee_rate, status, established_at, secured_at, updated_at, note, skr_collateral)
+       VALUES ($1,$2,'EUR',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        ON CONFLICT (user_id) DO UPDATE SET
          profile = EXCLUDED.profile,
          required_deposit = EXCLUDED.required_deposit,
@@ -194,7 +203,8 @@ export async function saveTreasuryRecordAdmin(
          established_at = EXCLUDED.established_at,
          secured_at = EXCLUDED.secured_at,
          updated_at = EXCLUDED.updated_at,
-         note = EXCLUDED.note
+         note = EXCLUDED.note,
+         skr_collateral = EXCLUDED.skr_collateral
        RETURNING *`,
       [
         userId,
@@ -211,6 +221,7 @@ export async function saveTreasuryRecordAdmin(
         securedAt,
         now,
         note,
+        collateral,
       ],
     )
 
@@ -328,5 +339,282 @@ export async function deleteTreasuryTxnAdmin(
   } catch (err) {
     console.log("[v0] deleteTreasuryTxnAdmin failed:", (err as Error).message)
     return { ok: false, error: "The transaction could not be removed. Please try again." }
+  }
+}
+
+// --- SKR collateral → treasury balance --------------------------------------
+//
+// When the custody desk credits a Safe Keeping Receipt to a client's treasury,
+// the SKR's value is pledged as collateral and added to the secured balance the
+// client can use for trading. It counts toward the required deposit (reducing
+// any shortfall and the amount MCC HOLDING SA must finance) but is not itself
+// leveraged. Crediting is idempotent per SKR — the SKR manager records that a
+// receipt has been credited and reverses it on un-credit or deletion.
+
+// PRO profile baseline deposit (EUR), used to establish a treasury record on the
+// fly the first time SKR collateral is credited to a client with none. Kept in
+// sync with TREASURY_PROFILES["pro"].requiredDeposit in lib/treasury-store.ts.
+const DEFAULT_REQUIRED_DEPOSIT = 500_000
+
+/** Derive the financed/secured/ratio/status from real coverage incl. collateral. */
+function deriveCoverage(opts: {
+  required: number
+  contribution: number
+  leverageEnabled: boolean
+  collateral: number
+  explicitClosed: boolean
+}): { financed: number; secured: number; ratio: number; status: TreasuryStatus } {
+  const { required, contribution, leverageEnabled, collateral } = opts
+  const maxFin = leverageEnabled ? contribution * (MAX_LEVERAGE_RATIO - 1) : 0
+  const financed = leverageEnabled
+    ? Math.min(Math.max(0, required - contribution - collateral), maxFin)
+    : 0
+  const secured = contribution + financed + collateral
+  const ratio = leverageEnabled && contribution > 0 ? Math.round((required / contribution) * 100) / 100 : 1
+  let status: TreasuryStatus
+  if (opts.explicitClosed) status = "closed"
+  else if (required > 0 && secured >= required) status = "secured"
+  else if (secured > 0) status = "shortfall"
+  else status = "pending"
+  return { financed, secured, ratio, status }
+}
+
+/** Full upsert of a treasury record including its transaction ledger. */
+async function upsertTreasuryWithLedger(p: {
+  userId: string
+  profile: TreasuryProfileKey
+  required: number
+  contribution: number
+  leverageEnabled: boolean
+  ratio: number
+  financed: number
+  exposure: number
+  status: TreasuryStatus
+  establishedAt: string
+  securedAt: string | null
+  now: string
+  note: string | null
+  collateral: number
+  transactions: TreasuryTransaction[]
+}): Promise<TreasuryAccount> {
+  const { rows } = await query(
+    `INSERT INTO treasury_accounts
+       (user_id, profile, currency, required_deposit, customer_contribution,
+        leverage_enabled, leverage_ratio, financed_amount, transaction_exposure,
+        fee_rate, status, established_at, secured_at, updated_at, note,
+        skr_collateral, transactions)
+     VALUES ($1,$2,'EUR',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)
+     ON CONFLICT (user_id) DO UPDATE SET
+       profile = EXCLUDED.profile,
+       required_deposit = EXCLUDED.required_deposit,
+       customer_contribution = EXCLUDED.customer_contribution,
+       leverage_enabled = EXCLUDED.leverage_enabled,
+       leverage_ratio = EXCLUDED.leverage_ratio,
+       financed_amount = EXCLUDED.financed_amount,
+       transaction_exposure = EXCLUDED.transaction_exposure,
+       status = EXCLUDED.status,
+       established_at = EXCLUDED.established_at,
+       secured_at = EXCLUDED.secured_at,
+       updated_at = EXCLUDED.updated_at,
+       skr_collateral = EXCLUDED.skr_collateral,
+       transactions = EXCLUDED.transactions
+     RETURNING *`,
+    [
+      p.userId,
+      p.profile,
+      p.required,
+      p.contribution,
+      p.leverageEnabled,
+      p.ratio,
+      p.financed,
+      p.exposure,
+      DEBIT_CYCLE_FEE_RATE,
+      p.status,
+      p.establishedAt,
+      p.securedAt,
+      p.now,
+      p.note,
+      p.collateral,
+      JSON.stringify(p.transactions),
+    ],
+  )
+  return rowToAccount(rows[0])
+}
+
+/**
+ * Admin: credit an SKR's value to a client's treasury balance as pledged
+ * collateral. Establishes a PRO treasury record on the fly if the client has
+ * none, so the collateral is immediately reflected.
+ */
+export async function creditSkrCollateralAdmin(
+  passcode: string,
+  userId: string,
+  input: { skrId: string; amount: number; currency?: string; note?: string },
+): Promise<AdminTreasuryResult> {
+  let admin: UserProfile
+  try {
+    admin = await requireAdmin(passcode)
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+
+  const amount = Number(input.amount)
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, error: "Enter a valid SKR value to credit (in EUR)." }
+  }
+
+  try {
+    const prev = await readAccount(userId)
+    const wasNone = prev.status === "none"
+    const required = wasNone ? DEFAULT_REQUIRED_DEPOSIT : prev.requiredDeposit
+    const profile: TreasuryProfileKey = wasNone ? "pro" : prev.profile
+    const collateral = Math.max(0, prev.skrCollateral || 0) + amount
+
+    const { financed, secured, ratio, status } = deriveCoverage({
+      required,
+      contribution: prev.customerContribution,
+      leverageEnabled: prev.leverageEnabled,
+      collateral,
+      explicitClosed: prev.status === "closed",
+    })
+
+    const now = new Date().toISOString()
+    const establishedAt = prev.establishedAt ?? now
+    const securedAt = status === "secured" ? prev.securedAt ?? now : prev.securedAt ?? null
+
+    const sourceNote =
+      input.note?.toString().trim() ||
+      (input.currency && input.currency !== "EUR"
+        ? `Pledged value of SKR ${input.skrId} (${input.currency} original)`
+        : `Pledged value of SKR ${input.skrId}`)
+
+    const txn: TreasuryTransaction = {
+      id: genTreasuryId("SKR"),
+      date: now,
+      type: "collateral",
+      label: `SKR Collateral — ${input.skrId}`,
+      amount,
+      currency: "EUR",
+      note: sourceNote,
+    }
+
+    const account = await upsertTreasuryWithLedger({
+      userId,
+      profile,
+      required,
+      contribution: prev.customerContribution,
+      leverageEnabled: prev.leverageEnabled,
+      ratio,
+      financed,
+      exposure: prev.transactionExposure,
+      status,
+      establishedAt,
+      securedAt,
+      now,
+      note: prev.note ?? null,
+      collateral,
+      transactions: [txn, ...prev.transactions],
+    })
+
+    const target = await resolveAccountProfileById(userId)
+    await logActivity({
+      action: `Administrator credited SKR ${input.skrId} (EUR ${amount.toLocaleString("en-US")}) to the treasury balance of ${target.fullName}`,
+      category: "Administration",
+      user: `${admin.fullName} (${admin.company})`,
+      details: {
+        referenceId: input.skrId,
+        targetAccount: `${target.fullName} — ${target.email}`,
+        creditedValue: `EUR ${amount.toLocaleString("en-US")}`,
+        totalSkrCollateral: `EUR ${collateral.toLocaleString("en-US")}`,
+        treasuryBalance: `EUR ${secured.toLocaleString("en-US")}`,
+        status,
+      },
+    })
+
+    return { ok: true, account }
+  } catch (err) {
+    console.log("[v0] creditSkrCollateralAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The SKR value could not be credited to treasury. Please try again." }
+  }
+}
+
+/**
+ * Admin: reverse a previously credited SKR. Removes the matching collateral
+ * ledger entries and reduces the pledged collateral accordingly. Safe to call
+ * even if the SKR was never credited (no-op on a clean record).
+ */
+export async function reverseSkrCollateralAdmin(
+  passcode: string,
+  userId: string,
+  input: { skrId: string },
+): Promise<AdminTreasuryResult> {
+  let admin: UserProfile
+  try {
+    admin = await requireAdmin(passcode)
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+
+  try {
+    const prev = await readAccount(userId)
+    const label = `SKR Collateral — ${input.skrId}`
+    const matching = prev.transactions.filter((t) => t.type === "collateral" && t.label === label)
+    if (matching.length === 0 && (prev.skrCollateral || 0) <= 0) {
+      // Nothing credited for this SKR — return the record unchanged.
+      return { ok: true, account: prev }
+    }
+
+    const removed = matching.reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+    const collateral = Math.max(0, (prev.skrCollateral || 0) - removed)
+    const transactions = prev.transactions.filter((t) => !(t.type === "collateral" && t.label === label))
+
+    const { financed, secured, ratio, status } = deriveCoverage({
+      required: prev.requiredDeposit,
+      contribution: prev.customerContribution,
+      leverageEnabled: prev.leverageEnabled,
+      collateral,
+      explicitClosed: prev.status === "closed",
+    })
+
+    const now = new Date().toISOString()
+    const securedAt = status === "secured" ? prev.securedAt ?? now : prev.securedAt ?? null
+
+    const account = await upsertTreasuryWithLedger({
+      userId,
+      profile: prev.profile,
+      required: prev.requiredDeposit,
+      contribution: prev.customerContribution,
+      leverageEnabled: prev.leverageEnabled,
+      ratio,
+      financed,
+      exposure: prev.transactionExposure,
+      status,
+      establishedAt: prev.establishedAt ?? now,
+      securedAt,
+      now,
+      note: prev.note ?? null,
+      collateral,
+      transactions,
+    })
+
+    const target = await resolveAccountProfileById(userId)
+    await logActivity({
+      action: `Administrator reversed the SKR ${input.skrId} treasury credit for ${target.fullName}`,
+      category: "Administration",
+      user: `${admin.fullName} (${admin.company})`,
+      details: {
+        referenceId: input.skrId,
+        targetAccount: `${target.fullName} — ${target.email}`,
+        reversedValue: `EUR ${removed.toLocaleString("en-US")}`,
+        remainingSkrCollateral: `EUR ${collateral.toLocaleString("en-US")}`,
+        treasuryBalance: `EUR ${secured.toLocaleString("en-US")}`,
+        status,
+      },
+    })
+
+    return { ok: true, account }
+  } catch (err) {
+    console.log("[v0] reverseSkrCollateralAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The SKR treasury credit could not be reversed. Please try again." }
   }
 }

@@ -85,6 +85,7 @@ export type TreasuryStatus =
 export type TreasuryTxnType =
   | "deposit" // customer security deposit contribution received
   | "leverage" // leverage drawdown financed by MCC HOLDING SA
+  | "collateral" // SKR (Safe Keeping Receipt) value pledged as treasury collateral
   | "fee" // debit cycle fee charged
   | "adjustment" // manual adjustment
   | "settlement" // repayment / settlement of exposure
@@ -115,6 +116,13 @@ export interface TreasuryAccount {
   financedAmount: number
   /** Additional financial transaction exposure tied to the leverage facility. */
   transactionExposure: number
+  /**
+   * Total value of Safe Keeping Receipts (SKRs) pledged as collateral and
+   * credited to this treasury balance for trading uses. Counts toward the
+   * secured deposit alongside the cash contribution, but is not itself leveraged
+   * (the leverage facility only amplifies the client's own cash contribution).
+   */
+  skrCollateral: number
   /** Annual debit cycle fee rate (1.8%). */
   feeRate: number
   status: TreasuryStatus
@@ -136,6 +144,7 @@ export function emptyTreasuryAccount(): TreasuryAccount {
     leverageRatio: 1,
     financedAmount: 0,
     transactionExposure: 0,
+    skrCollateral: 0,
     feeRate: DEBIT_CYCLE_FEE_RATE,
     status: "none",
     transactions: [],
@@ -163,13 +172,20 @@ export function maxFinanceable(contribution: number, ratio: number = MAX_LEVERAG
  */
 export function financedAmountFor(account: TreasuryAccount): number {
   if (!account.leverageEnabled) return 0
-  const gap = Math.max(0, account.requiredDeposit - account.customerContribution)
+  // Pledged SKR collateral already covers part of the deposit, so MCC HOLDING SA
+  // only finances the remaining gap — never more than the 1:10 facility allows
+  // on the client's own cash contribution.
+  const collateral = Math.max(0, account.skrCollateral || 0)
+  const gap = Math.max(0, account.requiredDeposit - account.customerContribution - collateral)
   return Math.min(gap, maxFinanceable(account.customerContribution, MAX_LEVERAGE_RATIO))
 }
 
-/** Total credited to treasury = customer contribution + financed (leveraged) amount. */
+/**
+ * Total credited to treasury = customer contribution + financed (leveraged)
+ * amount + pledged SKR collateral. This is the balance available for trading.
+ */
 export function treasurySecured(account: TreasuryAccount): number {
-  return account.customerContribution + financedAmountFor(account)
+  return account.customerContribution + financedAmountFor(account) + Math.max(0, account.skrCollateral || 0)
 }
 
 /** Remaining shortfall against the required deposit (0 if fully secured). */

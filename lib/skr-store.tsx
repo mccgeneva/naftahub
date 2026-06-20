@@ -68,6 +68,16 @@ export interface SkrRecord {
   transactions: SkrTransaction[]
   /** Id of the client account this record is assigned to. */
   assignedUserId: string
+  /**
+   * Whether this SKR's value has been credited to the owner's treasury balance
+   * as pledged collateral for trading. Kept on the record so the credit is
+   * idempotent (it can only be applied once) and reversible.
+   */
+  creditedToTreasury?: boolean
+  /** EUR amount credited to treasury (may differ from faceValue if converted). */
+  treasuryCreditAmount?: number
+  /** When the treasury credit was applied (ISO). */
+  treasuryCreditedAt?: string
   createdAt: string // ISO
   updatedAt: string // ISO
 }

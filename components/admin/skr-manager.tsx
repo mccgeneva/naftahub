@@ -16,6 +16,8 @@ import {
   Clock,
   Loader2,
   Landmark,
+  Wallet,
+  RotateCcw,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -63,6 +65,7 @@ import {
   adminListSkrRequests,
   adminReplaceSkrRequests,
 } from "@/app/actions/skr"
+import { creditSkrCollateralAdmin, reverseSkrCollateralAdmin } from "@/app/actions/treasury"
 
 const CURRENCIES = ["USD", "EUR", "GBP", "CHF", "AED", "SGD"]
 const STATUSES: SkrStatus[] = ["active", "pending", "matured", "transferred", "suspended", "cancelled"]
@@ -131,6 +134,13 @@ export function SkrManager() {
   const [docType, setDocType] = useState("SKR Certificate")
   const [transferTarget, setTransferTarget] = useState<SkrRecord | null>(null)
   const [transferToUserId, setTransferToUserId] = useState("")
+
+  // Treasury credit dialog: pledge an SKR's value into the client's treasury
+  // balance for trading. The amount is editable (defaulting to face value) so
+  // the desk can enter the EUR-equivalent when the SKR is in another currency.
+  const [creditTarget, setCreditTarget] = useState<SkrRecord | null>(null)
+  const [creditAmount, setCreditAmount] = useState("")
+  const [creditBusy, setCreditBusy] = useState(false)
 
   const targetUser = clients.find((c) => c.id === targetUserId) ?? FALLBACK_CLIENT
 
@@ -334,7 +344,16 @@ export function SkrManager() {
     setFormOpen(false)
   }
 
-  const deleteRecord = (record: SkrRecord) => {
+  const deleteRecord = async (record: SkrRecord) => {
+    // If this receipt's value was credited to the treasury, reverse it first so
+    // the client's trading balance never references a deleted instrument.
+    if (record.creditedToTreasury) {
+      const res = await reverseSkrCollateralAdmin(ADMIN_PASSCODE, targetUserId, { skrId: record.id })
+      if (!res.ok) {
+        toast.error("Could not reverse the treasury credit", { description: res.error })
+        return
+      }
+    }
     const next = records.filter((r) => r.id !== record.id)
     persistRecords(targetUserId, next)
     toast.success("SKR record deleted", { description: `${record.id} has been removed.` })
@@ -346,6 +365,113 @@ export function SkrManager() {
         referenceId: record.id,
         targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
         decision: "Deleted",
+      },
+    })
+  }
+
+  // --- Credit SKR value to the client's treasury balance ---------------------
+
+  const openCredit = (record: SkrRecord) => {
+    setCreditTarget(record)
+    setCreditAmount(String(record.treasuryCreditAmount ?? record.faceValue))
+  }
+
+  const submitCredit = async () => {
+    if (!creditTarget) return
+    const amount = Number(creditAmount)
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Enter a valid EUR amount to credit.")
+      return
+    }
+    setCreditBusy(true)
+    const res = await creditSkrCollateralAdmin(ADMIN_PASSCODE, targetUserId, {
+      skrId: creditTarget.id,
+      amount,
+      currency: creditTarget.currency,
+    })
+    setCreditBusy(false)
+    if (!res.ok) {
+      toast.error("Could not credit to treasury", { description: res.error })
+      return
+    }
+    const next = records.map((r) =>
+      r.id === creditTarget.id
+        ? {
+            ...r,
+            creditedToTreasury: true,
+            treasuryCreditAmount: amount,
+            treasuryCreditedAt: nowISO(),
+            updatedAt: nowISO(),
+            transactions: [
+              {
+                id: generateSkrRef("TX"),
+                date: nowISO(),
+                type: "Treasury Credit",
+                description: `Value of EUR ${amount.toLocaleString("en-US")} credited to the client's treasury balance for trading uses by administrator.`,
+                reference: generateSkrRef("TRY"),
+              },
+              ...r.transactions,
+            ],
+          }
+        : r,
+    )
+    persistRecords(targetUserId, next)
+    toast.success("Credited to treasury", {
+      description: `EUR ${amount.toLocaleString("en-US")} added to ${targetUser.fullName}'s trading balance.`,
+    })
+    logActivity({
+      action: `Administrator credited SKR ${creditTarget.id} to treasury for ${targetUser.fullName}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator credited the value of safe keeping receipt ${creditTarget.id} (EUR ${amount.toLocaleString("en-US")}) to the treasury balance of ${targetUser.fullName} (${targetUser.company}) for trading uses.`,
+        referenceId: creditTarget.id,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        creditedValue: `EUR ${amount.toLocaleString("en-US")}`,
+      },
+    })
+    setCreditTarget(null)
+    setCreditAmount("")
+  }
+
+  const reverseCredit = async (record: SkrRecord) => {
+    const res = await reverseSkrCollateralAdmin(ADMIN_PASSCODE, targetUserId, { skrId: record.id })
+    if (!res.ok) {
+      toast.error("Could not reverse the treasury credit", { description: res.error })
+      return
+    }
+    const next = records.map((r) =>
+      r.id === record.id
+        ? {
+            ...r,
+            creditedToTreasury: false,
+            treasuryCreditAmount: undefined,
+            treasuryCreditedAt: undefined,
+            updatedAt: nowISO(),
+            transactions: [
+              {
+                id: generateSkrRef("TX"),
+                date: nowISO(),
+                type: "Treasury Credit Reversed",
+                description: `Treasury credit reversed by administrator; value removed from the client's trading balance.`,
+                reference: generateSkrRef("TRY"),
+              },
+              ...r.transactions,
+            ],
+          }
+        : r,
+    )
+    persistRecords(targetUserId, next)
+    toast.success("Treasury credit reversed", {
+      description: `${record.id} value removed from ${targetUser.fullName}'s trading balance.`,
+    })
+    logActivity({
+      action: `Administrator reversed the treasury credit for SKR ${record.id} (${targetUser.fullName})`,
+      category: "Administration",
+      details: {
+        summary: `Administrator reversed the treasury credit of safe keeping receipt ${record.id} on the account of ${targetUser.fullName} (${targetUser.company}).`,
+        referenceId: record.id,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        decision: "Reversed",
       },
     })
   }
@@ -770,6 +896,15 @@ export function SkrManager() {
                       <Badge variant="outline" className={cn("text-[10px]", statusStyles[record.status])}>
                         {SKR_STATUS_LABELS[record.status]}
                       </Badge>
+                      {record.creditedToTreasury && (
+                        <Badge
+                          variant="outline"
+                          className="gap-1 border-primary/20 bg-primary/10 text-[10px] text-primary"
+                        >
+                          <Wallet className="h-3 w-3" />
+                          In Treasury
+                        </Badge>
+                      )}
                     </div>
                     <div className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
                       <div className="flex items-center gap-2">
@@ -830,6 +965,27 @@ export function SkrManager() {
                         Move
                       </Button>
                     </div>
+                    {record.creditedToTreasury ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-primary/30 text-primary hover:bg-primary/10 hover:text-primary"
+                        onClick={() => reverseCredit(record)}
+                      >
+                        <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                        Reverse Treasury Credit
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-primary/30 text-primary hover:bg-primary/10 hover:text-primary"
+                        onClick={() => openCredit(record)}
+                      >
+                        <Wallet className="mr-1 h-3.5 w-3.5" />
+                        Credit to Treasury
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -1088,6 +1244,70 @@ export function SkrManager() {
               Cancel
             </Button>
             <Button onClick={submitTransfer}>Transfer</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Credit-to-treasury dialog */}
+      <Dialog open={!!creditTarget} onOpenChange={(open) => !open && setCreditTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Credit SKR to Treasury</DialogTitle>
+            <DialogDescription>
+              Pledge the value of {creditTarget?.id} to {targetUser.fullName}&apos;s treasury balance.
+              The amount is added as collateral to the security deposit and becomes available for trading.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-border bg-secondary/30 p-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Receipt face value</span>
+                <span className="font-medium text-foreground">
+                  {creditTarget ? formatSkrValue(creditTarget.faceValue, creditTarget.currency) : "—"}
+                </span>
+              </div>
+              <div className="mt-1 flex items-center justify-between">
+                <span className="text-muted-foreground">Custodian</span>
+                <span className="text-foreground">{creditTarget?.custodian}</span>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="skr-credit-amount">Amount to credit (EUR)</Label>
+              <Input
+                id="skr-credit-amount"
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                value={creditAmount}
+                onChange={(e) => setCreditAmount(e.target.value)}
+                placeholder="0.00"
+              />
+              {creditTarget && creditTarget.currency !== "EUR" && (
+                <p className="text-[11px] text-muted-foreground text-pretty">
+                  This receipt is denominated in {creditTarget.currency}. The treasury balance is held in
+                  EUR — enter the EUR-equivalent collateral value to credit.
+                </p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreditTarget(null)} disabled={creditBusy}>
+              Cancel
+            </Button>
+            <Button onClick={submitCredit} disabled={creditBusy}>
+              {creditBusy ? (
+                <>
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  Crediting…
+                </>
+              ) : (
+                <>
+                  <Wallet className="mr-1 h-4 w-4" />
+                  Credit to Treasury
+                </>
+              )}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

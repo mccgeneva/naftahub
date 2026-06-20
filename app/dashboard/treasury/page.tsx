@@ -63,6 +63,7 @@ const statusConfig: Record<
 const txnConfig: Record<TreasuryTransaction["type"], { label: string; sign: "in" | "out" | "neutral" }> = {
   deposit: { label: "Security Deposit", sign: "in" },
   leverage: { label: "Leverage Drawdown", sign: "in" },
+  collateral: { label: "SKR Collateral", sign: "in" },
   fee: { label: "Debit Cycle Fee", sign: "out" },
   adjustment: { label: "Adjustment", sign: "neutral" },
   settlement: { label: "Settlement", sign: "out" },
@@ -114,6 +115,10 @@ export default function TreasuryPage() {
   // can only amplify the funds the client actually provided), so it always
   // reflects reality even if a stale value was stored.
   const financed = financedAmountFor(account)
+  // Value of Safe Keeping Receipts pledged as collateral and credited to the
+  // trading balance. Shown as its own line so the client sees where the balance
+  // comes from.
+  const skrCollateral = Math.max(0, account.skrCollateral || 0)
   const accrued = accruedCycleFee(account, now)
   const annualFee = annualCycleFee(account)
   const coverage = account.requiredDeposit > 0 ? Math.min(100, (secured / account.requiredDeposit) * 100) : 0
@@ -214,14 +219,44 @@ export default function TreasuryPage() {
                   label="Treasury Received"
                   value={fmt0(secured, account.currency)}
                   tone="positive"
-                  sub={account.leverageEnabled ? "Contribution + leverage" : "Direct contribution"}
+                  sub={
+                    skrCollateral > 0
+                      ? account.leverageEnabled
+                        ? "Contribution + leverage + SKR"
+                        : "Contribution + SKR collateral"
+                      : account.leverageEnabled
+                        ? "Contribution + leverage"
+                        : "Direct contribution"
+                  }
                 />
-                <Metric
-                  label={shortfall > 0 ? "Outstanding Shortfall" : "Deposit Status"}
-                  value={shortfall > 0 ? fmt0(shortfall, account.currency) : "Fully Secured"}
-                  tone={shortfall > 0 ? "negative" : "positive"}
-                />
+                {skrCollateral > 0 ? (
+                  <Metric
+                    label="SKR Collateral"
+                    value={fmt0(skrCollateral, account.currency)}
+                    tone="positive"
+                    sub="Pledged for trading"
+                  />
+                ) : (
+                  <Metric
+                    label={shortfall > 0 ? "Outstanding Shortfall" : "Deposit Status"}
+                    value={shortfall > 0 ? fmt0(shortfall, account.currency) : "Fully Secured"}
+                    tone={shortfall > 0 ? "negative" : "positive"}
+                  />
+                )}
               </div>
+
+              {skrCollateral > 0 && (
+                <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="h-4 w-4 text-primary" />
+                    <span className="font-medium text-foreground">SKR collateral credited</span>
+                  </div>
+                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground text-pretty">
+                    {fmt0(skrCollateral, account.currency)} from your Safe Keeping Receipt(s) has been
+                    pledged as collateral and added to your treasury balance for trading uses.
+                  </p>
+                </div>
+              )}
 
               <div>
                 <div className="mb-2 flex items-center justify-between text-sm">
