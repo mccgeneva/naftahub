@@ -1,11 +1,10 @@
 "use client"
 
 import { useState } from "react"
-import { Copy, Check, Download, Share2, Landmark, Info, Wallet, ArrowDownLeft } from "lucide-react"
+import { Copy, Check, Download, Share2, Landmark, Info, Wallet, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import {
   Card,
   CardContent,
@@ -23,7 +22,6 @@ import {
 } from "@/components/ui/select"
 import { useActivityLog } from "@/components/activity-tracker"
 import { useLedger } from "@/lib/ledger-store"
-import { toast } from "sonner"
 
 const currencySymbols: Record<string, string> = {
   EUR: "€",
@@ -51,77 +49,16 @@ const receivingAccount = {
 
 export default function ReceiveFundsPage() {
   const logActivity = useActivityLog()
-  const { addReceipt, balanceFor } = useLedger()
+  const { balanceFor } = useLedger()
   const [copiedField, setCopiedField] = useState<string | null>(null)
   const [reqAmount, setReqAmount] = useState("")
   const [reqCurrency, setReqCurrency] = useState("EUR")
   const [reqReference, setReqReference] = useState("")
 
-  // "Record a received payment" form state.
-  const [rcvReceiptNo, setRcvReceiptNo] = useState("")
-  const [rcvSender, setRcvSender] = useState("")
-  const [rcvSenderAccount, setRcvSenderAccount] = useState("")
-  const [rcvSenderBank, setRcvSenderBank] = useState("")
-  const [rcvAmount, setRcvAmount] = useState("")
-  const [rcvCurrency, setRcvCurrency] = useState("EUR")
-  const [rcvComment, setRcvComment] = useState("")
-
-  const currentBalance = balanceFor(rcvCurrency)
-
-  const resetReceiveForm = () => {
-    setRcvReceiptNo("")
-    setRcvSender("")
-    setRcvSenderAccount("")
-    setRcvSenderBank("")
-    setRcvAmount("")
-    setRcvComment("")
-  }
-
-  const handleRecordReceipt = () => {
-    const amountValue = Number.parseFloat(rcvAmount)
-    if (!rcvReceiptNo.trim()) {
-      toast.error("Receipt number is required")
-      return
-    }
-    if (!Number.isFinite(amountValue) || amountValue <= 0) {
-      toast.error("Enter a valid amount greater than 0")
-      return
-    }
-
-    const receiptId = rcvReceiptNo.trim().toUpperCase()
-    addReceipt({
-      id: receiptId,
-      amount: amountValue,
-      currency: rcvCurrency,
-      status: "completed",
-      date: new Date().toISOString(),
-      counterparty: rcvSender.trim() || "Unknown sender",
-      account: rcvSenderAccount.trim() || undefined,
-      bank: rcvSenderBank.trim() || undefined,
-      reference: receiptId,
-      comment: rcvComment.trim() || undefined,
-      category: "Incoming Transfer",
-    })
-
-    const formatted = formatCurrency(amountValue, rcvCurrency)
-    logActivity({
-      action: `Received payment ${formatted} (Receipt ${receiptId})`,
-      category: "Receive Funds",
-      details: {
-        summary: `Incoming payment of ${formatted} received from ${rcvSender.trim() || "an external sender"} (receipt ${receiptId}). Client balance credited automatically.`,
-        receipt: receiptId,
-        amount: formatted,
-        currency: rcvCurrency,
-        sender: rcvSender.trim() || "(not provided)",
-        newBalance: formatCurrency(balanceFor(rcvCurrency) + amountValue, rcvCurrency),
-      },
-    })
-
-    toast.success(`Payment received: ${formatted}`, {
-      description: `Receipt ${receiptId} credited to your ${rcvCurrency} balance.`,
-    })
-    resetReceiveForm()
-  }
+  // Read-only balance. Incoming payments can only be credited by MCC Capital's
+  // operations desk (administrator) after the funds settle on the platform
+  // account — clients can never post a credit to their own balance here.
+  const currentBalance = balanceFor("EUR")
 
   const copyToClipboard = (label: string, value: string) => {
     navigator.clipboard?.writeText(value)
@@ -208,115 +145,29 @@ export default function ReceiveFundsPage() {
             </div>
             <div>
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                Current {rcvCurrency} Balance
+                Current EUR Balance
               </p>
               <p className="text-2xl font-bold text-foreground">
-                {formatCurrency(currentBalance, rcvCurrency)}
+                {formatCurrency(currentBalance, "EUR")}
               </p>
             </div>
           </div>
           <p className="max-w-xs text-xs text-muted-foreground">
-            Your balance updates automatically each time an incoming payment is recorded on the platform account.
+            Your balance updates automatically once MCC Capital confirms and posts an incoming payment to your account. This figure is read-only.
           </p>
         </CardContent>
       </Card>
 
-      {/* Record a received payment — credits the client balance */}
-      <Card className="bg-card border-border">
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <div className="rounded-lg bg-green-500/10 p-2 text-green-400">
-              <ArrowDownLeft className="h-5 w-5" />
-            </div>
-            <div>
-              <CardTitle className="text-lg">Record a Received Payment</CardTitle>
-              <CardDescription>
-                Register an incoming payment receipt &mdash; the client balance is credited automatically.
-              </CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="grid gap-2">
-              <Label htmlFor="rcv-receipt">Receipt Nº</Label>
-              <Input
-                id="rcv-receipt"
-                placeholder="PPY3175227"
-                value={rcvReceiptNo}
-                onChange={(e) => setRcvReceiptNo(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="rcv-sender">Sender Name</Label>
-              <Input
-                id="rcv-sender"
-                placeholder="e.g. GOOGLE *GOOGLE PLAY AP"
-                value={rcvSender}
-                onChange={(e) => setRcvSender(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="rcv-sender-account">Sender Account (optional)</Label>
-              <Input
-                id="rcv-sender-account"
-                placeholder="525981_2303"
-                value={rcvSenderAccount}
-                onChange={(e) => setRcvSenderAccount(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="rcv-sender-bank">Sender Bank (optional)</Label>
-              <Input
-                id="rcv-sender-bank"
-                placeholder="Bank name or code"
-                value={rcvSenderBank}
-                onChange={(e) => setRcvSenderBank(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="rcv-amount">Amount</Label>
-              <Input
-                id="rcv-amount"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-                value={rcvAmount}
-                onChange={(e) => setRcvAmount(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="rcv-currency">Currency</Label>
-              <Select value={rcvCurrency} onValueChange={setRcvCurrency}>
-                <SelectTrigger id="rcv-currency">
-                  <SelectValue placeholder="EUR" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="EUR">EUR</SelectItem>
-                  <SelectItem value="USD">USD</SelectItem>
-                  <SelectItem value="GBP">GBP</SelectItem>
-                  <SelectItem value="CHF">CHF</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="rcv-comment">Comment (optional)</Label>
-            <Textarea
-              id="rcv-comment"
-              placeholder="Payment description / remittance information"
-              value={rcvComment}
-              onChange={(e) => setRcvComment(e.target.value)}
-              rows={2}
-            />
-          </div>
-          <Button onClick={handleRecordReceipt} className="w-full sm:w-auto">
-            <ArrowDownLeft className="mr-2 h-4 w-4" />
-            Record Payment &amp; Credit Balance
-          </Button>
-        </CardContent>
-      </Card>
+      {/* Read-only notice: crediting is administrator-controlled */}
+      <div className="flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/5 p-4">
+        <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-foreground">Incoming payments are verified by MCC Capital</p>
+          <p className="text-sm text-muted-foreground text-pretty">
+            For your protection, only MCC Capital&apos;s operations desk can credit incoming funds, and only after the money has actually settled on the platform account. You cannot post a receipt to your own balance. Share the coordinates below with your payer, then track the credit in your transaction history once it clears.
+          </p>
+        </div>
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Your receiving details */}
