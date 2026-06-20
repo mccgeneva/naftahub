@@ -33,6 +33,7 @@ import {
   ChevronRight,
   ArrowLeft,
   ClipboardList,
+  Send,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -67,6 +68,7 @@ import {
   suggestedBankFor,
 } from "@/lib/gateway-store"
 import { getAllGatewayAccountsAdmin } from "@/app/actions/gateway"
+import { listAllSwiftRoutingRequestsAdmin } from "@/app/actions/swift-routing"
 import { useInstrumentRequests, type Instrument } from "@/lib/instrument-requests-store"
 import {
   useMonetizationRequests,
@@ -96,6 +98,7 @@ import {
 import { ADMIN_PASSCODE, ADMIN_SESSION_KEY } from "@/lib/admin-config"
 import { resetAccountData } from "@/lib/reset-account"
 import { AdminGatewaySection } from "@/components/dashboard/admin-gateway-section"
+import { SwiftRoutingQueue } from "@/components/admin/swift-routing-queue"
 import { AdminReconciliationSection } from "@/components/dashboard/admin-reconciliation-section"
 import { TreasuryManager } from "@/components/admin/treasury-manager"
 import { UserManager } from "@/components/admin/user-manager"
@@ -291,6 +294,29 @@ export default function AdminPage() {
         }
       } catch {
         // Non-fatal: the Payment Gateway tile just shows 0 if it can't load.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [unlocked])
+
+  // Pending SWIFT messages submitted by clients for routing & approval. Without
+  // surfacing this count the admin lands on the menu and sees "nothing to
+  // approve" even while clients have messages awaiting routing. Refetched on
+  // unlock so the figure is current.
+  const [pendingSwiftRoutingCount, setPendingSwiftRoutingCount] = useState(0)
+  useEffect(() => {
+    if (!unlocked) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await listAllSwiftRoutingRequestsAdmin(ADMIN_PASSCODE)
+        if (!cancelled && res.ok) {
+          setPendingSwiftRoutingCount(res.requests.filter((r) => r.status === "pending").length)
+        }
+      } catch {
+        // Non-fatal: the SWIFT Routing tile just shows 0 if it can't load.
       }
     })()
     return () => {
@@ -1666,6 +1692,7 @@ export default function AdminPage() {
   }[] = [
     { id: "section-kyc", view: "kyc", label: "KYC Verification", count: pendingKycCount, icon: ShieldCheck },
     { id: "section-gateway", view: "gateway", label: "Gateway Accounts", count: pendingGatewayCount, icon: Globe },
+    { id: "section-swiftrouting", view: "swiftrouting", label: "SWIFT Routing", count: pendingSwiftRoutingCount, icon: Send },
     { id: "section-payments", view: "approvals", kind: "payment", label: "Outgoing Payments", count: dbPending.payment ?? 0, icon: ArrowUpRight },
     { id: "section-instruments", view: "approvals", kind: "instrument", label: "Bank Instruments", count: dbPending.instrument ?? 0, icon: FileText },
     { id: "section-ppp", view: "approvals", kind: "ppp", label: "Yield / PPP", count: dbPending.ppp ?? 0, icon: TrendingUp },
@@ -1726,6 +1753,7 @@ export default function AdminPage() {
         { id: "balances", label: "Balances & Transactions", description: "Credit, debit, adjust and reverse.", icon: Wallet, count: 0 },
         { id: "kyc", label: "KYC / Beneficiaries", description: "Verify beneficiaries and KYC documents.", icon: BadgeCheck, count: pendingKycCount },
         { id: "gateway", label: "Payment Gateway", description: "Approve client account requests; configure partner banks and routing.", icon: Settings, count: pendingGatewayCount },
+        { id: "swiftrouting", label: "SWIFT Routing", description: "Review client SWIFT messages and route them to the chosen beneficiary.", icon: Send, count: pendingSwiftRoutingCount },
         { id: "reconciliation", label: "Reconciliation", description: "Automated payment reconciliation engine.", icon: Repeat, count: 0 },
         { id: "treasury", label: "Treasury Services", description: "Security deposits and 1:10 leverage.", icon: Landmark, count: 0 },
         { id: "certificates", label: "Certificates", description: "Issue and re-issue official certificates.", icon: ScrollText, count: 0 },
@@ -4336,6 +4364,13 @@ export default function AdminPage() {
       {activeView === "gateway" && (
       <div className="space-y-6">
         <AdminGatewaySection />
+      </div>
+      )}
+
+      {/* SWIFT message routing & approval queue */}
+      {activeView === "swiftrouting" && (
+      <div className="space-y-6">
+        <SwiftRoutingQueue />
       </div>
       )}
 
