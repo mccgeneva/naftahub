@@ -221,13 +221,16 @@ function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
 }
 
 /**
- * Apply the financial effect (if any) of an approved request to the owner's
- * ledger. Idempotent on the entry id so re-running never double-posts.
+ * Apply the financial effect (if any) of an approved request to the SHARED-data
+ * owner's ledger. For a Sub-account the balance lives under its Master, so the
+ * debit/credit must post to the Master's id — not the sub's own (empty) ledger.
+ * Idempotent on the entry id so re-running never double-posts.
  */
 async function applyLedgerEffect(req: ApprovalRequest): Promise<void> {
   const entry = ledgerEntryForApproval(req)
   if (!entry) return
-  await upsertLedgerEntry(req.userId, entry)
+  const ownerId = await resolveDataOwnerIdFor(req.userId)
+  await upsertLedgerEntry(ownerId, entry)
 }
 
 /**
@@ -249,7 +252,10 @@ export async function reconcileMyApprovedCredits(): Promise<{ ok: boolean; appli
     for (const req of approved) {
       const entry = ledgerEntryForApproval(req)
       if (entry && entry.direction === "credit") {
-        await upsertLedgerEntry(req.userId, entry)
+        // Post to the shared-data owner (Master for a sub) so the credit lands
+        // on the same ledger the balance is read from.
+        const ownerId = await resolveDataOwnerIdFor(req.userId)
+        await upsertLedgerEntry(ownerId, entry)
         applied += 1
       }
     }
@@ -278,15 +284,18 @@ export async function adminDecideApproval(
   try {
     const existing = await getApprovalById(id)
     if (!existing) return { ok: false, error: "Request not found." }
-    if (existing.status !== "pending") {
+    if (existing.status !== "pending" && existing.status !== "awaiting_master") {
       return { ok: false, error: "This request has already been decided." }
     }
 
-    const updated = await decideApproval(id, decision, "Administrator", note)
+    // Record the administrator's verdict (first gate). For a Sub-account
+    // payment this lands the request on "awaiting_master" rather than
+    // "approved" until the Master also consents.
+    const updated = await recordAdminDecision(id, decision, "Administrator", note)
     if (!updated) return { ok: false, error: "This request has already been decided." }
 
-    // Apply money movement on approval.
-    if (decision === "approved") {
+    // Money only moves once ALL required gates clear (final status approved).
+    if (updated.status === "approved") {
       try {
         await applyLedgerEffect(updated)
       } catch (err) {
@@ -296,19 +305,42 @@ export async function adminDecideApproval(
 
     // Notify the owning client.
     const label = KIND_LABELS[updated.kind]
+    const awaitingMaster = updated.status === "awaiting_master"
     try {
       await insertNotification({
         userId: updated.userId,
-        tone: decision === "approved" ? "success" : "warning",
-        title: decision === "approved" ? `${label} approved` : `${label} declined`,
+        tone: decision === "approved" ? (awaitingMaster ? "info" : "success") : "warning",
+        title:
+          decision === "approved"
+            ? awaitingMaster
+              ? `${label} awaiting Master approval`
+              : `${label} approved`
+            : `${label} declined`,
         body:
           decision === "approved"
-            ? `Your ${label.toLowerCase()} request "${updated.title}" was approved.`
+            ? awaitingMaster
+              ? `Your ${label.toLowerCase()} request "${updated.title}" was approved by the administrator and now awaits your Master account's consent.`
+              : `Your ${label.toLowerCase()} request "${updated.title}" was approved.`
             : `Your ${label.toLowerCase()} request "${updated.title}" was declined. Reason: ${note?.trim()}`,
         href: KIND_HREF[updated.kind] ?? null,
       })
     } catch (err) {
       console.log("[v0] approval notification failed:", (err as Error).message)
+    }
+
+    // When the admin gate clears but a Master gate remains, nudge the Master.
+    if (awaitingMaster && updated.masterId) {
+      try {
+        await insertNotification({
+          userId: updated.masterId,
+          tone: "warning",
+          title: "Sub-account payment awaiting your approval",
+          body: `${updated.initiatedByName ?? "A sub-account"}'s ${label.toLowerCase()} "${updated.title}" was approved by the administrator and needs your consent to execute.`,
+          href: "/dashboard/network",
+        })
+      } catch (err) {
+        console.log("[v0] master nudge notification failed:", (err as Error).message)
+      }
     }
 
     // Audit trail.
@@ -330,6 +362,109 @@ export async function adminDecideApproval(
     return { ok: true, request: updated }
   } catch (err) {
     console.log("[v0] adminDecideApproval failed:", (err as Error).message)
+    return { ok: false, error: "The decision could not be recorded. Please try again." }
+  }
+}
+
+/**
+ * The signed-in Master's consent queue: Sub-account requests routed to them for
+ * a second-gate decision. `pendingOnly` returns just those still awaiting the
+ * Master's verdict (used for the badge/queue), otherwise the full history.
+ */
+export async function getMyMasterApprovalQueue(opts?: { pendingOnly?: boolean }): Promise<ApprovalRequest[]> {
+  const session = await resolveCurrentSession()
+  if (!session) return []
+  try {
+    return await listApprovalsForMaster(session.id, opts)
+  } catch (err) {
+    console.log("[v0] getMyMasterApprovalQueue failed:", (err as Error).message)
+    return []
+  }
+}
+
+/**
+ * Record the signed-in MASTER's verdict (second gate) for a Sub-account
+ * request. The money movement applies here when the Master's approval is the
+ * final gate (the admin already approved). The caller must be the request's
+ * designated Master — enforced from the session, not the client.
+ */
+export async function masterDecideApproval(
+  id: string,
+  decision: "approved" | "rejected",
+  note?: string,
+): Promise<DecideResult> {
+  const session = await resolveCurrentSession()
+  if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
+  if (decision === "rejected" && !note?.trim()) {
+    return { ok: false, error: "A reason is required to reject a request." }
+  }
+
+  try {
+    const existing = await getApprovalById(id)
+    if (!existing) return { ok: false, error: "Request not found." }
+    if (existing.masterId !== session.id || !existing.requiresMasterApproval) {
+      return { ok: false, error: "You are not authorized to decide this request." }
+    }
+    if (existing.status !== "pending" && existing.status !== "awaiting_master") {
+      return { ok: false, error: "This request has already been decided." }
+    }
+
+    const updated = await recordMasterDecision(id, session.id, decision, note)
+    if (!updated) return { ok: false, error: "This request has already been decided." }
+
+    // Apply money movement only when BOTH gates have now cleared.
+    if (updated.status === "approved") {
+      try {
+        await applyLedgerEffect(updated)
+      } catch (err) {
+        console.log("[v0] applyLedgerEffect (master gate) failed:", (err as Error).message)
+      }
+    }
+
+    // Notify the initiating Sub-account of the Master's verdict.
+    const label = KIND_LABELS[updated.kind]
+    const fullyApproved = updated.status === "approved"
+    try {
+      await insertNotification({
+        userId: updated.userId,
+        tone: decision === "approved" ? (fullyApproved ? "success" : "info") : "warning",
+        title:
+          decision === "approved"
+            ? fullyApproved
+              ? `${label} approved`
+              : `${label} awaiting administrator`
+            : `${label} declined by Master`,
+        body:
+          decision === "approved"
+            ? fullyApproved
+              ? `Your ${label.toLowerCase()} "${updated.title}" was approved by your Master account and has been executed.`
+              : `Your Master account approved "${updated.title}"; it now awaits administrator approval.`
+            : `Your ${label.toLowerCase()} "${updated.title}" was declined by your Master account. Reason: ${note?.trim()}`,
+        href: KIND_HREF[updated.kind] ?? null,
+      })
+    } catch (err) {
+      console.log("[v0] master decision notification failed:", (err as Error).message)
+    }
+
+    // Audit trail.
+    const target = await resolveAccountProfileById(updated.userId)
+    await logActivity({
+      action: `Master ${session.profile.fullName} ${decision} a ${label} request from ${target.fullName}`,
+      category: "Account Hierarchy / Approvals",
+      user: session.profile.fullName,
+      details: {
+        referenceId: updated.id,
+        subAccount: `${target.fullName} — ${target.email}`,
+        summary: updated.summary || updated.title,
+        amount: updated.amount != null ? `${updated.currency ?? ""} ${updated.amount.toLocaleString("en-US")}` : "(n/a)",
+        decision,
+        reason: note?.trim() || "(none)",
+      },
+    })
+
+    return { ok: true, request: updated }
+  } catch (err) {
+    console.log("[v0] masterDecideApproval failed:", (err as Error).message)
     return { ok: false, error: "The decision could not be recorded. Please try again." }
   }
 }
