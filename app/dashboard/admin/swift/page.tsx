@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ADMIN_PASSCODE, ADMIN_SESSION_KEY } from "@/lib/admin-config"
 import { AdminSwiftInspector } from "@/components/dashboard/admin-swift-inspector"
+import { SwiftRoutingQueue } from "@/components/admin/swift-routing-queue"
 
 export default function AdminSwiftPage() {
   const [unlocked, setUnlocked] = useState(false)
@@ -91,5 +92,10 @@ export default function AdminSwiftPage() {
     )
   }
 
-  return <AdminSwiftInspector />
+  return (
+    <div className="flex flex-col gap-8">
+      <SwiftRoutingQueue />
+      <AdminSwiftInspector />
+    </div>
+  )
 }
