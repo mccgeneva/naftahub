@@ -3,10 +3,9 @@
 // - IBAN: structural length-per-country check + ISO 7064 mod-97-10 checksum.
 // - BIC/SWIFT: ISO 9362 structural validation (bank, country, location, branch).
 // - Bank lookup: resolves the institution behind a valid BIC or IBAN using a
-//   curated directory, falling back to the openiban.com directory (via a
-//   server action) for any IBAN not in the curated list.
-
-import { resolveIbanExternal } from "@/app/actions/bank-resolve"
+//   curated directory. For IBANs outside the curated list, callers can enrich
+//   the result with the openiban.com directory via the `resolveIbanExternal`
+//   server action (kept out of this module so it stays client-bundle safe).
 
 export type BankInfo = {
   name: string
@@ -269,7 +268,7 @@ export async function lookupBankByIban(raw: string): Promise<BankInfo | null> {
 
   // Known bank in the curated directory — richest data (incl. street address).
   if (entry) {
-    const info: BankInfo = {
+    return delay({
       name: entry.name,
       city: entry.city,
       country: countryName(entry.countryCode) ?? entry.countryCode,
@@ -277,36 +276,25 @@ export async function lookupBankByIban(raw: string): Promise<BankInfo | null> {
       bic: entry.primaryBic,
       address: entry.address,
       postalCode: entry.postalCode,
-    }
-    // Backfill any gaps from the external directory without overriding curated values.
-    if (!info.city || !info.postalCode || !info.bic) {
-      const ext = await resolveIbanExternal(raw)
-      if (ext) {
-        info.bic = info.bic ?? ext.bic
-        info.city = info.city ?? ext.city
-        info.postalCode = info.postalCode ?? ext.postalCode
-      }
-    }
-    return info
+    })
   }
 
-  // Not curated — resolve the real institution via the external directory.
-  const ext = await resolveIbanExternal(raw)
-  if (ext && (ext.name || ext.bic)) {
-    return {
-      name: ext.name ?? (result.bankCode ? `Bank code ${result.bankCode}` : "Registered institution"),
-      city: ext.city,
-      country,
-      countryCode: result.countryCode,
-      bic: ext.bic,
-      postalCode: ext.postalCode,
-    }
-  }
-
-  // Last resort — generic label from the IBAN itself.
-  return {
+  // Not curated — return a generic label from the IBAN structure. Richer data
+  // (real bank name/BIC/city) is resolved separately by callers via the
+  // `resolveIbanExternal` server action, so this shared utility stays free of
+  // any server-only imports and can be safely bundled into client components.
+  return delay({
     name: result.bankCode ? `Bank code ${result.bankCode}` : "Registered institution",
     country,
     countryCode: result.countryCode,
-  }
+  })
+}
+
+/**
+ * True when a resolved BankInfo is only the generic IBAN-structure fallback
+ * (no real bank identity), meaning callers should try the external directory.
+ */
+export function isGenericBankInfo(info: BankInfo | null): boolean {
+  if (!info) return true
+  return !info.bic && (/^Bank code /.test(info.name) || info.name === "Registered institution")
 }
