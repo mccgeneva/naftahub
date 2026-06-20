@@ -150,6 +150,13 @@ const BANK_DIRECTORY: DirectoryEntry[] = [
   // --- Ireland (IE, 4-letter bank code) ---
   { name: "Allied Irish Banks plc", city: "Dublin", countryCode: "IE", bicPrefixes: ["AIBKIE"], primaryBic: "AIBKIE2D", address: "10 Molesworth Street", postalCode: "D02 R126", ibanBankCodes: [{ country: "IE", code: "AIBK" }] },
   { name: "Bank of Ireland", city: "Dublin", countryCode: "IE", bicPrefixes: ["BOFIIE"], primaryBic: "BOFIIE2D", address: "40 Mespil Road", postalCode: "D04 C2N4", ibanBankCodes: [{ country: "IE", code: "BOFI" }] },
+
+  // --- Malta (MT, 4-letter bank code = BIC bank prefix) ---
+  { name: "Papaya Ltd", city: "Sliema", countryCode: "MT", bicPrefixes: ["PAPYMT"], primaryBic: "PAPYMTMT", address: "Tower Business Centre, Tower Street, Swatar", postalCode: "BKR 4013", ibanBankCodes: [{ country: "MT", code: "PAPY" }] },
+  { name: "Bank of Valletta plc", city: "Santa Venera", countryCode: "MT", bicPrefixes: ["VALLMT"], primaryBic: "VALLMTMT", address: "BOV Centre, Triq il-Kanun", postalCode: "SVR 9030", ibanBankCodes: [{ country: "MT", code: "VALL" }] },
+  { name: "HSBC Bank Malta plc", city: "Valletta", countryCode: "MT", bicPrefixes: ["MMEBMT"], primaryBic: "MMEBMTMT", address: "116 Archbishop Street", postalCode: "VLT 1444", ibanBankCodes: [{ country: "MT", code: "MMEB" }] },
+  { name: "APS Bank plc", city: "Swatar", countryCode: "MT", bicPrefixes: ["APSBMT"], primaryBic: "APSBMTMT", address: "APS Centre, Tower Street", postalCode: "BKR 4012", ibanBankCodes: [{ country: "MT", code: "APSB" }] },
+  { name: "Lombard Bank Malta plc", city: "Valletta", countryCode: "MT", bicPrefixes: ["LBMAMT"], primaryBic: "LBMAMTMT", address: "67 Republic Street", postalCode: "VLT 1117", ibanBankCodes: [{ country: "MT", code: "LBMA" }] },
 ]
 
 function normalize(value: string): string {
