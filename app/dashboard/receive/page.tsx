@@ -1,10 +1,12 @@
 "use client"
 
 import { useState } from "react"
-import { Copy, Check, Download, Share2, Landmark, Info, Wallet, ShieldCheck } from "lucide-react"
+import { Copy, Check, Download, Share2, Landmark, Info, Wallet, ShieldCheck, ArrowDownLeft, Lock } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Card,
   CardContent,
@@ -22,6 +24,8 @@ import {
 } from "@/components/ui/select"
 import { useActivityLog } from "@/components/activity-tracker"
 import { useLedger } from "@/lib/ledger-store"
+import { addLedgerEntryForUserAdmin } from "@/app/actions/ledger"
+import { getActiveUserId } from "@/lib/user-scope"
 
 const currencySymbols: Record<string, string> = {
   EUR: "€",
@@ -49,7 +53,7 @@ const receivingAccount = {
 
 export default function ReceiveFundsPage() {
   const logActivity = useActivityLog()
-  const { balanceFor } = useLedger()
+  const { balanceFor, refresh } = useLedger()
   const [copiedField, setCopiedField] = useState<string | null>(null)
   const [reqAmount, setReqAmount] = useState("")
   const [reqCurrency, setReqCurrency] = useState("EUR")
@@ -59,6 +63,96 @@ export default function ReceiveFundsPage() {
   // operations desk (administrator) after the funds settle on the platform
   // account — clients can never post a credit to their own balance here.
   const currentBalance = balanceFor("EUR")
+
+  // --- Administrator-only: record a received payment (credit the balance) ----
+  // The form below is gated by the administrator passcode and verified
+  // server-side by `addLedgerEntryForUserAdmin`. A client without the passcode
+  // cannot credit anything; the page stays read-only for them. The credit is
+  // posted to the account currently being viewed (the signed-in session).
+  const [adminPasscode, setAdminPasscode] = useState("")
+  const [rcvReceiptNo, setRcvReceiptNo] = useState("")
+  const [rcvSender, setRcvSender] = useState("")
+  const [rcvSenderAccount, setRcvSenderAccount] = useState("")
+  const [rcvSenderBank, setRcvSenderBank] = useState("")
+  const [rcvAmount, setRcvAmount] = useState("")
+  const [rcvCurrency, setRcvCurrency] = useState("EUR")
+  const [rcvComment, setRcvComment] = useState("")
+  const [posting, setPosting] = useState(false)
+
+  const resetReceiveForm = () => {
+    setRcvReceiptNo("")
+    setRcvSender("")
+    setRcvSenderAccount("")
+    setRcvSenderBank("")
+    setRcvAmount("")
+    setRcvComment("")
+  }
+
+  const handleRecordReceipt = async () => {
+    if (!adminPasscode.trim()) {
+      toast.error("Administrator passcode is required")
+      return
+    }
+    const amountValue = Number.parseFloat(rcvAmount)
+    if (!rcvReceiptNo.trim()) {
+      toast.error("Receipt number is required")
+      return
+    }
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      toast.error("Enter a valid amount greater than 0")
+      return
+    }
+
+    const userId = getActiveUserId()
+    const receiptId = rcvReceiptNo.trim().toUpperCase()
+    setPosting(true)
+    try {
+      const result = await addLedgerEntryForUserAdmin(adminPasscode.trim(), userId, {
+        id: receiptId,
+        direction: "credit",
+        amount: amountValue,
+        currency: rcvCurrency,
+        status: "completed",
+        date: new Date().toISOString(),
+        counterparty: rcvSender.trim() || "Unknown sender",
+        account: rcvSenderAccount.trim() || undefined,
+        bank: rcvSenderBank.trim() || undefined,
+        reference: receiptId,
+        comment: rcvComment.trim() || undefined,
+        category: "Incoming Transfer",
+      })
+
+      if (!result.ok) {
+        toast.error("Could not record payment", { description: result.error })
+        return
+      }
+
+      // Re-read the persisted ledger so the credited balance shows immediately.
+      refresh()
+
+      const formatted = formatCurrency(amountValue, rcvCurrency)
+      logActivity({
+        action: `Administrator recorded received payment ${formatted} (Receipt ${receiptId})`,
+        category: "Receive Funds",
+        details: {
+          summary: `Administrator confirmed and posted an incoming payment of ${formatted} from ${rcvSender.trim() || "an external sender"} (receipt ${receiptId}). The account balance was credited after verification.`,
+          receipt: receiptId,
+          amount: formatted,
+          currency: rcvCurrency,
+          sender: rcvSender.trim() || "(not provided)",
+        },
+      })
+
+      toast.success(`Payment recorded: ${formatted}`, {
+        description: `Receipt ${receiptId} credited to the account's ${rcvCurrency} balance.`,
+      })
+      resetReceiveForm()
+    } catch (err) {
+      toast.error("Could not record payment", { description: (err as Error).message })
+    } finally {
+      setPosting(false)
+    }
+  }
 
   const copyToClipboard = (label: string, value: string) => {
     navigator.clipboard?.writeText(value)
@@ -168,6 +262,114 @@ export default function ReceiveFundsPage() {
           </p>
         </div>
       </div>
+
+      {/* Administrator-only: record a received payment and credit this account */}
+      <Card className="border-amber-500/30 bg-amber-500/5">
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <div className="rounded-lg bg-amber-500/10 p-2 text-amber-500">
+              <Lock className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle className="text-lg">Administrator: Record a Received Payment</CardTitle>
+              <CardDescription>
+                Restricted to MCC Capital staff. Enter the administrator passcode to confirm a settled incoming payment and credit this account.
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2">
+            <Label htmlFor="rcv-passcode">Administrator Passcode</Label>
+            <Input
+              id="rcv-passcode"
+              type="password"
+              autoComplete="off"
+              placeholder="Enter administrator passcode"
+              value={adminPasscode}
+              onChange={(e) => setAdminPasscode(e.target.value)}
+            />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-2">
+              <Label htmlFor="rcv-receipt">Receipt Nº</Label>
+              <Input
+                id="rcv-receipt"
+                placeholder="PPY3175227"
+                value={rcvReceiptNo}
+                onChange={(e) => setRcvReceiptNo(e.target.value)}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="rcv-sender">Sender Name</Label>
+              <Input
+                id="rcv-sender"
+                placeholder="e.g. Glencore International AG"
+                value={rcvSender}
+                onChange={(e) => setRcvSender(e.target.value)}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="rcv-sender-account">Sender Account (optional)</Label>
+              <Input
+                id="rcv-sender-account"
+                placeholder="525981_2303"
+                value={rcvSenderAccount}
+                onChange={(e) => setRcvSenderAccount(e.target.value)}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="rcv-sender-bank">Sender Bank (optional)</Label>
+              <Input
+                id="rcv-sender-bank"
+                placeholder="Bank name or code"
+                value={rcvSenderBank}
+                onChange={(e) => setRcvSenderBank(e.target.value)}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="rcv-amount">Amount</Label>
+              <Input
+                id="rcv-amount"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="0.00"
+                value={rcvAmount}
+                onChange={(e) => setRcvAmount(e.target.value)}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="rcv-currency">Currency</Label>
+              <Select value={rcvCurrency} onValueChange={setRcvCurrency}>
+                <SelectTrigger id="rcv-currency">
+                  <SelectValue placeholder="EUR" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="EUR">EUR</SelectItem>
+                  <SelectItem value="USD">USD</SelectItem>
+                  <SelectItem value="GBP">GBP</SelectItem>
+                  <SelectItem value="CHF">CHF</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="rcv-comment">Comment (optional)</Label>
+            <Textarea
+              id="rcv-comment"
+              placeholder="Payment description / remittance information"
+              value={rcvComment}
+              onChange={(e) => setRcvComment(e.target.value)}
+              rows={2}
+            />
+          </div>
+          <Button onClick={handleRecordReceipt} disabled={posting} className="w-full sm:w-auto">
+            <ArrowDownLeft className="mr-2 h-4 w-4" />
+            {posting ? "Posting…" : "Verify & Credit Balance"}
+          </Button>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Your receiving details */}

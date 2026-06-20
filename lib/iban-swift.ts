@@ -12,6 +12,10 @@ export type BankInfo = {
   countryCode: string
   bic?: string
   branch?: string
+  /** Street address of the registered/head office, when known. */
+  address?: string
+  /** Postal / ZIP code of the registered office, when known. */
+  postalCode?: string
 }
 
 export type IbanValidation = {
@@ -77,33 +81,37 @@ type DirectoryEntry = {
   bicPrefixes: string[] // 6 or 8 char prefixes
   /** Full 8-char primary SWIFT/BIC, used to auto-fill the SWIFT field from an IBAN. */
   primaryBic?: string
+  /** Registered/head-office street address, used to auto-fill the bank address. */
+  address?: string
+  /** Postal / ZIP code of the registered office. */
+  postalCode?: string
   ibanBankCodes?: { country: string; code: string }[]
 }
 
 const BANK_DIRECTORY: DirectoryEntry[] = [
-  { name: "MCC Capital Bank", city: "Geneva", countryCode: "CH", bicPrefixes: ["MCCBCH"], primaryBic: "MCCBCHGG", ibanBankCodes: [{ country: "CH", code: "08390" }] },
-  { name: "UBS Switzerland AG", city: "Zurich", countryCode: "CH", bicPrefixes: ["UBSWCH"], primaryBic: "UBSWCHZH", ibanBankCodes: [{ country: "CH", code: "00273" }] },
-  { name: "Credit Suisse (Schweiz) AG", city: "Zurich", countryCode: "CH", bicPrefixes: ["CRESCH"], primaryBic: "CRESCHZZ", ibanBankCodes: [{ country: "CH", code: "04835" }] },
-  { name: "Banking Circle / SX Payments", city: "Hamburg", countryCode: "DE", bicPrefixes: ["SXPYDE"], primaryBic: "SXPYDEHH", ibanBankCodes: [{ country: "DE", code: "20220800" }] },
-  { name: "Deutsche Bank AG", city: "Frankfurt", countryCode: "DE", bicPrefixes: ["DEUTDE"], primaryBic: "DEUTDEFF", ibanBankCodes: [{ country: "DE", code: "50070010" }] },
-  { name: "Commerzbank AG", city: "Frankfurt", countryCode: "DE", bicPrefixes: ["COBADE"], primaryBic: "COBADEFF", ibanBankCodes: [{ country: "DE", code: "50040000" }] },
-  { name: "BNP Paribas", city: "Paris", countryCode: "FR", bicPrefixes: ["BNPAFR"], primaryBic: "BNPAFRPP", ibanBankCodes: [{ country: "FR", code: "30004" }] },
-  { name: "Société Générale", city: "Paris", countryCode: "FR", bicPrefixes: ["SOGEFR"], primaryBic: "SOGEFRPP", ibanBankCodes: [{ country: "FR", code: "30003" }] },
-  { name: "JPMorgan Chase Bank, N.A.", city: "New York", countryCode: "US", bicPrefixes: ["CHASUS"], primaryBic: "CHASUS33" },
-  { name: "Citibank N.A.", city: "New York", countryCode: "US", bicPrefixes: ["CITIUS"], primaryBic: "CITIUS33" },
-  { name: "Bank of America, N.A.", city: "Charlotte", countryCode: "US", bicPrefixes: ["BOFAUS"], primaryBic: "BOFAUS3N" },
-  { name: "NatWest Bank", city: "London", countryCode: "GB", bicPrefixes: ["NWBKGB"], primaryBic: "NWBKGB2L", ibanBankCodes: [{ country: "GB", code: "NWBK" }] },
-  { name: "Barclays Bank PLC", city: "London", countryCode: "GB", bicPrefixes: ["BARCGB"], primaryBic: "BARCGB22", ibanBankCodes: [{ country: "GB", code: "BARC" }] },
-  { name: "HSBC Bank PLC", city: "London", countryCode: "GB", bicPrefixes: ["HBUKGB", "MIDLGB"], primaryBic: "HBUKGB4B", ibanBankCodes: [{ country: "GB", code: "HBUK" }, { country: "GB", code: "MIDL" }] },
-  { name: "HSBC Bank Middle East", city: "Abu Dhabi", countryCode: "AE", bicPrefixes: ["HABORU", "BBMEAE"], primaryBic: "BBMEAEAD" },
-  { name: "Emirates NBD", city: "Dubai", countryCode: "AE", bicPrefixes: ["EBILAE"], primaryBic: "EBILAEAD", ibanBankCodes: [{ country: "AE", code: "033" }] },
-  { name: "DBS Bank Ltd", city: "Singapore", countryCode: "SG", bicPrefixes: ["DBSSSG"], primaryBic: "DBSSSGSG" },
-  { name: "Standard Chartered Bank", city: "Singapore", countryCode: "SG", bicPrefixes: ["SCBLSG"], primaryBic: "SCBLSGSG" },
-  { name: "MUFG Bank, Ltd.", city: "Tokyo", countryCode: "JP", bicPrefixes: ["BOTKJP"], primaryBic: "BOTKJPJT" },
-  { name: "The Hongkong and Shanghai Banking Corp.", city: "Hong Kong", countryCode: "HK", bicPrefixes: ["HSBCHK"], primaryBic: "HSBCHKHH" },
-  { name: "ING Bank N.V.", city: "Amsterdam", countryCode: "NL", bicPrefixes: ["INGBNL"], primaryBic: "INGBNL2A", ibanBankCodes: [{ country: "NL", code: "INGB" }] },
-  { name: "CaixaBank S.A.", city: "Barcelona", countryCode: "ES", bicPrefixes: ["CAIXES"], primaryBic: "CAIXESBB", ibanBankCodes: [{ country: "ES", code: "2100" }] },
-  { name: "UniCredit S.p.A.", city: "Milan", countryCode: "IT", bicPrefixes: ["UNCRIT"], primaryBic: "UNCRITMM", ibanBankCodes: [{ country: "IT", code: "02008" }] },
+  { name: "MCC Capital Bank", city: "Geneva", countryCode: "CH", bicPrefixes: ["MCCBCH"], primaryBic: "MCCBCHGG", address: "Rue du Rhône 100", postalCode: "1204", ibanBankCodes: [{ country: "CH", code: "08390" }] },
+  { name: "UBS Switzerland AG", city: "Zurich", countryCode: "CH", bicPrefixes: ["UBSWCH"], primaryBic: "UBSWCHZH", address: "Bahnhofstrasse 45", postalCode: "8001", ibanBankCodes: [{ country: "CH", code: "00273" }] },
+  { name: "Credit Suisse (Schweiz) AG", city: "Zurich", countryCode: "CH", bicPrefixes: ["CRESCH"], primaryBic: "CRESCHZZ", address: "Paradeplatz 8", postalCode: "8001", ibanBankCodes: [{ country: "CH", code: "04835" }] },
+  { name: "Banking Circle / SX Payments", city: "Hamburg", countryCode: "DE", bicPrefixes: ["SXPYDE"], primaryBic: "SXPYDEHH", address: "Willy-Brandt-Strasse 23", postalCode: "20457", ibanBankCodes: [{ country: "DE", code: "20220800" }] },
+  { name: "Deutsche Bank AG", city: "Frankfurt", countryCode: "DE", bicPrefixes: ["DEUTDE"], primaryBic: "DEUTDEFF", address: "Taunusanlage 12", postalCode: "60325", ibanBankCodes: [{ country: "DE", code: "50070010" }] },
+  { name: "Commerzbank AG", city: "Frankfurt", countryCode: "DE", bicPrefixes: ["COBADE"], primaryBic: "COBADEFF", address: "Kaiserplatz 16", postalCode: "60311", ibanBankCodes: [{ country: "DE", code: "50040000" }] },
+  { name: "BNP Paribas", city: "Paris", countryCode: "FR", bicPrefixes: ["BNPAFR"], primaryBic: "BNPAFRPP", address: "16 Boulevard des Italiens", postalCode: "75009", ibanBankCodes: [{ country: "FR", code: "30004" }] },
+  { name: "Société Générale", city: "Paris", countryCode: "FR", bicPrefixes: ["SOGEFR"], primaryBic: "SOGEFRPP", address: "29 Boulevard Haussmann", postalCode: "75009", ibanBankCodes: [{ country: "FR", code: "30003" }] },
+  { name: "JPMorgan Chase Bank, N.A.", city: "New York", countryCode: "US", bicPrefixes: ["CHASUS"], primaryBic: "CHASUS33", address: "383 Madison Avenue", postalCode: "10179" },
+  { name: "Citibank N.A.", city: "New York", countryCode: "US", bicPrefixes: ["CITIUS"], primaryBic: "CITIUS33", address: "388 Greenwich Street", postalCode: "10013" },
+  { name: "Bank of America, N.A.", city: "Charlotte", countryCode: "US", bicPrefixes: ["BOFAUS"], primaryBic: "BOFAUS3N", address: "100 North Tryon Street", postalCode: "28255" },
+  { name: "NatWest Bank", city: "London", countryCode: "GB", bicPrefixes: ["NWBKGB"], primaryBic: "NWBKGB2L", address: "250 Bishopsgate", postalCode: "EC2M 4AA", ibanBankCodes: [{ country: "GB", code: "NWBK" }] },
+  { name: "Barclays Bank PLC", city: "London", countryCode: "GB", bicPrefixes: ["BARCGB"], primaryBic: "BARCGB22", address: "1 Churchill Place", postalCode: "E14 5HP", ibanBankCodes: [{ country: "GB", code: "BARC" }] },
+  { name: "HSBC Bank PLC", city: "London", countryCode: "GB", bicPrefixes: ["HBUKGB", "MIDLGB"], primaryBic: "HBUKGB4B", address: "8 Canada Square", postalCode: "E14 5HQ", ibanBankCodes: [{ country: "GB", code: "HBUK" }, { country: "GB", code: "MIDL" }] },
+  { name: "HSBC Bank Middle East", city: "Abu Dhabi", countryCode: "AE", bicPrefixes: ["HABORU", "BBMEAE"], primaryBic: "BBMEAEAD", address: "Al Maqam Tower, ADGM Square, Al Maryah Island" },
+  { name: "Emirates NBD", city: "Dubai", countryCode: "AE", bicPrefixes: ["EBILAE"], primaryBic: "EBILAEAD", address: "Baniyas Road, Deira", ibanBankCodes: [{ country: "AE", code: "033" }] },
+  { name: "DBS Bank Ltd", city: "Singapore", countryCode: "SG", bicPrefixes: ["DBSSSG"], primaryBic: "DBSSSGSG", address: "12 Marina Boulevard, Marina Bay Financial Centre Tower 3", postalCode: "018982" },
+  { name: "Standard Chartered Bank", city: "Singapore", countryCode: "SG", bicPrefixes: ["SCBLSG"], primaryBic: "SCBLSGSG", address: "8 Marina Boulevard, Marina Bay Financial Centre Tower 1", postalCode: "018981" },
+  { name: "MUFG Bank, Ltd.", city: "Tokyo", countryCode: "JP", bicPrefixes: ["BOTKJP"], primaryBic: "BOTKJPJT", address: "2-7-1 Marunouchi, Chiyoda-ku", postalCode: "100-8388" },
+  { name: "The Hongkong and Shanghai Banking Corp.", city: "Hong Kong", countryCode: "HK", bicPrefixes: ["HSBCHK"], primaryBic: "HSBCHKHH", address: "1 Queen's Road Central" },
+  { name: "ING Bank N.V.", city: "Amsterdam", countryCode: "NL", bicPrefixes: ["INGBNL"], primaryBic: "INGBNL2A", address: "Bijlmerdreef 106", postalCode: "1102 CT", ibanBankCodes: [{ country: "NL", code: "INGB" }] },
+  { name: "CaixaBank S.A.", city: "Barcelona", countryCode: "ES", bicPrefixes: ["CAIXES"], primaryBic: "CAIXESBB", address: "Calle Pintor Sorolla 2-4", postalCode: "46002", ibanBankCodes: [{ country: "ES", code: "2100" }] },
+  { name: "UniCredit S.p.A.", city: "Milan", countryCode: "IT", bicPrefixes: ["UNCRIT"], primaryBic: "UNCRITMM", address: "Piazza Gae Aulenti 3", postalCode: "20154", ibanBankCodes: [{ country: "IT", code: "02008" }] },
 ]
 
 function normalize(value: string): string {
@@ -228,6 +236,8 @@ export async function lookupBankByBic(raw: string): Promise<BankInfo | null> {
         country: countryName(entry.countryCode) ?? entry.countryCode,
         countryCode: entry.countryCode,
         bic: result.normalized,
+        address: entry.address,
+        postalCode: entry.postalCode,
         branch:
           result.branchCode && result.branchCode !== "XXX"
             ? `Branch ${result.branchCode}`
@@ -259,6 +269,8 @@ export async function lookupBankByIban(raw: string): Promise<BankInfo | null> {
         country: countryName(entry.countryCode) ?? entry.countryCode,
         countryCode: entry.countryCode,
         bic: entry.primaryBic,
+        address: entry.address,
+        postalCode: entry.postalCode,
       }
     : {
         name: result.bankCode
