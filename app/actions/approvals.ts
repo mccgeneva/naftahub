@@ -4,6 +4,7 @@ import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { resolveCurrentSession, resolveAccountProfileById } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import { upsertLedgerEntry } from "@/lib/ledger-db"
+import type { LedgerEntry } from "@/lib/ledger-store"
 import { insertNotification } from "@/lib/notifications-db"
 import {
   insertApproval,
@@ -134,29 +135,98 @@ export async function adminCountPending(passcode: string): Promise<Record<string
   }
 }
 
+// Approval kinds that, when approved, CREDIT the owner's balance. These are
+// surfaced as available funds (e.g. monetization proceeds, downloaded funds,
+// project funding draws). Used as a fallback when an approval was created
+// before an explicit `ledgerEffect` was attached, so the amount/currency stored
+// on the approval itself still posts to the client's ledger on approval.
+const CREDIT_KINDS = new Set<ApprovalKind>(["monetization", "dof", "project_funding"])
+
+/**
+ * Resolve the ledger entry an approved request should post (or null if none).
+ * Prefers an explicit `ledgerEffect`; otherwise falls back to the approval's
+ * own amount/currency for known crediting kinds. Idempotent id (`APPR-<id>`)
+ * means re-applying never double-posts.
+ */
+function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
+  const fx = req.ledgerEffect
+  if (fx) {
+    const amount = Number(fx.amount)
+    if (!Number.isFinite(amount) || amount <= 0) return null
+    return {
+      id: `APPR-${req.id}`,
+      direction: fx.direction,
+      amount,
+      currency: fx.currency || req.currency || "USD",
+      status: fx.status ?? "completed",
+      date: new Date().toISOString(),
+      counterparty: fx.counterparty ?? req.title,
+      account: fx.account,
+      bank: fx.bank,
+      reference: fx.reference ?? req.id,
+      comment: `Approved ${KIND_LABELS[req.kind]} — ${req.title}`,
+      category: fx.category ?? KIND_LABELS[req.kind],
+    }
+  }
+  // Fallback: credit the stored amount for known crediting kinds (e.g. a
+  // monetization approved before ledger effects were attached).
+  if (CREDIT_KINDS.has(req.kind)) {
+    const amount = Number(req.amount)
+    if (!Number.isFinite(amount) || amount <= 0) return null
+    return {
+      id: `APPR-${req.id}`,
+      direction: "credit",
+      amount,
+      currency: req.currency || "USD",
+      status: "completed",
+      date: new Date().toISOString(),
+      counterparty: req.title,
+      reference: req.id,
+      comment: `Approved ${KIND_LABELS[req.kind]} — ${req.title}`,
+      category: KIND_LABELS[req.kind],
+    }
+  }
+  return null
+}
+
 /**
  * Apply the financial effect (if any) of an approved request to the owner's
  * ledger. Idempotent on the entry id so re-running never double-posts.
  */
 async function applyLedgerEffect(req: ApprovalRequest): Promise<void> {
-  const fx = req.ledgerEffect
-  if (!fx) return
-  const amount = Number(fx.amount)
-  if (!Number.isFinite(amount) || amount <= 0) return
-  await upsertLedgerEntry(req.userId, {
-    id: `APPR-${req.id}`,
-    direction: fx.direction,
-    amount,
-    currency: fx.currency || req.currency || "USD",
-    status: fx.status ?? "completed",
-    date: new Date().toISOString(),
-    counterparty: fx.counterparty ?? req.title,
-    account: fx.account,
-    bank: fx.bank,
-    reference: fx.reference ?? req.id,
-    comment: `Approved ${KIND_LABELS[req.kind]} — ${req.title}`,
-    category: fx.category ?? KIND_LABELS[req.kind],
-  })
+  const entry = ledgerEntryForApproval(req)
+  if (!entry) return
+  await upsertLedgerEntry(req.userId, entry)
+}
+
+/**
+ * Back-fill ledger credits for the signed-in client's already-approved
+ * requests. Safe to call on every dashboard load: posting is idempotent on
+ * `APPR-<id>`, so an entry that already exists is simply overwritten with the
+ * same values. This guarantees that any approved monetization (including ones
+ * approved before ledger effects existed) reflects in the master account
+ * balance the next time the ledger hydrates. Returns the number of credit
+ * entries reconciled.
+ */
+export async function reconcileMyApprovedCredits(): Promise<{ ok: boolean; applied: number }> {
+  const session = await resolveCurrentSession()
+  if (!session) return { ok: false, applied: 0 }
+  try {
+    const mine = await listApprovalsForUser(session.id)
+    const approved = mine.filter((r) => r.status === "approved")
+    let applied = 0
+    for (const req of approved) {
+      const entry = ledgerEntryForApproval(req)
+      if (entry && entry.direction === "credit") {
+        await upsertLedgerEntry(req.userId, entry)
+        applied += 1
+      }
+    }
+    return { ok: true, applied }
+  } catch (err) {
+    console.log("[v0] reconcileMyApprovedCredits failed:", (err as Error).message)
+    return { ok: false, applied: 0 }
+  }
 }
 
 export type DecideResult =
