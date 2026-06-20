@@ -4,7 +4,6 @@ import { useState } from "react"
 import { useRouter } from "next/navigation"
 import {
   FileText,
-  Plus,
   Search,
   Filter,
   Download,
@@ -19,7 +18,6 @@ import {
   TrendingUp,
   ArrowRight,
   XCircle,
-  Trash2,
   Ban,
   Landmark,
   Copy,
@@ -49,7 +47,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog"
 import {
   DropdownMenu,
@@ -72,7 +69,6 @@ import {
 } from "@/lib/monetization-requests-store"
 import { generateInstrumentCertificate } from "@/lib/certificate-pdf"
 import { generateMt760, generateMt799 } from "@/lib/swift-mt"
-import { buildInstrumentIdentifiers } from "@/lib/instrument-identifiers"
 
 const MONETIZATION_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "AED", "SGD"]
 
@@ -135,35 +131,6 @@ const formatCurrency = (value: number, currency: string) => {
     CHF: "CHF ",
   }
   return `${symbols[currency]}${value.toLocaleString()}`
-}
-
-const typeMeta: Record<string, { short: string; full: string }> = {
-  sblc: { short: "SBLC", full: "Stand-by Letter of Credit" },
-  mtn: { short: "MTN", full: "Medium Term Note" },
-  bg: { short: "BG", full: "Bank Guarantee" },
-}
-
-const bankNames: Record<string, string> = {
-  natwest: "NatWest Bank PLC",
-  jpmorgan: "JP Morgan Chase",
-  ubs: "UBS Switzerland",
-  hsbc: "HSBC London",
-  deutsche: "Deutsche Bank AG",
-  barclays: "Barclays Bank",
-}
-
-const tradeTypeLabels: Record<string, string> = {
-  purchase: "Purchase (23% of face value)",
-  lease: "Lease (4% of face value)",
-  assign: "Assignee (0.2% of face value)",
-}
-
-const purposeNames: Record<string, string> = {
-  trade: "Trade Finance",
-  investment: "Investment",
-  commodity: "Commodity Trading",
-  performance: "Performance Guarantee",
-  ppp: "PPP/Yield Program",
 }
 
 export default function InstrumentsPage() {
