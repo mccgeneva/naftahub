@@ -106,6 +106,7 @@ import { KIND_LABELS, type ApprovalKind } from "@/lib/approval-kinds"
 import { adminListPendingKyc } from "@/app/actions/beneficiaries"
 import { BalanceManager } from "@/components/admin/balance-manager"
 import { SkrManager } from "@/components/admin/skr-manager"
+import { InstrumentIssuer } from "@/components/admin/instrument-issuer"
 import { CertificateManager } from "@/components/admin/certificate-manager"
 import { BankekaBroadcastManager } from "@/components/admin/bankeka-broadcast-manager"
 import { toast } from "sonner"
@@ -2199,6 +2200,8 @@ export default function AdminPage() {
       {/* Bank Instruments section */}
       {activeView === "instruments" && (
       <div className="space-y-6">
+      {/* Issue a bank instrument directly into a client's portfolio */}
+      <InstrumentIssuer />
       {/* Pending instrument requests */}
       <Card id="section-instruments" className="bg-card border-border">
         <CardHeader>

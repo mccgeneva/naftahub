@@ -233,6 +233,89 @@ export async function adminDecideApproval(
   }
 }
 
+/**
+ * Issue a bank instrument directly into a client's portfolio (administrator
+ * only). Clients can no longer self-create instruments; issuance is an
+ * administrator-controlled act. This records an `instrument` approval for the
+ * target client that is born already-approved and carries the full instrument
+ * in its payload, so the client's instrument store can materialise it as an
+ * active holding on its next reconcile — durable and visible cross-device.
+ */
+export type IssueInstrumentResult =
+  | { ok: true; request: ApprovalRequest }
+  | { ok: false; error: string }
+
+export async function adminIssueInstrument(
+  passcode: string,
+  userId: string,
+  instrument: Record<string, unknown>,
+): Promise<IssueInstrumentResult> {
+  if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
+  if (!userId) return { ok: false, error: "Select a client to issue to." }
+
+  const id = String(instrument?.id ?? "").trim()
+  const issuer = String(instrument?.issuer ?? "").trim()
+  const typeFull = String(instrument?.typeFull ?? instrument?.type ?? "Bank Instrument").trim()
+  const currency = String(instrument?.currency ?? "USD").trim()
+  const faceValue = Number(instrument?.faceValue ?? 0)
+  if (!id) return { ok: false, error: "The instrument is missing an identifier." }
+  if (!issuer) return { ok: false, error: "An issuing bank is required." }
+  if (!Number.isFinite(faceValue) || faceValue <= 0) {
+    return { ok: false, error: "Enter a valid face value greater than 0." }
+  }
+
+  try {
+    // Born pending, then immediately decided approved by the administrator, so
+    // it shares the exact same audit + notification path as any other decision.
+    const created = await insertApproval({
+      userId,
+      kind: "instrument",
+      title: `${typeFull} · ${issuer}`,
+      summary: `${currency} ${faceValue.toLocaleString("en-US")} ${typeFull} issued by ${issuer} (administrator issuance).`,
+      amount: faceValue,
+      currency,
+      // The full instrument travels in the payload so the client can materialise
+      // it. `issuedByAdmin` marks it as a brand-new holding (not a reconcile of
+      // a client-originated request).
+      payload: { issuedByAdmin: true, instrument },
+    })
+
+    const decided = await decideApproval(created.id, "approved", "Administrator")
+    const request = decided ?? created
+
+    try {
+      await insertNotification({
+        userId,
+        tone: "success",
+        title: "Bank instrument issued",
+        body: `MCC Capital issued a ${typeFull} of ${currency} ${faceValue.toLocaleString("en-US")} (${issuer}) to your portfolio.`,
+        href: KIND_HREF.instrument ?? "/dashboard/instruments",
+      })
+    } catch (err) {
+      console.log("[v0] issue notification failed:", (err as Error).message)
+    }
+
+    const target = await resolveAccountProfileById(userId)
+    await logActivity({
+      action: `Administrator issued a ${typeFull} (${currency} ${faceValue.toLocaleString("en-US")}) to ${target.fullName}`,
+      category: "Administration / Instruments",
+      user: "Administrator",
+      details: {
+        referenceId: id,
+        targetAccount: `${target.fullName} — ${target.email}`,
+        instrument: `${typeFull} — ${issuer}`,
+        faceValue: `${currency} ${faceValue.toLocaleString("en-US")}`,
+        action: "Issued",
+      },
+    })
+
+    return { ok: true, request }
+  } catch (err) {
+    console.log("[v0] adminIssueInstrument failed:", (err as Error).message)
+    return { ok: false, error: "The instrument could not be issued. Please try again." }
+  }
+}
+
 export interface BulkDecideResult {
   ok: boolean
   decided: number
