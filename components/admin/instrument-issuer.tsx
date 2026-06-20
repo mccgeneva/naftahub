@@ -18,21 +18,14 @@ import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
 import { adminIssueInstrument } from "@/app/actions/approvals"
 import { buildInstrumentIdentifiers } from "@/lib/instrument-identifiers"
+import { partnerBankByKey } from "@/lib/partner-banks"
+import { BankCombobox } from "@/components/admin/bank-combobox"
 import { useActivityLog } from "@/components/activity-tracker"
 
 const TYPE_META: Record<string, { short: string; full: string }> = {
   sblc: { short: "SBLC", full: "Stand-by Letter of Credit" },
   mtn: { short: "MTN", full: "Medium Term Note" },
   bg: { short: "BG", full: "Bank Guarantee" },
-}
-
-const BANK_NAMES: Record<string, string> = {
-  natwest: "NatWest Bank PLC",
-  jpmorgan: "JP Morgan Chase",
-  ubs: "UBS Switzerland",
-  hsbc: "HSBC London",
-  deutsche: "Deutsche Bank AG",
-  barclays: "Barclays Bank",
 }
 
 const PURPOSE_NAMES: Record<string, string> = {
@@ -104,7 +97,7 @@ export function InstrumentIssuer() {
     const now = new Date()
     const expiry = new Date(now)
     expiry.setFullYear(expiry.getFullYear() + 1)
-    const issuer = BANK_NAMES[issuingBank] ?? "—"
+    const issuer = partnerBankByKey(issuingBank)?.name ?? "—"
     const identifiers = buildInstrumentIdentifiers(issuingBank, meta.short, now)
 
     const instrument = {
@@ -203,18 +196,7 @@ export function InstrumentIssuer() {
           </div>
           <div className="grid gap-2">
             <Label htmlFor="issue-bank">Issuing Bank</Label>
-            <Select value={issuingBank} onValueChange={setIssuingBank}>
-              <SelectTrigger id="issue-bank">
-                <SelectValue placeholder="Select bank" />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(BANK_NAMES).map(([key, name]) => (
-                  <SelectItem key={key} value={key}>
-                    {name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <BankCombobox id="issue-bank" value={issuingBank} onChange={setIssuingBank} />
           </div>
           <div className="grid gap-2">
             <Label htmlFor="issue-face">Face Value</Label>
