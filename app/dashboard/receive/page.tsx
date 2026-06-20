@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { Copy, Check, Download, Share2, Landmark, Info, Wallet, ShieldCheck, ArrowDownLeft, Lock } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -26,6 +26,8 @@ import { useActivityLog } from "@/components/activity-tracker"
 import { useLedger } from "@/lib/ledger-store"
 import { addLedgerEntryForUserAdmin } from "@/app/actions/ledger"
 import { getActiveUserId } from "@/lib/user-scope"
+import { VerifiedBankField } from "@/components/verified-bank-field"
+import type { BankInfo } from "@/lib/iban-swift"
 
 const currencySymbols: Record<string, string> = {
   EUR: "€",
@@ -37,6 +39,13 @@ const currencySymbols: Record<string, string> = {
 function formatCurrency(amount: number, currency: string): string {
   const symbol = currencySymbols[currency] || currency
   return `${symbol}${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+/** Compose a single-line bank label from resolved directory info. */
+function formatSenderBank(info: BankInfo): string {
+  const cityLine = [info.postalCode, info.city].filter(Boolean).join(" ")
+  const where = [cityLine, info.country].filter(Boolean).join(", ")
+  return [info.name, info.bic ? `SWIFT ${info.bic}` : "", where].filter(Boolean).join(" · ")
 }
 
 // MCC Capital master receiving account (matches the Bank Accounts section)
@@ -78,12 +87,28 @@ export default function ReceiveFundsPage() {
   const [rcvCurrency, setRcvCurrency] = useState("EUR")
   const [rcvComment, setRcvComment] = useState("")
   const [posting, setPosting] = useState(false)
+  // Tracks the last value we auto-filled into "Sender Bank" from an IBAN
+  // lookup, so a fresh lookup never clobbers a value the admin typed manually.
+  const autoFilledBankRef = useRef("")
+
+  // Auto-resolve the sender bank from a valid sender IBAN. Manual edits win:
+  // we only overwrite the bank field when it's empty or still equals what we
+  // last auto-filled.
+  const handleResolvedSenderBank = (info: BankInfo | null) => {
+    if (!info) return
+    const resolved = formatSenderBank(info)
+    if (!resolved) return
+    const prev = autoFilledBankRef.current
+    setRcvSenderBank((cur) => (cur === "" || cur === prev ? resolved : cur))
+    autoFilledBankRef.current = resolved
+  }
 
   const resetReceiveForm = () => {
     setRcvReceiptNo("")
     setRcvSender("")
     setRcvSenderAccount("")
     setRcvSenderBank("")
+    autoFilledBankRef.current = ""
     setRcvAmount("")
     setRcvComment("")
   }
@@ -309,20 +334,21 @@ export default function ReceiveFundsPage() {
                 onChange={(e) => setRcvSender(e.target.value)}
               />
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="rcv-sender-account">Sender Account (optional)</Label>
-              <Input
-                id="rcv-sender-account"
-                placeholder="525981_2303"
-                value={rcvSenderAccount}
-                onChange={(e) => setRcvSenderAccount(e.target.value)}
-              />
-            </div>
+            <VerifiedBankField
+              id="rcv-sender-account"
+              label="Sender IBAN / account (optional)"
+              kind="iban"
+              lenient
+              value={rcvSenderAccount}
+              onChange={setRcvSenderAccount}
+              onResolved={handleResolvedSenderBank}
+              placeholder="e.g. DE73202208000029290819"
+            />
             <div className="grid gap-2">
               <Label htmlFor="rcv-sender-bank">Sender Bank (optional)</Label>
               <Input
                 id="rcv-sender-bank"
-                placeholder="Bank name or code"
+                placeholder="Auto-filled from a recognised IBAN — or type manually"
                 value={rcvSenderBank}
                 onChange={(e) => setRcvSenderBank(e.target.value)}
               />
