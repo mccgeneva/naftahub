@@ -70,6 +70,8 @@ export interface SkrRecord {
   /** Custody account reference. */
   custodyAccountRef: string
   status: SkrStatus
+  /** Description of the asset held under custody — the object of this SKR. */
+  assetDescription?: string
   /** Optional free-text custody / instrument notes. */
   notes?: string
   documents: SkrDocument[]

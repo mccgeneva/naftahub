@@ -46,6 +46,9 @@ import { useActivityLog } from "@/components/activity-tracker"
 import { exportToCsv } from "@/lib/export-utils"
 import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
 import { usePdfViewer } from "@/lib/pdf-viewer"
+import { generateSkrCertificate } from "@/lib/certificate-pdf"
+import { blobFileUrl } from "@/lib/kyc-types"
+import { Award } from "lucide-react"
 import {
   useSkr,
   formatSkrValue,
@@ -163,6 +166,33 @@ export default function SkrPage() {
         referenceId: record.id,
         custodian: record.custodian,
         faceValue: formatSkrValue(record.faceValue, record.currency),
+      },
+    })
+  }
+
+  const downloadCertificate = (record: SkrRecord) => {
+    const generated = generateSkrCertificate({
+      reference: record.id,
+      custodian: record.custodian,
+      beneficialOwner: record.beneficialOwner,
+      faceValue: formatSkrValue(record.faceValue, record.currency),
+      currency: record.currency,
+      status: SKR_STATUS_LABELS[record.status],
+      issueDate: record.issueDate,
+      expiryDate: record.expiryDate,
+      custodyAccountRef: record.custodyAccountRef,
+      assetDescription: record.assetDescription,
+      verificationCode: `VRF-${record.id.replace(/\D/g, "").slice(-6) || "000000"}`,
+    })
+    show(generated)
+    logActivity({
+      action: `Downloaded SKR certificate for ${record.id}`,
+      category: "SKR Trading",
+      details: {
+        summary: `Client generated the safe keeping receipt certificate for ${record.id}, declaring custody of an asset worth ${formatSkrValue(record.faceValue, record.currency)} owned by ${record.beneficialOwner}.`,
+        referenceId: record.id,
+        custodian: record.custodian,
+        declaredValue: formatSkrValue(record.faceValue, record.currency),
       },
     })
   }
@@ -486,6 +516,13 @@ export default function SkrPage() {
                   <Detail icon={Calendar} label="Expiry date" value={formatDate(viewTarget.expiryDate)} />
                 </dl>
 
+                {viewTarget.assetDescription && (
+                  <div className="rounded-lg border border-border bg-secondary/30 p-3">
+                    <p className="text-xs font-medium text-muted-foreground">Asset held under custody</p>
+                    <p className="mt-1 text-sm text-foreground text-pretty">{viewTarget.assetDescription}</p>
+                  </div>
+                )}
+
                 {viewTarget.notes && (
                   <div className="rounded-lg border border-border bg-secondary/30 p-3">
                     <p className="text-xs font-medium text-muted-foreground">Custody notes</p>
@@ -506,13 +543,27 @@ export default function SkrPage() {
                       {viewTarget.documents.map((doc) => (
                         <div
                           key={doc.id}
-                          className="flex items-center justify-between rounded-md border border-border bg-card px-3 py-2"
+                          className="flex items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2"
                         >
                           <div className="flex items-center gap-2 overflow-hidden">
                             <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                             <span className="truncate text-sm text-foreground">{doc.name}</span>
+                            <span className="shrink-0 text-[11px] text-muted-foreground">{doc.docType}</span>
                           </div>
-                          <span className="shrink-0 text-[11px] text-muted-foreground">{doc.docType}</span>
+                          {doc.pathname ? (
+                            <a
+                              href={blobFileUrl(doc.pathname)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              download={doc.name}
+                              className="inline-flex shrink-0 items-center gap-1 text-xs text-primary hover:underline"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              Download
+                            </a>
+                          ) : (
+                            <span className="shrink-0 text-[11px] text-muted-foreground">Reference only</span>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -552,6 +603,14 @@ export default function SkrPage() {
                 >
                   <Download className="mr-1.5 h-4 w-4" />
                   Export history (CSV)
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => downloadCertificate(viewTarget)}
+                  className="w-full sm:w-auto"
+                >
+                  <Award className="mr-1.5 h-4 w-4" />
+                  SKR certificate
                 </Button>
                 <Button onClick={() => downloadStatement(viewTarget)} className="w-full sm:w-auto">
                   <Download className="mr-1.5 h-4 w-4" />
