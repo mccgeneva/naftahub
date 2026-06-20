@@ -17,6 +17,7 @@
 import { scopedKey, getActiveUserId } from "@/lib/user-scope"
 import { DEMO_USER_ID } from "@/lib/users"
 import { generateUetr } from "@/lib/swift-gpi"
+import { demoBeneficiaries } from "@/lib/demo-beneficiaries"
 
 const SEED_MARKER = "mcc.demo-seeded.v1"
 
@@ -92,15 +93,6 @@ function instruments() {
     { id: "INS-DEMO-0001", type: "SBLC", typeFull: "Standby Letter of Credit", issuer: "Barclays Bank PLC, London", faceValue: 500_000_000, currency: "USD", status: "active", issuedDate: dateAgo(120), expiryDate: dateAhead(245), daysRemaining: 245, rating: "AA / Aa2", purpose: "Trade finance collateral & monetization", assignable: true, monetizable: true, tradeType: "Leased", submittedAt: daysAgo(122), decidedAt: daysAgo(120) },
     { id: "INS-DEMO-0002", type: "BG", typeFull: "Bank Guarantee", issuer: "Deutsche Bank AG, Frankfurt", faceValue: 250_000_000, currency: "EUR", status: "active", issuedDate: dateAgo(90), expiryDate: dateAhead(275), daysRemaining: 275, rating: "A+ / A1", purpose: "Performance guarantee — commodity contract", assignable: true, monetizable: true, tradeType: "Owned", submittedAt: daysAgo(92), decidedAt: daysAgo(90) },
     { id: "INS-DEMO-0003", type: "MTN", typeFull: "Medium Term Note", issuer: "HSBC Holdings PLC", faceValue: 175_000_000, currency: "GBP", status: "active", issuedDate: dateAgo(60), expiryDate: dateAhead(670), daysRemaining: 670, rating: "AA- / Aa3", purpose: "Fixed-income portfolio holding", assignable: false, monetizable: true, tradeType: "Owned", submittedAt: daysAgo(62), decidedAt: daysAgo(60) },
-  ]
-}
-
-// --- Beneficiaries: established counterparties with volume ------------------
-function beneficiaries() {
-  return [
-    { id: "BEN-DEMO-0001", type: "corporate", name: "Glencore International AG", alias: "Glencore", accountNumber: "623852957", iban: "CH9300762011623852957", swiftBic: "UBSWCHZH80A", bankName: "UBS Switzerland AG", bankAddress: "Bahnhofstrasse 45, 8001 Zürich", bankCountry: "Switzerland", beneficiaryAddress: "Baarermattstrasse 3", beneficiaryCity: "Baar", beneficiaryCountry: "Switzerland", beneficiaryPostalCode: "6340", currency: "USD", status: "active", isFavorite: true, createdAt: daysAgo(140), lastUsed: daysAgo(22), totalTransactions: 18, totalVolume: 612_000_000, registrationNumber: "CHE-105.927.534", vatNumber: "CHE-105.927.534", kycVerified: true, riskLevel: "low", amlScreeningDate: dateAgo(30) },
-    { id: "BEN-DEMO-0002", type: "corporate", name: "Vitol SA", alias: "Vitol Geneva", accountNumber: "12345678009", iban: "CH5604835012345678009", swiftBic: "CRESCHZZ80A", bankName: "Credit Suisse (Switzerland) Ltd", bankAddress: "Paradeplatz 8, 8001 Zürich", bankCountry: "Switzerland", beneficiaryAddress: "Boulevard du Pont-d'Arve 28", beneficiaryCity: "Geneva", beneficiaryCountry: "Switzerland", beneficiaryPostalCode: "1205", currency: "EUR", status: "active", isFavorite: true, createdAt: daysAgo(120), lastUsed: daysAgo(15), totalTransactions: 12, totalVolume: 280_000_000, registrationNumber: "CHE-101.482.090", kycVerified: true, riskLevel: "low", amlScreeningDate: dateAgo(25) },
-    { id: "BEN-DEMO-0003", type: "financial_institution", name: "Barclays Bank PLC", alias: "Barclays London", accountNumber: "60161331926819", iban: "GB29NWBK60161331926819", swiftBic: "BARCGB22", bankName: "Barclays Bank PLC", bankAddress: "1 Churchill Place, London E14 5HP", bankCountry: "United Kingdom", beneficiaryAddress: "1 Churchill Place", beneficiaryCity: "London", beneficiaryCountry: "United Kingdom", beneficiaryPostalCode: "E14 5HP", currency: "GBP", status: "active", isFavorite: false, createdAt: daysAgo(110), lastUsed: daysAgo(9), totalTransactions: 9, totalVolume: 156_000_000, kycVerified: true, riskLevel: "low", amlScreeningDate: dateAgo(20) },
   ]
 }
 
@@ -287,7 +279,7 @@ export function ensureDemoSeed() {
   write("mcc.payment-requests.v1", paymentRequests())
   write("mcc.ppp-requests.v1", pppRequests())
   write("mcc.instruments.v1", instruments())
-  write("mcc.beneficiaries.v1", beneficiaries())
+  write("mcc.beneficiaries.v1", demoBeneficiaries())
   write("mcc.dof-requests.v1", dofRequests())
   write("mcc.dtc-requests.v1", dtcRequests())
   write("mcc.commodity-deals.v1", commodityDeals())

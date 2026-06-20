@@ -1,8 +1,10 @@
 "use client"
 
 import { createContext, useContext, useEffect, useRef, useState } from "react"
-import { scopedKey } from "@/lib/user-scope"
+import { scopedKey, getActiveUserId } from "@/lib/user-scope"
 import { getMyBeneficiaries, syncMyBeneficiaries } from "@/app/actions/beneficiaries"
+import { DEMO_USER_ID } from "@/lib/users"
+import { demoBeneficiaries } from "@/lib/demo-beneficiaries"
 
 export type BeneficiaryType = "individual" | "corporate" | "financial_institution"
 export type BeneficiaryStatus = "active" | "pending" | "suspended" | "blocked"
@@ -46,6 +48,11 @@ export interface Beneficiary {
 const KEY_BASE = "mcc.beneficiaries.v1"
 const storageKey = () => scopedKey(KEY_BASE)
 
+// One-time marker (per user) for the demo beneficiary-book backfill. Ensures the
+// rich petroleum/trade/finance counterparty list is merged in exactly once, so a
+// demo user who later removes some entries doesn't see them re-appear.
+const DEMO_BACKFILL_MARKER = "mcc.demo-beneficiaries-backfill.v1"
+
 interface BeneficiariesContextValue {
   beneficiaries: Beneficiary[]
   setBeneficiaries: React.Dispatch<React.SetStateAction<Beneficiary[]>>
@@ -60,6 +67,8 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
   // Skip the very first server-sync that the hydration setState would trigger,
   // so we never echo freshly-loaded data straight back to the server.
   const skipNextSync = useRef(true)
+  // Guards the demo beneficiary-book backfill so it runs at most once per mount.
+  const demoBackfillDone = useRef(false)
 
   // Load persisted beneficiaries once on mount. The durable source of truth is
   // the server (Neon), so admins can manage beneficiaries on behalf of users and
@@ -113,6 +122,39 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
       beneficiaries.map((b) => ({ id: b.id, data: b as unknown as Record<string, unknown>, status: b.status })),
     ).catch(() => {})
   }, [beneficiaries, hydrated])
+
+  // One-time demo backfill: after hydration, merge the rich petroleum / trade /
+  // finance beneficiary book into the demo account. This runs against the
+  // already-hydrated state (which reflects the durable server copy), so any
+  // missing counterparties are added and then mirrored back to Neon by the
+  // persist effect above. Strictly scoped to the demo user and guarded by a
+  // per-user marker so it never touches other accounts or re-adds removed rows.
+  useEffect(() => {
+    if (!hydrated || demoBackfillDone.current) return
+    demoBackfillDone.current = true
+    if (getActiveUserId() !== DEMO_USER_ID) return
+    try {
+      if (window.localStorage.getItem(scopedKey(DEMO_BACKFILL_MARKER))) return
+    } catch {
+      return
+    }
+    const existing = new Set(beneficiaries.map((b) => b.id))
+    const missing = demoBeneficiaries().filter((b) => !existing.has(b.id))
+    try {
+      window.localStorage.setItem(
+        scopedKey(DEMO_BACKFILL_MARKER),
+        JSON.stringify({ at: new Date().toISOString(), added: missing.length }),
+      )
+    } catch {
+      // ignore availability errors — marker is best-effort
+    }
+    if (missing.length) {
+      setBeneficiaries((prev) => {
+        const have = new Set(prev.map((b) => b.id))
+        return [...missing.filter((m) => !have.has(m.id)), ...prev]
+      })
+    }
+  }, [hydrated, beneficiaries])
 
   const addBeneficiary = (beneficiary: Beneficiary) =>
     setBeneficiaries((prev) => [beneficiary, ...prev])
