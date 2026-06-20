@@ -34,6 +34,7 @@ import {
   Award,
   LogOut,
   MessageSquareText,
+  Network,
   type LucideIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -103,6 +104,7 @@ const navGroups: NavGroup[] = [
     label: "Platform",
     icon: Settings,
     items: [
+      { title: "My Network", href: "/dashboard/network", icon: Network },
       { title: "Plans & Pricing", href: "/dashboard/plans", icon: DollarSign },
       { title: "Services & Compliance", href: "/dashboard/services", icon: Shield },
       { title: "Client Handbook", href: "/dashboard/handbook", icon: BookOpen },

@@ -27,7 +27,8 @@ import {
   type DynamicUserRecord,
   type UserStatus,
 } from "@/lib/admin-users-db"
-import type { SerializableUserProfile, SerializableProfileItem } from "@/lib/profile-types"
+import type { SerializableUserProfile, SerializableProfileItem, AccountRelationship } from "@/lib/profile-types"
+import { effectiveRelationship } from "@/lib/account-hierarchy"
 import type { KycDocument, KycPassportMeta } from "@/lib/kyc-types"
 
 // A client-safe view of a dynamic user (never includes nothing it shouldn't —
@@ -45,6 +46,11 @@ export interface AdminUserView {
   createdAt: string
   updatedAt: string
   createdBy: string
+  // Referral hierarchy
+  relationship: AccountRelationship
+  masterId?: string
+  masterName?: string
+  masterEmail?: string
 }
 
 export type AdminUsersResult =
@@ -74,6 +80,10 @@ function toView(rec: DynamicUserRecord): AdminUserView {
     createdAt: rec.createdAt,
     updatedAt: rec.updatedAt,
     createdBy: rec.createdBy,
+    relationship: effectiveRelationship(rec.profile.relationship),
+    masterId: rec.profile.masterId,
+    masterName: rec.profile.masterName,
+    masterEmail: rec.profile.masterEmail,
   }
 }
 
@@ -159,6 +169,10 @@ export interface CreateUserInput {
   kycDocuments?: KycDocument[]
   kycPdfPathname?: string
   adminName?: string
+  // Referral hierarchy. relationship defaults to "master" (standalone). When
+  // "sub" or "child", masterId must reference an existing account.
+  relationship?: AccountRelationship
+  masterId?: string
 }
 
 function initialsFrom(fullName: string, company: string): string {
@@ -219,6 +233,51 @@ function buildProfile(input: CreateUserInput, id: string, email: string, passwor
   }
 }
 
+/**
+ * Validate a requested hierarchy placement and resolve the denormalised Master
+ * fields to stamp onto the profile. Enforces the core invariants:
+ *  - master accounts carry no master link;
+ *  - sub/child must reference an existing account;
+ *  - the chosen Master must itself be a "master" (no multi-level chaining), so
+ *    the tree stays exactly two levels deep.
+ * Returns the resolved fields, or an error string.
+ */
+async function resolveHierarchy(
+  relationship: AccountRelationship | undefined,
+  masterId: string | undefined,
+  selfId?: string,
+): Promise<
+  | { ok: true; fields: Pick<SerializableUserProfile, "relationship" | "masterId" | "masterName" | "masterEmail"> }
+  | { ok: false; error: string }
+> {
+  const rel = effectiveRelationship(relationship)
+  if (rel === "master") {
+    return { ok: true, fields: { relationship: "master", masterId: undefined, masterName: undefined, masterEmail: undefined } }
+  }
+  if (!masterId) {
+    return { ok: false, error: "Select a Master account for a sub or child account." }
+  }
+  if (selfId && masterId === selfId) {
+    return { ok: false, error: "An account cannot be its own Master." }
+  }
+  const master = await getDynamicUserById(masterId)
+  if (!master) {
+    return { ok: false, error: "The selected Master account no longer exists." }
+  }
+  if (effectiveRelationship(master.profile.relationship) !== "master") {
+    return { ok: false, error: "The selected account is itself linked to a Master. Choose a top-level Master account." }
+  }
+  return {
+    ok: true,
+    fields: {
+      relationship: rel,
+      masterId: master.id,
+      masterName: master.profile.fullName,
+      masterEmail: master.email,
+    },
+  }
+}
+
 // --- Actions ---------------------------------------------------------------
 
 export async function listUsers(passcode: string): Promise<AdminUsersResult> {
@@ -246,6 +305,11 @@ export async function createUser(input: CreateUserInput): Promise<AdminUserMutat
     const id = newId()
     const profile = buildProfile(input, id, email, tempPassword)
     const status = input.status ?? "active"
+
+    // Resolve & validate referral placement, then stamp it onto the profile.
+    const hierarchy = await resolveHierarchy(input.relationship, input.masterId, id)
+    if (!hierarchy.ok) return { ok: false, error: hierarchy.error }
+    Object.assign(profile, hierarchy.fields)
 
     const rec = await insertDynamicUser({
       email,
@@ -334,6 +398,10 @@ export interface EditUserInput {
   role?: string
   accountBadge?: string
   adminName?: string
+  // Referral hierarchy. Provide relationship (+ masterId for sub/child) to
+  // re-place the account in the tree. Omit to leave the placement unchanged.
+  relationship?: AccountRelationship
+  masterId?: string
 }
 
 export async function editUser(input: EditUserInput): Promise<AdminUserMutation> {
@@ -367,6 +435,25 @@ export async function editUser(input: EditUserInput): Promise<AdminUserMutation>
       profile.email = email
       profile.accountEmail = email
       profile.supportEmail = email
+    }
+
+    // Re-place in the referral tree when a relationship is supplied. Guard
+    // against turning a Master that still has dependants into a sub/child,
+    // which would orphan its linked accounts.
+    if (input.relationship !== undefined) {
+      const nextRel = effectiveRelationship(input.relationship)
+      if (nextRel !== "master" && effectiveRelationship(existing.profile.relationship) === "master") {
+        const dependants = (await listDynamicUsers()).filter((u) => u.profile.masterId === input.id)
+        if (dependants.length > 0) {
+          return {
+            ok: false,
+            error: `This account is a Master for ${dependants.length} linked account(s). Re-link or remove them before changing its type.`,
+          }
+        }
+      }
+      const hierarchy = await resolveHierarchy(input.relationship, input.masterId, input.id)
+      if (!hierarchy.ok) return { ok: false, error: hierarchy.error }
+      Object.assign(profile, hierarchy.fields)
     }
 
     const rec = await updateDynamicUserProfile(input.id, { email, profile })
@@ -504,5 +591,105 @@ export async function listSelectableClients(passcode: string): Promise<Selectabl
     // DB unavailable or unauthorized — return an empty list rather than exposing
     // any account.
     return []
+  }
+}
+
+/**
+ * Master candidates for the admin's relationship picker: every active account
+ * that is itself a top-level Master (so the hierarchy stays two levels deep).
+ * Passcode-gated. `excludeId` omits the account currently being edited.
+ */
+export async function listMasterCandidates(passcode: string, excludeId?: string): Promise<SelectableClient[]> {
+  try {
+    requireAdmin(passcode)
+    return (await listDynamicUsers())
+      .filter(
+        (u) =>
+          u.status === "active" &&
+          u.id !== excludeId &&
+          effectiveRelationship(u.profile.relationship) === "master",
+      )
+      .map((u) => ({
+        id: u.id,
+        fullName: u.profile.fullName,
+        company: u.profile.company,
+        email: u.email,
+        kind: "dynamic" as const,
+      }))
+  } catch {
+    return []
+  }
+}
+
+/** A linked account in a Master's network, as shown in "My Network". */
+export interface NetworkMember {
+  id: string
+  fullName: string
+  company: string
+  email: string
+  relationship: AccountRelationship
+  accountBadge: string
+  status: UserStatus
+  createdAt: string
+}
+
+/**
+ * The signed-in Master's network: every sub/child account linked under them.
+ * Resolved from the current session (no passcode — this is a client-facing
+ * view), so a client only ever sees their OWN dependants.
+ */
+export async function getMyNetwork(): Promise<NetworkMember[]> {
+  const { resolveCurrentSession } = await import("@/lib/session-user")
+  const session = await resolveCurrentSession()
+  if (!session) return []
+  try {
+    return (await listDynamicUsers())
+      .filter((u) => u.profile.masterId === session.id)
+      .map((u) => ({
+        id: u.id,
+        fullName: u.profile.fullName,
+        company: u.profile.company,
+        email: u.email,
+        relationship: effectiveRelationship(u.profile.relationship),
+        accountBadge: normalizeAccountBadge(u.profile.accountBadge),
+        status: u.status,
+        createdAt: u.createdAt,
+      }))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName))
+  } catch (err) {
+    console.log("[v0] getMyNetwork failed:", (err as Error).message)
+    return []
+  }
+}
+
+/** Lightweight hierarchy summary for the signed-in account (for dashboards). */
+export interface MyHierarchyInfo {
+  relationship: AccountRelationship
+  masterId?: string
+  masterName?: string
+  masterEmail?: string
+  networkCount: number
+}
+
+/** Returns the signed-in account's hierarchy position + dependant count. */
+export async function getMyHierarchyInfo(): Promise<MyHierarchyInfo | null> {
+  const { resolveCurrentSession } = await import("@/lib/session-user")
+  const session = await resolveCurrentSession()
+  if (!session) return null
+  const relationship = session.relationship
+  let networkCount = 0
+  if (relationship === "master") {
+    try {
+      networkCount = (await listDynamicUsers()).filter((u) => u.profile.masterId === session.id).length
+    } catch {
+      networkCount = 0
+    }
+  }
+  return {
+    relationship,
+    masterId: session.masterId,
+    masterName: session.profile.masterName,
+    masterEmail: session.profile.masterEmail,
+    networkCount,
   }
 }

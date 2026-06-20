@@ -65,6 +65,7 @@ function formatDate(iso: string): string {
 
 const statusVariant: Record<ApprovalStatus, "default" | "secondary" | "destructive" | "outline"> = {
   pending: "default",
+  awaiting_master: "outline",
   approved: "secondary",
   rejected: "destructive",
   cancelled: "outline",

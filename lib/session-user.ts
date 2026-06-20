@@ -25,10 +25,11 @@ import {
   type DynamicUserRecord,
   type UserStatus,
 } from "@/lib/admin-users-db"
-import { hydrateProfile } from "@/lib/profile-types"
+import { hydrateProfile, type AccountRelationship } from "@/lib/profile-types"
+import { effectiveRelationship } from "@/lib/account-hierarchy"
 
 export interface ResolvedSession {
-  /** Stable user id (namespaces this user's data). */
+  /** Stable user id — this account's OWN identity (auth, audit, "who am I"). */
   id: string
   /** Full identity profile (icons hydrated for dynamic users). */
   profile: UserProfile
@@ -36,15 +37,55 @@ export interface ResolvedSession {
   kind: "static" | "dynamic"
   /** Account status. Static users are always "active". */
   status: UserStatus
+  /** Position in the referral hierarchy ("master" | "sub" | "child"). */
+  relationship: AccountRelationship
+  /** The Master account id, when this is a sub/child account. */
+  masterId?: string
+  /**
+   * The id whose SHARED financial data (balance + bank instruments) this
+   * session operates on. For a Sub-account this is the Master's id, so a sub
+   * reads/writes the Master's ledger and instruments — a live shared pool.
+   * For everyone else it equals `id`. This is the single lever that implements
+   * "shared balance & instruments" without weakening per-account isolation of
+   * everything else (KYC, beneficiaries, profile, etc.).
+   */
+  dataOwnerId: string
 }
 
 function dynamicToResolved(rec: DynamicUserRecord): ResolvedSession {
+  const relationship = effectiveRelationship(rec.profile.relationship)
+  const masterId = rec.profile.masterId
+  const dataOwnerId = relationship === "sub" && masterId ? masterId : rec.id
   return {
     id: rec.id,
     profile: hydrateProfile(rec.profile),
     kind: "dynamic",
     status: rec.status,
+    relationship,
+    masterId,
+    dataOwnerId,
   }
+}
+
+/**
+ * Resolve the SHARED-data owner id for any account id. A Sub-account's balance
+ * and bank instruments live under its Master, so financial reads/writes for a
+ * sub must target the Master's id. Everyone else owns their own data.
+ *
+ * Falls back to the passed id on any lookup failure, so a transient DB error
+ * can never cause one account's money movement to land on a different account.
+ */
+export async function resolveDataOwnerIdFor(userId: string | undefined | null): Promise<string> {
+  if (!userId) return ""
+  try {
+    const rec = await getDynamicUserById(userId)
+    if (rec && effectiveRelationship(rec.profile.relationship) === "sub" && rec.profile.masterId) {
+      return rec.profile.masterId
+    }
+  } catch {
+    // DB unavailable — operate on the account's own id rather than guessing.
+  }
+  return userId
 }
 
 /**
