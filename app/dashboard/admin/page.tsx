@@ -110,6 +110,7 @@ import { KIND_LABELS, type ApprovalKind } from "@/lib/approval-kinds"
 import { adminListPendingKyc } from "@/app/actions/beneficiaries"
 import { BalanceManager } from "@/components/admin/balance-manager"
 import { SkrManager } from "@/components/admin/skr-manager"
+import { SkrOverview } from "@/components/admin/skr-overview"
 import { InstrumentIssuer } from "@/components/admin/instrument-issuer"
 import { CertificateManager } from "@/components/admin/certificate-manager"
 import { BankekaBroadcastManager } from "@/components/admin/bankeka-broadcast-manager"
@@ -1742,7 +1743,13 @@ export default function AdminPage() {
       items: [
         { id: "settlement", label: "Securities Settlement", description: "DTC and Euroclear settlement instructions.", icon: Globe, count: pendingDTC.length + pendingEuroclear.length },
         { id: "commodity", label: "Commodity Deals", description: "POP/POF review and trade execution.", icon: Ship, count: pendingDeals.length },
-        { id: "skr", label: "SKR Trading", description: "Create, assign and transfer safe-keeping receipts.", icon: ShieldCheck, count: 0 },
+      ],
+    },
+    {
+      title: "Safe Keeping Receipts (SKR)",
+      items: [
+        { id: "skr-overview", label: "SKR Overview", description: "Portfolio-wide custody position across every client.", icon: Gauge, count: 0 },
+        { id: "skr", label: "SKR Management", description: "Create, assign, transfer and administer safe-keeping receipts.", icon: ShieldCheck, count: 0 },
       ],
     },
     {
@@ -4385,6 +4392,13 @@ export default function AdminPage() {
       {activeView === "treasury" && (
       <div className="space-y-6">
         <TreasuryManager />
+      </div>
+      )}
+
+      {/* SKR Overview: portfolio-wide custody position across every client */}
+      {activeView === "skr-overview" && (
+      <div className="space-y-6">
+        <SkrOverview onManage={() => openView("skr")} />
       </div>
       )}
 

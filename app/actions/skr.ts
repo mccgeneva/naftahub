@@ -7,10 +7,13 @@ import {
   replaceSkrRequestsForUser,
   mergeSkrRequestsForUser,
   appendSkrDocumentForUser,
+  listAllSkrRecords,
+  listAllSkrRequests,
   type SkrItemInput,
 } from "@/lib/skr-db"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { resolveCurrentSession } from "@/lib/session-user"
+import { listSelectableClients } from "@/app/actions/admin-users"
 
 function requireAdmin(passcode: string): void {
   if (String(passcode) !== ADMIN_PASSCODE) {
@@ -151,6 +154,63 @@ export async function adminReplaceSkrRequests(
     requireAdmin(passcode)
     await replaceSkrRequestsForUser(userId, items)
     return { ok: true }
+  } catch (err) {
+    return { ok: false, error: friendlyError(err) }
+  }
+}
+
+// --- Cross-client overview (custody desk dashboard) ------------------------
+
+export type SkrOverviewRow = {
+  id: string
+  userId: string
+  /** Resolved client display name (falls back to the user id if unknown). */
+  clientName: string
+  clientCompany: string
+  data: Record<string, unknown>
+  status: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type SkrOverviewResult =
+  | { ok: true; records: SkrOverviewRow[]; requests: SkrOverviewRow[] }
+  | { ok: false; error: string }
+
+/**
+ * Aggregate every SKR record and client request across ALL clients, each tagged
+ * with the owning client's name/company. Powers the administrator SKR overview.
+ */
+export async function adminListAllSkr(passcode: string): Promise<SkrOverviewResult> {
+  try {
+    requireAdmin(passcode)
+    const [records, requests, clients] = await Promise.all([
+      listAllSkrRecords(),
+      listAllSkrRequests(),
+      listSelectableClients(passcode),
+    ])
+    const nameById = new Map(clients.map((c) => [c.id, c]))
+    const decorate = (r: {
+      id: string
+      userId: string
+      data: Record<string, unknown>
+      status: string
+      createdAt: string
+      updatedAt: string
+    }): SkrOverviewRow => {
+      const client = nameById.get(r.userId)
+      return {
+        id: r.id,
+        userId: r.userId,
+        clientName: client?.fullName ?? "Unknown client",
+        clientCompany: client?.company ?? "",
+        data: r.data,
+        status: r.status,
+        createdAt: r.createdAt,
+        updatedAt: r.updatedAt,
+      }
+    }
+    return { ok: true, records: records.map(decorate), requests: requests.map(decorate) }
   } catch (err) {
     return { ok: false, error: friendlyError(err) }
   }

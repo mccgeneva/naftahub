@@ -91,6 +91,24 @@ export async function listSkrRecordsForUser(userId: string): Promise<StoredSkr[]
 }
 
 /**
+ * List every SKR record across ALL clients. Powers the administrator's
+ * cross-client SKR overview (portfolio totals, status mix, recent issuance).
+ * Each row carries its owning `userId` so the UI can attribute it to a client.
+ */
+export async function listAllSkrRecords(): Promise<StoredSkr[]> {
+  await ensureTables()
+  const { rows } = await query(`SELECT * FROM client_skr_records ORDER BY created_at DESC`)
+  return rows.map(toStored)
+}
+
+/** List every SKR client request across ALL clients (for the admin overview). */
+export async function listAllSkrRequests(): Promise<StoredSkr[]> {
+  await ensureTables()
+  const { rows } = await query(`SELECT * FROM client_skr_requests ORDER BY created_at DESC`)
+  return rows.map(toStored)
+}
+
+/**
  * Reconcile the full set of SKR records for a client. Records are authored and
  * owned exclusively by the administrator, so this is a straight replace inside a
  * transaction: rows not present in `items` are removed, the rest are upserted.
