@@ -5,6 +5,7 @@ import { scopedKey, getActiveUserId } from "@/lib/user-scope"
 import { getMyBeneficiaries, syncMyBeneficiaries } from "@/app/actions/beneficiaries"
 import { DEMO_USER_ID } from "@/lib/users"
 import { demoBeneficiaries } from "@/lib/demo-beneficiaries"
+import { validateIban } from "@/lib/iban-swift"
 
 export type BeneficiaryType = "individual" | "corporate" | "financial_institution"
 export type BeneficiaryStatus = "active" | "pending" | "suspended" | "blocked"
@@ -48,10 +49,12 @@ export interface Beneficiary {
 const KEY_BASE = "mcc.beneficiaries.v1"
 const storageKey = () => scopedKey(KEY_BASE)
 
-// One-time marker (per user) for the demo beneficiary-book backfill. Ensures the
-// rich petroleum/trade/finance counterparty list is merged in exactly once, so a
-// demo user who later removes some entries doesn't see them re-appear.
-const DEMO_BACKFILL_MARKER = "mcc.demo-beneficiaries-backfill.v1"
+// One-time marker (per user) for the demo beneficiary-book backfill/reconcile.
+// Bumped to v2 to roll out a one-time repair of invalid IBAN check digits that
+// were persisted by the v1 backfill. Bumping the version lets the reconcile run
+// exactly once more for users who already received v1, then never again — so a
+// demo user who later removes entries doesn't see them re-appear.
+const DEMO_BACKFILL_MARKER = "mcc.demo-beneficiaries-backfill.v2"
 
 interface BeneficiariesContextValue {
   beneficiaries: Beneficiary[]
@@ -123,12 +126,13 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
     ).catch(() => {})
   }, [beneficiaries, hydrated])
 
-  // One-time demo backfill: after hydration, merge the rich petroleum / trade /
-  // finance beneficiary book into the demo account. This runs against the
-  // already-hydrated state (which reflects the durable server copy), so any
-  // missing counterparties are added and then mirrored back to Neon by the
-  // persist effect above. Strictly scoped to the demo user and guarded by a
-  // per-user marker so it never touches other accounts or re-adds removed rows.
+  // One-time demo backfill + reconcile: after hydration, (1) merge any missing
+  // counterparties from the canonical petroleum / trade / finance book and
+  // (2) repair demo records whose persisted IBAN fails the ISO 7064 checksum
+  // (the v1 backfill stored some with bad check digits). Runs against the
+  // already-hydrated state (the durable server copy), then the persist effect
+  // mirrors corrections back to Neon. Scoped to the demo user and guarded by a
+  // per-user marker so it runs at most once and never re-adds removed rows.
   useEffect(() => {
     if (!hydrated || demoBackfillDone.current) return
     demoBackfillDone.current = true
@@ -138,22 +142,42 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
     } catch {
       return
     }
+
+    const canonical = demoBeneficiaries()
+    const canonicalById = new Map(canonical.map((b) => [b.id, b]))
     const existing = new Set(beneficiaries.map((b) => b.id))
-    const missing = demoBeneficiaries().filter((b) => !existing.has(b.id))
+    const missing = canonical.filter((b) => !existing.has(b.id))
+
+    // Detect already-persisted demo records that hold an invalid IBAN so we can
+    // overwrite just that field with the canonical, checksum-valid value.
+    const needsIbanRepair = beneficiaries.some((b) => {
+      const ref = canonicalById.get(b.id)
+      return ref && b.iban && b.iban !== ref.iban && !validateIban(b.iban).valid
+    })
+
     try {
       window.localStorage.setItem(
         scopedKey(DEMO_BACKFILL_MARKER),
-        JSON.stringify({ at: new Date().toISOString(), added: missing.length }),
+        JSON.stringify({ at: new Date().toISOString(), added: missing.length, ibanRepair: needsIbanRepair }),
       )
     } catch {
       // ignore availability errors — marker is best-effort
     }
-    if (missing.length) {
-      setBeneficiaries((prev) => {
-        const have = new Set(prev.map((b) => b.id))
-        return [...missing.filter((m) => !have.has(m.id)), ...prev]
+
+    if (!missing.length && !needsIbanRepair) return
+
+    setBeneficiaries((prev) => {
+      // Repair invalid IBANs on existing demo records (leave all else untouched).
+      const repaired = prev.map((b) => {
+        const ref = canonicalById.get(b.id)
+        if (ref && b.iban && b.iban !== ref.iban && !validateIban(b.iban).valid) {
+          return { ...b, iban: ref.iban }
+        }
+        return b
       })
-    }
+      const have = new Set(repaired.map((b) => b.id))
+      return [...missing.filter((m) => !have.has(m.id)), ...repaired]
+    })
   }, [hydrated, beneficiaries])
 
   const addBeneficiary = (beneficiary: Beneficiary) =>
