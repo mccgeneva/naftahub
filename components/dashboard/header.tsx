@@ -77,9 +77,14 @@ export function DashboardHeader() {
 
   // Live notifications from the DB (cross-device). Polls so a decision made by
   // an admin shows up shortly after, even without a page reload.
+  // Poll on a fixed interval only. We intentionally disable revalidateOnFocus:
+  // Next.js serializes Server Actions and queues client navigations behind any
+  // in-flight one, so firing this (plus the per-store reconcilers) on every
+  // window focus could stall navigation until a hard refresh. The 30s interval
+  // is enough to surface an administrator decision shortly after it is made.
   const { data, mutate } = useSWR("my-notifications", getMyNotifications, {
     refreshInterval: 30000,
-    revalidateOnFocus: true,
+    revalidateOnFocus: false,
   })
   const notifications = data?.items ?? []
   const unread = data?.unread ?? 0

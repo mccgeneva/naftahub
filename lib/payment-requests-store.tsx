@@ -126,9 +126,13 @@ export function PaymentRequestsProvider({ children }: { children: React.ReactNod
     }
     setRequests((prev) => [full, ...prev])
     // Mirror into the DB-backed approvals backbone so the Administrator can see
-    // and decide this payment cross-client. We do NOT attach a server-side
-    // ledger effect: the client ledger still lives in localStorage, so the
-    // debit is applied locally on reconcile to avoid double counting.
+    // and decide this payment cross-client. We attach a server-side ledger
+    // effect (a debit for the full amount incl. the 2% fee) so that when the
+    // admin approves — in a DIFFERENT browser/session — the debit is posted to
+    // the OWNER's server ledger. The client's LedgerProvider pulls that via
+    // getMyLedger() on hydrate/refresh, so the approved payment shows up in the
+    // transactions list. The local store only tracks the request status; it
+    // never posts to the ledger itself, so there is no double counting.
     void mirrorSubmission({
       kind: "payment",
       title: `Payment to ${full.beneficiary}`,
@@ -136,6 +140,16 @@ export function PaymentRequestsProvider({ children }: { children: React.ReactNod
       amount: full.total,
       currency: full.currency,
       payload: { localId: full.id, uetr: full.uetr, iban: full.iban, swiftCode: full.swiftCode },
+      ledgerEffect: {
+        direction: "debit",
+        amount: full.total,
+        currency: full.currency,
+        status: "completed",
+        counterparty: full.beneficiary,
+        account: full.iban,
+        reference: full.reference || full.uetr,
+        category: "Outgoing Payment",
+      },
     }).then((approvalId) => {
       if (!approvalId) return
       setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))

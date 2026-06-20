@@ -68,12 +68,16 @@ export function useApprovalReconcile<T extends Reconcilable>(
     }
 
     void sync()
-    const onFocus = () => void sync()
-    window.addEventListener("focus", onFocus)
+    // NOTE: We deliberately do NOT re-sync on `window.focus`. Next.js executes
+    // Server Actions sequentially and queues client navigations behind any
+    // in-flight action. With ~12 stores each mounting this hook, a single focus
+    // event (which fires after closing a dialog, dismissing a toast, or simply
+    // returning to the tab) would dispatch a burst of serialized server calls
+    // and freeze navigation until a hard refresh. A periodic interval is enough
+    // to pick up administrator decisions shortly after they happen.
     const id = setInterval(sync, 30000)
     return () => {
       cancelled = true
-      window.removeEventListener("focus", onFocus)
       clearInterval(id)
     }
   }, [kind, hydrated])
