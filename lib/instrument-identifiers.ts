@@ -12,6 +12,8 @@
 // instrument pages and the certificate PDF generator.
 // ---------------------------------------------------------------------------
 
+import { PARTNER_BANKS, partnerBankByKey } from "@/lib/partner-banks"
+
 export interface IssuingBankProfile {
   /** Display name shown across the app and on the certificate letterhead. */
   name: string
@@ -75,11 +77,34 @@ export const ISSUING_BANKS: Record<string, IssuingBankProfile> = {
   },
 }
 
-/** Look up a bank profile by its select key, or by its display name as a fallback. */
+/**
+ * Look up a bank profile by its select key (or display name as a fallback).
+ *
+ * Resolution order:
+ *  1. The curated `ISSUING_BANKS` registry (full head-office address details).
+ *  2. The centralized worldwide `PARTNER_BANKS` catalogue, so any bank the admin
+ *     can pick in the issuing-bank selector still yields a genuine BIC, country
+ *     and ISIN prefix. A registered address is synthesised from the country when
+ *     the catalogue does not carry a street address.
+ */
 export function resolveIssuingBank(keyOrName: string): IssuingBankProfile | undefined {
   if (ISSUING_BANKS[keyOrName]) return ISSUING_BANKS[keyOrName]
   const lower = keyOrName.trim().toLowerCase()
-  return Object.values(ISSUING_BANKS).find((b) => b.name.toLowerCase() === lower)
+  const curated = Object.values(ISSUING_BANKS).find((b) => b.name.toLowerCase() === lower)
+  if (curated) return curated
+
+  // Fall back to the worldwide partner-bank catalogue (single source of truth).
+  const partner =
+    partnerBankByKey(keyOrName) ??
+    PARTNER_BANKS.find((b) => b.name.toLowerCase() === lower)
+  if (!partner) return undefined
+  return {
+    name: partner.name,
+    bic: partner.bic,
+    address: `Registered Office, ${partner.country}`,
+    country: partner.country,
+    countryCode: partner.countryCode,
+  }
 }
 
 // --- ISIN ------------------------------------------------------------------
