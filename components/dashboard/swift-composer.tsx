@@ -331,9 +331,22 @@ function isoToday(): string {
 // Component
 // ---------------------------------------------------------------------------
 
+export interface SwiftSentSummary {
+  code: string
+  name: string
+  category: string
+  uetr: string
+  raw: string
+  senderBic: string
+  receiverBic: string
+  amount: string | null
+  currency: string | null
+  reference: string | null
+}
+
 export interface SwiftComposerProps {
   /** Called when a message is generated and "sent". Receives a summary. */
-  onSent?: (summary: { code: string; name: string; category: string; uetr: string; raw: string }) => void
+  onSent?: (summary: SwiftSentSummary) => void
   /** Called when a draft is saved. */
   onSaveDraft?: (summary: { code: string; name: string }) => void
 }
@@ -378,8 +391,18 @@ export function SwiftComposer({ onSent, onSaveDraft }: SwiftComposerProps) {
       })
       return
     }
-    onSent?.({ code: activeDef.code, name: activeDef.name, category: activeDef.category, uetr: generated.uetr, raw: generated.raw })
-    toast.success(`${activeDef.code} sent`, { description: `UETR ${generated.uetr.slice(0, 13)}…` })
+    onSent?.({
+      code: activeDef.code,
+      name: activeDef.name,
+      category: activeDef.category,
+      uetr: generated.uetr,
+      raw: generated.raw,
+      senderBic: SENDER_BIC,
+      receiverBic: form.receiverBic || "",
+      amount: form.amount ? form.amount.replace(/,/g, "") : null,
+      currency: form.currency || null,
+      reference: form.reference || null,
+    })
     setOpen(false)
   }
 

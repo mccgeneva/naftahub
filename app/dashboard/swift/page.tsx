@@ -12,8 +12,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { SwiftComposer, SWIFT_MESSAGE_TYPES } from "@/components/dashboard/swift-composer"
+import { SwiftComposer, SWIFT_MESSAGE_TYPES, type SwiftSentSummary } from "@/components/dashboard/swift-composer"
 import { parseSwiftMessage } from "@/lib/swift-mt"
+import { submitSwiftForRouting } from "@/app/actions/swift-routing"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -269,16 +270,14 @@ export default function SwiftPage() {
     category,
     uetr,
     raw,
-  }: {
-    code: string
-    name: string
-    category: string
-    uetr: string
-    raw: string
-  }) => {
+    receiverBic: composerReceiverBic,
+    amount: composerAmount,
+    currency: composerCurrency,
+    reference: composerReference,
+  }: SwiftSentSummary) => {
     const parsed = parseSwiftMessage(raw)
     const senderBic = parsed.basicHeader?.senderBic || "MCCBCHZZ"
-    const receiverBic = parsed.applicationHeader?.counterpartyBic || ""
+    const receiverBic = parsed.applicationHeader?.counterpartyBic || composerReceiverBic || ""
     const now = new Date()
     const amount = parsed.amount != null ? parsed.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ""
     const newMessage: SwiftMessage = {
@@ -316,6 +315,34 @@ export default function SwiftPage() {
         uetr,
       },
     })
+
+    // Submit the generated message to the routing & approval backbone. It is NOT
+    // delivered to any counterparty until an administrator approves and routes
+    // it to the chosen beneficiary. The client receives an immediate
+    // confirmation email here.
+    void (async () => {
+      const res = await submitSwiftForRouting({
+        messageType: code,
+        messageName: name,
+        category,
+        uetr,
+        raw,
+        senderBic,
+        receiverBic,
+        amount: composerAmount,
+        currency: composerCurrency,
+        reference: composerReference || parsed.senderReference || null,
+      })
+      if (res.ok) {
+        toast.success(`${code} submitted for routing`, {
+          description: res.emailed
+            ? "A confirmation has been emailed to you. An administrator will review and route it."
+            : "An administrator will review and route it to the designated beneficiary.",
+        })
+      } else {
+        toast.error("Could not submit for routing", { description: res.error })
+      }
+    })()
   }
 
   const MessagesTable = ({ messages }: { messages: typeof swiftMessages }) => (
