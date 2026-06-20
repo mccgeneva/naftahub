@@ -6,6 +6,7 @@ import {
   listSkrRequestsForUser,
   replaceSkrRequestsForUser,
   mergeSkrRequestsForUser,
+  appendSkrDocumentForUser,
   type SkrItemInput,
 } from "@/lib/skr-db"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
@@ -80,6 +81,25 @@ export async function syncMySkrRequests(items: SkrItemInput[]): Promise<SkrMutat
     const session = await resolveCurrentSession()
     if (!session) return { ok: false, error: "No active session." }
     await mergeSkrRequestsForUser(session.id, items)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: friendlyError(err) }
+  }
+}
+
+/**
+ * Attach a supporting document the current client uploaded (to Blob) to one of
+ * their own SKR records. Ownership is enforced server-side by the session id.
+ */
+export async function addMySkrDocument(
+  recordId: string,
+  doc: Record<string, unknown>,
+): Promise<SkrMutation> {
+  try {
+    const session = await resolveCurrentSession()
+    if (!session) return { ok: false, error: "No active session." }
+    const updated = await appendSkrDocumentForUser(session.id, recordId, doc)
+    if (!updated) return { ok: false, error: "Receipt not found." }
     return { ok: true }
   } catch (err) {
     return { ok: false, error: friendlyError(err) }

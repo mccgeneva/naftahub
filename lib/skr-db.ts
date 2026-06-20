@@ -132,6 +132,55 @@ export async function replaceSkrRecordsForUser(userId: string, items: SkrItemInp
   }
 }
 
+/**
+ * Append a single supporting document to one of a client's own SKR records.
+ *
+ * Records are administrator-owned, but a client may attach their own evidence
+ * (asset photos, custodian letters, etc.) to a receipt assigned to them. This
+ * is a scoped, additive update: it only touches a row that belongs to `userId`,
+ * and it merges the new document into the existing JSON `documents` array
+ * without disturbing any administrator-authored fields. Returns the updated
+ * record, or `null` if no matching record is owned by the user.
+ */
+export async function appendSkrDocumentForUser(
+  userId: string,
+  recordId: string,
+  doc: Record<string, unknown>,
+): Promise<StoredSkr | null> {
+  await ensureTables()
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
+    const { rows } = await client.query(
+      `SELECT * FROM client_skr_records WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+      [recordId, userId],
+    )
+    if (rows.length === 0) {
+      await client.query("ROLLBACK")
+      return null
+    }
+    const stored = toStored(rows[0])
+    const data = { ...stored.data }
+    const documents = Array.isArray(data.documents) ? [...(data.documents as unknown[])] : []
+    documents.push(doc)
+    data.documents = documents
+    const { rows: updated } = await client.query(
+      `UPDATE client_skr_records
+         SET data = $1::jsonb, updated_at = now()
+       WHERE id = $2 AND user_id = $3
+       RETURNING *`,
+      [JSON.stringify(data), recordId, userId],
+    )
+    await client.query("COMMIT")
+    return toStored(updated[0])
+  } catch (err) {
+    await client.query("ROLLBACK")
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
 // --- SKR client requests ----------------------------------------------------
 
 /** List every SKR request raised by a single client. */
