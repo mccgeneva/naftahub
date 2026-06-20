@@ -28,10 +28,16 @@ export interface MonetizationRequest {
   faceValue: number // face / nominal value of the instrument
   currency: string
 
+  // Collateral base actually being monetized. For a plain instrument this equals
+  // faceValue; for an instrument pledged to an approved leverage line it is the
+  // leveraged value (faceValue × leverageRatio), e.g. €50M BG at 1:5 -> €250M.
+  monetizedValue: number
+  leverageRatio?: number // leverage multiplier on the underlying, when leveraged
+
   // Monetization economics
   structure: MonetizationStructure
-  advanceRatePercent: number // loan-to-value / advance rate (% of face value)
-  grossProceeds: number // computed: faceValue * advanceRate
+  advanceRatePercent: number // loan-to-value / advance rate (% of monetized value)
+  grossProceeds: number // computed: monetizedValue * advanceRate
   proceedsCurrency: string
 
   // Coordination / counterparties
@@ -153,7 +159,7 @@ export function MonetizationRequestsProvider({ children }: { children: React.Rea
     void mirrorSubmission({
       kind: "monetization",
       title: `${full.instrumentTypeFull} · ${full.issuer}`,
-      summary: `Monetize ${full.currency} ${full.faceValue.toLocaleString("en-US")} ${full.instrumentTypeFull} at ${full.advanceRatePercent}% (proceeds ${full.proceedsCurrency} ${full.grossProceeds.toLocaleString("en-US")})`,
+      summary: `Monetize ${full.currency} ${full.monetizedValue.toLocaleString("en-US")} ${full.instrumentTypeFull}${full.leverageRatio ? ` (leveraged 1:${full.leverageRatio} on ${full.currency} ${full.faceValue.toLocaleString("en-US")} face)` : ""} at ${full.advanceRatePercent}% (proceeds ${full.proceedsCurrency} ${full.grossProceeds.toLocaleString("en-US")})`,
       amount: full.grossProceeds,
       currency: full.proceedsCurrency,
       payload: { localId: full.id, uetr: full.uetr, structure: full.structure, instrumentId: full.instrumentId },
