@@ -542,3 +542,201 @@ export function generateAccountCertificate(data: AccountCertificateData): Genera
 
   return { doc, filename: `${data.reference}.pdf`, title: "Account Certificate" }
 }
+
+// ===========================================================================
+// Safe Keeping Receipt (SKR) Certificate
+//
+// Declares that MCC Capital holds the described asset in safe custody, states
+// its declared value and its beneficial owner. Browser-only (jsPDF), built in
+// the same security-featured house style as the account certificates above.
+// ===========================================================================
+
+export interface SkrCertificateData {
+  reference: string // SKR-XXXXXX
+  custodian: string // issuing bank / custodian holding the asset
+  beneficialOwner: string // legal owner of the asset
+  ownerCompany?: string
+  faceValue: string // pre-formatted, e.g. "$25,000,000.00"
+  currency: string
+  status: string
+  issueDate: string // ISO
+  expiryDate?: string // ISO
+  custodyAccountRef: string
+  /** Free-text description of the asset under custody (the object of the SKR). */
+  assetDescription?: string
+  verificationCode: string
+}
+
+export function generateSkrCertificate(data: SkrCertificateData): GeneratedPdf {
+  const doc = new jsPDF({ unit: "pt", format: "a4" })
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
+  const margin = 48
+  const contentWidth = pageWidth - margin * 2
+
+  // --- Watermark ------------------------------------------------------------
+  doc.setTextColor(247, 247, 247)
+  doc.setFont("helvetica", "bold")
+  doc.setFontSize(38)
+  for (let row = 0; row < 9; row++) {
+    for (let col = 0; col < 3; col++) {
+      doc.text("SAFE KEEPING", 30 + col * 200, 120 + row * 90, { angle: 32 })
+    }
+  }
+
+  // --- Decorative double border ---------------------------------------------
+  doc.setDrawColor(...BRAND.gold)
+  doc.setLineWidth(2)
+  doc.rect(margin / 2, margin / 2, pageWidth - margin, pageHeight - margin)
+  doc.setLineWidth(0.5)
+  doc.rect(margin / 2 + 6, margin / 2 + 6, pageWidth - margin - 12, pageHeight - margin - 12)
+
+  let y = margin + 26
+
+  // --- Letterhead -----------------------------------------------------------
+  doc.setTextColor(...BRAND.ink)
+  doc.setFont("helvetica", "bold")
+  doc.setFontSize(22)
+  doc.text(BRAND.name, pageWidth / 2, y, { align: "center" })
+
+  y += 16
+  doc.setFont("helvetica", "normal")
+  doc.setFontSize(9)
+  doc.setTextColor(...BRAND.slate)
+  doc.text(BRAND.tagline, pageWidth / 2, y, { align: "center" })
+  y += 12
+  doc.text(BRAND.address, pageWidth / 2, y, { align: "center" })
+
+  y += 22
+  doc.setDrawColor(...BRAND.gold)
+  doc.setLineWidth(1)
+  doc.line(margin + 60, y, pageWidth - margin - 60, y)
+
+  // --- Title ----------------------------------------------------------------
+  y += 30
+  doc.setTextColor(...BRAND.gold)
+  doc.setFont("helvetica", "bold")
+  doc.setFontSize(17)
+  doc.text("SAFE KEEPING RECEIPT", pageWidth / 2, y, { align: "center" })
+
+  y += 16
+  doc.setTextColor(...BRAND.slate)
+  doc.setFont("helvetica", "italic")
+  doc.setFontSize(9.5)
+  doc.text("Certificate of Assets Held Under Custody", pageWidth / 2, y, { align: "center" })
+
+  y += 16
+  doc.setFont("helvetica", "normal")
+  doc.setFontSize(9)
+  doc.setTextColor(...BRAND.ink)
+  doc.text(`Reference: ${data.reference}`, pageWidth / 2, y, { align: "center" })
+  y += 12
+  doc.setTextColor(...BRAND.slate)
+  doc.text(`Date of Issuance: ${formatDate(data.issueDate)}`, pageWidth / 2, y, { align: "center" })
+
+  // --- Declared value highlight ---------------------------------------------
+  y += 22
+  doc.setFillColor(255, 247, 237)
+  doc.setDrawColor(...BRAND.line)
+  doc.roundedRect(margin, y, contentWidth, 64, 6, 6, "FD")
+  doc.setTextColor(...BRAND.slate)
+  doc.setFont("helvetica", "normal")
+  doc.setFontSize(9)
+  doc.text("DECLARED VALUE OF ASSET UNDER CUSTODY", pageWidth / 2, y + 20, { align: "center" })
+  doc.setTextColor(...BRAND.ink)
+  doc.setFont("helvetica", "bold")
+  doc.setFontSize(22)
+  doc.text(data.faceValue, pageWidth / 2, y + 46, { align: "center" })
+
+  // --- Custody declaration body ---------------------------------------------
+  y += 84
+  doc.setTextColor(...BRAND.ink)
+  doc.setFont("helvetica", "normal")
+  doc.setFontSize(10)
+  const who = data.beneficialOwner + (data.ownerCompany && data.ownerCompany !== data.beneficialOwner ? ` (${data.ownerCompany})` : "")
+  const paragraphs = [
+    `This is to certify that ${BRAND.name}, settled through ${data.custodian}, holds in safe custody under custody account reference ${data.custodyAccountRef} the asset described herein, on behalf of and for the exclusive benefit of ${who}.`,
+    `The asset under custody has a declared value of ${data.faceValue} and is held free of any lien, encumbrance or third-party interest save as may be separately disclosed in writing. The above-named beneficial owner is recognised on our books as the sole legal and beneficial owner of the said asset.`,
+    `This receipt is issued at the request of the beneficial owner as evidence of assets held in safe keeping, and is given without any responsibility or liability whatsoever on the part of ${BRAND.name} or its correspondent custodians.`,
+  ]
+  paragraphs.forEach((p) => {
+    const lines = doc.splitTextToSize(p, contentWidth)
+    doc.text(lines, margin, y, { lineHeightFactor: 1.4 })
+    y += lines.length * 13 + 8
+  })
+
+  // --- Asset description box (the object of the SKR) ------------------------
+  if (data.assetDescription && data.assetDescription.trim()) {
+    const descLines = doc.splitTextToSize(data.assetDescription.trim(), contentWidth - 24)
+    const boxH = 30 + descLines.length * 12
+    doc.setFillColor(250, 250, 251)
+    doc.setDrawColor(...BRAND.line)
+    doc.roundedRect(margin, y, contentWidth, boxH, 6, 6, "FD")
+    doc.setTextColor(...BRAND.slate)
+    doc.setFont("helvetica", "normal")
+    doc.setFontSize(8.5)
+    doc.text("DESCRIPTION OF ASSET UNDER CUSTODY", margin + 12, y + 16)
+    doc.setTextColor(...BRAND.ink)
+    doc.setFontSize(9.5)
+    doc.text(descLines, margin + 12, y + 30)
+    y += boxH + 14
+  }
+
+  // --- Particulars table ----------------------------------------------------
+  const rows: [string, string][] = [
+    ["Receipt Reference", data.reference],
+    ["Beneficial Owner", who],
+    ["Custodian / Settlement Bank", data.custodian],
+    ["Custody Account", data.custodyAccountRef],
+    ["Declared Value", data.faceValue],
+    ["Currency", data.currency],
+    ["Status", data.status.charAt(0).toUpperCase() + data.status.slice(1)],
+    ["Issue Date", formatDate(data.issueDate)],
+    ...(data.expiryDate ? ([["Expiry Date", formatDate(data.expiryDate)]] as [string, string][]) : []),
+  ]
+  doc.setFontSize(9.5)
+  rows.forEach((row, i) => {
+    const rowY = y + i * 20
+    if (i % 2 === 0) {
+      doc.setFillColor(250, 250, 251)
+      doc.rect(margin, rowY - 13, contentWidth, 20, "F")
+    }
+    doc.setTextColor(...BRAND.slate)
+    doc.setFont("helvetica", "normal")
+    doc.text(row[0], margin + 12, rowY)
+    doc.setTextColor(...BRAND.ink)
+    doc.setFont("helvetica", "bold")
+    doc.text(row[1], pageWidth - margin - 12, rowY, { align: "right" })
+  })
+  y += rows.length * 20 + 14
+
+  // --- Signature + seal -----------------------------------------------------
+  const sigY = Math.min(y + 30, pageHeight - margin - 96)
+  doc.setDrawColor(...BRAND.ink)
+  doc.setLineWidth(0.5)
+  doc.line(margin, sigY, margin + 190, sigY)
+  doc.setTextColor(...BRAND.ink)
+  doc.setFont("helvetica", "bold")
+  doc.setFontSize(9)
+  doc.text("Authorised Signatory", margin, sigY + 14)
+  doc.setFont("helvetica", "normal")
+  doc.setFontSize(8)
+  doc.setTextColor(...BRAND.slate)
+  doc.text("MCC Capital — Custody & Compliance Office", margin, sigY + 26)
+
+  drawSeal(doc, pageWidth - margin - 56, sigY + 2, 42)
+
+  // --- Security footer ------------------------------------------------------
+  const footY = pageHeight - margin - 30
+  doc.setDrawColor(...BRAND.line)
+  doc.setLineWidth(0.5)
+  doc.line(margin, footY - 14, pageWidth - margin, footY - 14)
+  doc.setTextColor(...BRAND.slate)
+  doc.setFont("helvetica", "normal")
+  doc.setFontSize(7)
+  const security = `Security features: unique reference ${data.reference} · verification code ${data.verificationCode} · issued ${new Date().toLocaleString("en-GB")}. This safe keeping receipt is electronically generated and watermarked; verify its authenticity by quoting the reference and verification code to your MCC Capital relationship manager.`
+  const secLines = doc.splitTextToSize(security, contentWidth)
+  doc.text(secLines, margin, footY)
+
+  return { doc, filename: `MCC-SKR-Certificate-${data.reference}.pdf`, title: "Safe Keeping Receipt Certificate" }
+}

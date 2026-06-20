@@ -18,6 +18,8 @@ import {
   Landmark,
   Wallet,
   RotateCcw,
+  Upload,
+  Award,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -58,6 +60,7 @@ import {
   type SkrRecord,
   type SkrStatus,
   type SkrRequest,
+  type SkrDocument,
 } from "@/lib/skr-store"
 import {
   adminListSkrRecords,
@@ -66,6 +69,10 @@ import {
   adminReplaceSkrRequests,
 } from "@/app/actions/skr"
 import { creditSkrCollateralAdmin, reverseSkrCollateralAdmin } from "@/app/actions/treasury"
+import { upload } from "@vercel/blob/client"
+import { blobFileUrl } from "@/lib/kyc-types"
+import { usePdfViewer } from "@/lib/pdf-viewer"
+import { generateSkrCertificate } from "@/lib/certificate-pdf"
 
 const CURRENCIES = ["USD", "EUR", "GBP", "CHF", "AED", "SGD"]
 const STATUSES: SkrStatus[] = ["active", "pending", "matured", "transferred", "suspended", "cancelled"]
@@ -96,6 +103,7 @@ interface RecordForm {
   expiryDate: string
   custodyAccountRef: string
   status: SkrStatus
+  assetDescription: string
   notes: string
 }
 
@@ -108,11 +116,13 @@ const emptyForm = (ownerName = ""): RecordForm => ({
   expiryDate: "",
   custodyAccountRef: "",
   status: "active",
+  assetDescription: "",
   notes: "",
 })
 
 export function SkrManager() {
   const logActivity = useActivityLog()
+  const pdfViewer = usePdfViewer()
 
   const [clients, setClients] = useState<SelectableClient[]>([])
   const [targetUserId, setTargetUserId] = useState("")
@@ -132,6 +142,9 @@ export function SkrManager() {
   const [docTarget, setDocTarget] = useState<SkrRecord | null>(null)
   const [docName, setDocName] = useState("")
   const [docType, setDocType] = useState("SKR Certificate")
+  // File chosen for upload in the document dialog, plus in-flight upload state.
+  const [docFile, setDocFile] = useState<File | null>(null)
+  const [docUploading, setDocUploading] = useState(false)
   const [transferTarget, setTransferTarget] = useState<SkrRecord | null>(null)
   const [transferToUserId, setTransferToUserId] = useState("")
 
@@ -221,6 +234,13 @@ export function SkrManager() {
     setFormOpen(true)
   }
 
+  const openDoc = (record: SkrRecord) => {
+    setDocName("")
+    setDocType("SKR Certificate")
+    setDocFile(null)
+    setDocTarget(record)
+  }
+
   const openEdit = (record: SkrRecord) => {
     setEditId(record.id)
     setForm({
@@ -232,6 +252,7 @@ export function SkrManager() {
       expiryDate: record.expiryDate?.slice(0, 10) || "",
       custodyAccountRef: record.custodyAccountRef,
       status: record.status,
+      assetDescription: record.assetDescription ?? "",
       notes: record.notes ?? "",
     })
     setFormOpen(true)
@@ -265,6 +286,7 @@ export function SkrManager() {
               expiryDate: form.expiryDate || undefined,
               custodyAccountRef: form.custodyAccountRef.trim() || r.custodyAccountRef,
               status: form.status,
+              assetDescription: form.assetDescription.trim() || undefined,
               notes: form.notes.trim() || undefined,
               updatedAt: nowISO(),
               transactions: [
@@ -307,6 +329,7 @@ export function SkrManager() {
         expiryDate: form.expiryDate || undefined,
         custodyAccountRef: custodyRef,
         status: form.status,
+        assetDescription: form.assetDescription.trim() || undefined,
         notes: form.notes.trim() || undefined,
         documents: [],
         transactions: [
@@ -562,32 +585,63 @@ export function SkrManager() {
 
   // --- Add document ----------------------------------------------------------
 
-  const submitDocument = () => {
+  const submitDocument = async () => {
     if (!docTarget) return
-    if (!docName.trim()) {
-      toast.error("Enter a document name.")
+    const fallbackName = docFile?.name ?? ""
+    const finalName = docName.trim() || fallbackName.trim()
+    if (!finalName) {
+      toast.error("Enter a document name or choose a file.")
       return
     }
+
+    // Upload the chosen picture/document to private Blob storage first; the
+    // record only stores the resulting pathname (served via the gated proxy).
+    let uploaded: { pathname: string; url: string; size: number; contentType: string } | null = null
+    if (docFile) {
+      setDocUploading(true)
+      try {
+        const safe = docFile.name.replace(/[^a-zA-Z0-9._-]/g, "_")
+        const result = await upload(`skr/${docTarget.id}/${Date.now()}-${safe}`, docFile, {
+          access: "public",
+          handleUploadUrl: "/api/skr/blob-upload",
+          clientPayload: JSON.stringify({ passcode: ADMIN_PASSCODE }),
+        })
+        uploaded = {
+          pathname: result.pathname,
+          url: result.url,
+          size: docFile.size,
+          contentType: docFile.type || "application/octet-stream",
+        }
+      } catch (err) {
+        setDocUploading(false)
+        toast.error("Upload failed", { description: (err as Error).message })
+        return
+      }
+      setDocUploading(false)
+    }
+
+    const newDoc: SkrDocument = {
+      id: generateSkrRef("DOC"),
+      name: finalName,
+      docType,
+      uploadedAt: nowISO(),
+      ...(uploaded
+        ? { pathname: uploaded.pathname, url: uploaded.url, size: uploaded.size, contentType: uploaded.contentType }
+        : {}),
+    }
+
     const next = records.map((r) =>
       r.id === docTarget.id
         ? {
             ...r,
             updatedAt: nowISO(),
-            documents: [
-              ...r.documents,
-              {
-                id: generateSkrRef("DOC"),
-                name: docName.trim(),
-                docType,
-                uploadedAt: nowISO(),
-              },
-            ],
+            documents: [...r.documents, newDoc],
             transactions: [
               {
                 id: generateSkrRef("TX"),
                 date: nowISO(),
                 type: "Document Added",
-                description: `Supporting document "${docName.trim()}" (${docType}) attached by administrator.`,
+                description: `Supporting document "${finalName}" (${docType})${uploaded ? " uploaded" : " recorded"} by administrator.`,
                 reference: generateSkrRef("ADM"),
               },
               ...r.transactions,
@@ -596,21 +650,53 @@ export function SkrManager() {
         : r,
     )
     persistRecords(targetUserId, next)
-    toast.success("Document attached", { description: `${docName.trim()} added to ${docTarget.id}.` })
+    toast.success("Document attached", { description: `${finalName} added to ${docTarget.id}.` })
     logActivity({
       action: `Administrator attached document to SKR ${docTarget.id}`,
       category: "Administration",
       details: {
-        summary: `Administrator attached supporting document "${docName.trim()}" (${docType}) to safe keeping receipt ${docTarget.id} (${targetUser.fullName}).`,
+        summary: `Administrator attached supporting document "${finalName}" (${docType}) to safe keeping receipt ${docTarget.id} (${targetUser.fullName}).`,
         referenceId: docTarget.id,
         targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
-        document: docName.trim(),
+        document: finalName,
         documentType: docType,
       },
     })
     setDocTarget(null)
     setDocName("")
     setDocType("SKR Certificate")
+    setDocFile(null)
+  }
+
+  // --- Generate the SKR certificate (declares the asset held in custody) -----
+
+  const generateCertificate = (record: SkrRecord) => {
+    const generated = generateSkrCertificate({
+      reference: record.id,
+      custodian: record.custodian,
+      beneficialOwner: record.beneficialOwner,
+      ownerCompany: targetUser.company,
+      faceValue: formatSkrValue(record.faceValue, record.currency),
+      currency: record.currency,
+      status: SKR_STATUS_LABELS[record.status],
+      issueDate: record.issueDate,
+      expiryDate: record.expiryDate,
+      custodyAccountRef: record.custodyAccountRef,
+      assetDescription: record.assetDescription,
+      verificationCode: generateSkrRef("VRF"),
+    })
+    pdfViewer.show(generated)
+    logActivity({
+      action: `Administrator generated the SKR certificate for ${record.id}`,
+      category: "Administration",
+      details: {
+        summary: `Administrator generated the safe keeping receipt certificate for ${record.id}, declaring custody of an asset worth ${formatSkrValue(record.faceValue, record.currency)} owned by ${record.beneficialOwner}.`,
+        referenceId: record.id,
+        targetAccount: `${targetUser.fullName} — ${targetUser.email}`,
+        declaredValue: formatSkrValue(record.faceValue, record.currency),
+        beneficialOwner: record.beneficialOwner,
+      },
+    })
   }
 
   // --- Transfer between internal accounts ------------------------------------
@@ -919,9 +1005,44 @@ export function SkrManager() {
                       <div className="text-muted-foreground">Issued: {fmtDate(record.issueDate)}</div>
                       <div className="text-muted-foreground">Expiry: {fmtDate(record.expiryDate)}</div>
                     </div>
+                    {record.assetDescription && (
+                      <p className="text-xs text-muted-foreground text-pretty">
+                        <span className="font-medium text-foreground">Asset:</span> {record.assetDescription}
+                      </p>
+                    )}
                     <p className="text-[11px] text-muted-foreground">
                       {record.transactions.length} transactions · {record.documents.length} documents
                     </p>
+                    {record.documents.length > 0 && (
+                      <div className="flex flex-col gap-1.5 pt-1">
+                        {record.documents.map((doc) => (
+                          <div
+                            key={doc.id}
+                            className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-2.5 py-1.5"
+                          >
+                            <div className="flex min-w-0 items-center gap-2">
+                              <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                              <span className="truncate text-xs text-foreground">{doc.name}</span>
+                              <span className="shrink-0 text-[10px] text-muted-foreground">{doc.docType}</span>
+                            </div>
+                            {doc.pathname ? (
+                              <a
+                                href={blobFileUrl(doc.pathname)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                download={doc.name}
+                                className="inline-flex shrink-0 items-center gap-1 text-xs text-primary hover:underline"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                Download
+                              </a>
+                            ) : (
+                              <span className="shrink-0 text-[10px] text-muted-foreground">Reference only</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex flex-col gap-2 lg:w-52 lg:shrink-0">
@@ -949,7 +1070,7 @@ export function SkrManager() {
                         <History className="mr-1 h-3.5 w-3.5" />
                         Txn
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => setDocTarget(record)}>
+                      <Button variant="outline" size="sm" onClick={() => openDoc(record)}>
                         <Paperclip className="mr-1 h-3.5 w-3.5" />
                         Doc
                       </Button>
@@ -965,6 +1086,15 @@ export function SkrManager() {
                         Move
                       </Button>
                     </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-primary/30 text-primary hover:bg-primary/10 hover:text-primary"
+                      onClick={() => generateCertificate(record)}
+                    >
+                      <Award className="mr-1 h-3.5 w-3.5" />
+                      Generate SKR Certificate
+                    </Button>
                     {record.creditedToTreasury ? (
                       <Button
                         variant="outline"
@@ -1104,6 +1234,16 @@ export function SkrManager() {
               </Select>
             </div>
             <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="skr-asset">Asset under custody (object of this SKR)</Label>
+              <Textarea
+                id="skr-asset"
+                value={form.assetDescription}
+                onChange={(e) => setForm((f) => ({ ...f, assetDescription: e.target.value }))}
+                rows={2}
+                placeholder="Describe the asset held in custody — e.g. gold bullion, bonds, fine art, machinery — appears on the SKR certificate."
+              />
+            </div>
+            <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="skr-notes">Custody notes (optional)</Label>
               <Textarea
                 id="skr-notes"
@@ -1169,15 +1309,34 @@ export function SkrManager() {
       </Dialog>
 
       {/* Add document dialog */}
-      <Dialog open={!!docTarget} onOpenChange={(open) => !open && setDocTarget(null)}>
+      <Dialog open={!!docTarget} onOpenChange={(open) => !open && !docUploading && setDocTarget(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Attach document</DialogTitle>
+            <DialogTitle>Upload document</DialogTitle>
             <DialogDescription>
-              Register a supporting document reference on {docTarget?.id}.
+              Upload a picture or document evidencing the asset held under {docTarget?.id} (e.g. photos,
+              custodian confirmations, appraisals).
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="skr-doc-file">File</Label>
+              <Input
+                id="skr-doc-file"
+                type="file"
+                accept="image/*,application/pdf"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] ?? null
+                  setDocFile(file)
+                  if (file && !docName.trim()) setDocName(file.name)
+                }}
+              />
+              {docFile && (
+                <p className="text-[11px] text-muted-foreground">
+                  {docFile.name} · {(docFile.size / 1024).toFixed(0)} KB
+                </p>
+              )}
+            </div>
             <div className="space-y-2">
               <Label htmlFor="skr-doc-name">Document name</Label>
               <Input
@@ -1194,7 +1353,7 @@ export function SkrManager() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {["SKR Certificate", "Custodian Confirmation", "Authentication", "Amendment", "Other"].map((t) => (
+                  {["SKR Certificate", "Asset Photograph", "Custodian Confirmation", "Authentication", "Appraisal", "Amendment", "Other"].map((t) => (
                     <SelectItem key={t} value={t}>
                       {t}
                     </SelectItem>
@@ -1204,10 +1363,22 @@ export function SkrManager() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDocTarget(null)}>
+            <Button variant="outline" onClick={() => setDocTarget(null)} disabled={docUploading}>
               Cancel
             </Button>
-            <Button onClick={submitDocument}>Attach document</Button>
+            <Button onClick={submitDocument} disabled={docUploading}>
+              {docUploading ? (
+                <>
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  Uploading…
+                </>
+              ) : (
+                <>
+                  <Upload className="mr-1 h-4 w-4" />
+                  Upload document
+                </>
+              )}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

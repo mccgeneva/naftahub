@@ -46,6 +46,14 @@ export interface SkrDocument {
   docType: string // e.g. "SKR Certificate", "Custodian Confirmation"
   uploadedAt: string // ISO
   note?: string
+  /** Blob pathname for an uploaded file (served via the session-gated /api/file proxy). */
+  pathname?: string
+  /** Public blob URL (kept for reference; the app links through the proxy). */
+  url?: string
+  /** Size in bytes of the uploaded file, if known. */
+  size?: number
+  /** MIME type of the uploaded file, e.g. "image/png", "application/pdf". */
+  contentType?: string
 }
 
 export interface SkrRecord {
@@ -62,6 +70,8 @@ export interface SkrRecord {
   /** Custody account reference. */
   custodyAccountRef: string
   status: SkrStatus
+  /** Description of the asset held under custody — the object of this SKR. */
+  assetDescription?: string
   /** Optional free-text custody / instrument notes. */
   notes?: string
   documents: SkrDocument[]
