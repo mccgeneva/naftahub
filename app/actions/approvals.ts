@@ -583,12 +583,35 @@ export async function adminMarkCommodityDelivered(
     const updated = await markApprovalDelivered(id)
     if (!updated) return { ok: false, error: "This deal can no longer be marked delivered." }
 
+    // SETTLE the reserved funds: on delivery the blocked amount is paid out to
+    // the supplier, so it must permanently LEAVE the client's balance — not stay
+    // held nor return to available. The reservation lives as a `hold` debit under
+    // entry id `APPR-<id>`; converting it to a `completed` debit (same id, upsert)
+    // makes it reduce the settled balance too, so the amount disappears from the
+    // client's balances entirely.
+    try {
+      const ownerId = await resolveDataOwnerIdFor(updated.userId)
+      const entries = await readLedgerEntries(ownerId)
+      const hold = entries.find((e) => e.id === `APPR-${id}` && e.status === "hold")
+      if (hold) {
+        await upsertLedgerEntry(ownerId, {
+          ...hold,
+          status: "completed",
+          date: new Date().toISOString(),
+          category: "Commodity Trade — Settled (Delivered)",
+          comment: `Delivered & settled — funds paid out for ${KIND_LABELS[updated.kind]} "${updated.title}"`,
+        })
+      }
+    } catch (err) {
+      console.log("[v0] delivered settlement failed:", (err as Error).message)
+    }
+
     try {
       await insertNotification({
         userId: updated.userId,
         tone: "success",
         title: "Commodity deal delivered",
-        body: `Your commodity deal "${updated.title}" has been confirmed delivered by MCC Capital. The deal is now finalized and can no longer be revoked.`,
+        body: `Your commodity deal "${updated.title}" has been confirmed delivered by MCC Capital. The reserved funds have been paid out for settlement. The deal is now finalized and can no longer be revoked.`,
         href: KIND_HREF.commodity ?? "/dashboard/commodity",
       })
     } catch (err) {
