@@ -49,14 +49,19 @@ export type GatewayStatus = "pending" | "active" | "rejected" | "closed"
 // has landed at the partner bank and is reconciled into the Master Account.
 export interface FundingEvent {
   id: string
-  amount: number
-  currency: string
+  amount: number // amount credited, in the account's currency (post-FX)
+  currency: string // the account's currency
   reference: string // payer reference / remittance info
   payer: string
   recordedAt: string
   reconciled: boolean
   reconciledAt?: string
   ledgerEntryId?: string // Master Account credit receipt id once reconciled
+  // --- FX audit (present only when the incoming currency differed) ---
+  originalAmount?: number // amount actually sent, in originalCurrency
+  originalCurrency?: string // currency the payer sent in
+  fxRate?: number // units of `currency` per 1 unit of originalCurrency
+  fxFee?: number // FX conversion fee, in `currency`, already deducted from `amount`
 }
 
 // Bank coordinates assigned by the administrator on approval.

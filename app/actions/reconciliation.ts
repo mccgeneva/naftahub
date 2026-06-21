@@ -16,10 +16,23 @@ import {
 } from "@/lib/reconciliation"
 import { parseSwiftMessage, toReconciliationInput } from "@/lib/swift-mt"
 import { getApprovalById, listApprovalsForUser } from "@/lib/approvals-db"
+import { convertCurrency } from "@/lib/fx"
+
+/**
+ * FX conversion fee applied when an inbound payment is auto-converted into the
+ * receiving account's currency. 0.5% spread — deducted from the converted
+ * amount and recorded transparently on the funding event and ledger entry.
+ */
+const GATEWAY_FX_FEE_RATE = 0.005
 
 /** Strip a IBAN/account string down to comparable A–Z0–9 (uppercase). */
 function normalizeIban(raw: string | undefined | null): string {
   return (raw ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "")
+}
+
+/** Round to 2 decimal places (currency-safe). */
+function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100
 }
 
 // ---------------------------------------------------------------------------
@@ -241,13 +254,13 @@ export async function recordGatewayDepositForApproval(
     const beneficiaryIban = normalizeIban(payload.iban ?? record.iban)
     if (!beneficiaryIban) return { matched: false }
 
-    // The funded amount is the PRINCIPAL (record.amount), not the total that
+    // The sent amount is the PRINCIPAL (record.amount), not the total that
     // includes the 2% platform fee — the fee is not received by the payee.
-    const amount = Number(record.amount ?? approval.amount ?? 0)
-    if (!Number.isFinite(amount) || amount <= 0) return { matched: false }
+    const sentAmount = Number(record.amount ?? approval.amount ?? 0)
+    if (!Number.isFinite(sentAmount) || sentAmount <= 0) return { matched: false }
 
-    const currency = (approval.currency ?? "").toUpperCase()
-    if (!currency) return { matched: false }
+    const sentCurrency = (approval.currency ?? "").toUpperCase()
+    if (!sentCurrency) return { matched: false }
 
     const accounts = await readActiveAccounts()
     const matches = accounts.filter(
@@ -257,14 +270,14 @@ export async function recordGatewayDepositForApproval(
         // gateway that happens to share the same IBAN.
         a.userId === approval.userId &&
         a.coordinates?.scheme === "iban" &&
-        normalizeIban(a.coordinates?.iban) === beneficiaryIban &&
-        // Exact currency match only — never silently fund a GBP account from an
-        // EUR transfer (or vice-versa); that would mix currencies on one balance.
-        a.currency.toUpperCase() === currency,
+        normalizeIban(a.coordinates?.iban) === beneficiaryIban,
     )
-    // Require an unambiguous single match before moving money.
+    // Require an unambiguous single match before moving money. Note: we match on
+    // IBAN + owner ONLY. A currency mismatch is NOT a reason to reject — it is
+    // handled by automatic FX conversion below.
     if (matches.length !== 1) return { matched: false }
     const account = matches[0]
+    const accountCurrency = account.currency.toUpperCase()
 
     // Idempotency: deterministic credit id derived from the approval.
     const ledgerEntryId = `GWD-${approval.id}`
@@ -272,10 +285,29 @@ export async function recordGatewayDepositForApproval(
       return { matched: true }
     }
 
+    // --- Automatic FX conversion on currency mismatch ----------------------
+    // If the payer sent a different currency than the account is denominated
+    // in, convert at the current rate and apply a configurable FX spread/fee.
+    // The funds are always credited in the ACCOUNT's currency so a balance
+    // never mixes currencies.
+    const isFx = sentCurrency !== accountCurrency
+    const grossConverted = isFx
+      ? convertCurrency(sentAmount, sentCurrency, accountCurrency)
+      : sentAmount
+    // FX rate expressed as units of account currency per 1 unit sent.
+    const fxRate = isFx ? grossConverted / sentAmount : 1
+    const fxFee = isFx ? round2(grossConverted * GATEWAY_FX_FEE_RATE) : 0
+    const amount = round2(grossConverted - fxFee)
+    if (!Number.isFinite(amount) || amount <= 0) return { matched: false }
+
     // The payer is the client who SENT the funds (the approval owner).
     const sender = await resolveAccountProfileById(approval.userId)
     const reference = record.reference?.trim() || account.coordinates?.reference || account.id
     const bankName = account.coordinates?.partnerBankName
+
+    const fxNote = isFx
+      ? ` Received ${sentCurrency} ${sentAmount.toLocaleString("en-US")}, converted to ${accountCurrency} at ${fxRate.toFixed(6)} (FX fee ${accountCurrency} ${fxFee.toLocaleString("en-US")}), net credited ${accountCurrency} ${amount.toLocaleString("en-US")}.`
+      : ""
 
     const entry: LedgerEntry = {
       id: ledgerEntryId,
@@ -287,8 +319,8 @@ export async function recordGatewayDepositForApproval(
       counterparty: sender.fullName,
       bank: bankName,
       reference: account.id,
-      category: "Reconciled Collection",
-      comment: `Inbound transfer from ${sender.fullName} (approved payment ${approval.id}, reference ${reference}) auto-matched by IBAN to gateway account ${account.id} and credited to the Master Account.`,
+      category: isFx ? "Reconciled Collection (FX)" : "Reconciled Collection",
+      comment: `Inbound transfer from ${sender.fullName} (approved payment ${approval.id}, reference ${reference}) auto-matched by IBAN to gateway account ${account.id} and credited to the Master Account.${fxNote}`,
     }
 
     await query(
@@ -325,6 +357,15 @@ export async function recordGatewayDepositForApproval(
       reconciled: true,
       reconciledAt: now,
       ledgerEntryId,
+      // Persist the FX trail only when a conversion actually happened.
+      ...(isFx
+        ? {
+            originalAmount: sentAmount,
+            originalCurrency: sentCurrency,
+            fxRate,
+            fxFee,
+          }
+        : {}),
     }
     const updated: GatewayAccount = { ...account, funding: [event, ...(account.funding ?? [])] }
     await query(
@@ -334,14 +375,21 @@ export async function recordGatewayDepositForApproval(
     )
 
     await logActivity({
-      action: `Approved payment ${approval.id} auto-matched by IBAN and credited ${account.currency} ${amount.toLocaleString("en-US")} to gateway account ${account.id}`,
+      action: `Approved payment ${approval.id} auto-matched by IBAN and credited ${account.currency} ${amount.toLocaleString("en-US")} to gateway account ${account.id}${isFx ? ` (FX from ${sentCurrency})` : ""}`,
       category: "Administration",
       details: {
-        summary: `Outgoing payment ${approval.id} from ${sender.fullName} was matched by beneficiary IBAN to active gateway account ${account.id} (${account.accountHolder}) and recorded as received funding, crediting the Master Account under ledger reference ${ledgerEntryId}.`,
+        summary: `Outgoing payment ${approval.id} from ${sender.fullName} was matched by beneficiary IBAN to active gateway account ${account.id} (${account.accountHolder}) and recorded as received funding, crediting the Master Account under ledger reference ${ledgerEntryId}.${fxNote}`,
         referenceId: approval.id,
         amount: `${account.currency} ${amount.toLocaleString("en-US")}`,
+        ...(isFx
+          ? {
+              originalAmount: `${sentCurrency} ${sentAmount.toLocaleString("en-US")}`,
+              fxRate: fxRate.toFixed(6),
+              fxFee: `${account.currency} ${fxFee.toLocaleString("en-US")}`,
+            }
+          : {}),
         ledgerReference: ledgerEntryId,
-        decision: "Auto-matched by IBAN",
+        decision: isFx ? "Auto-matched by IBAN with FX conversion" : "Auto-matched by IBAN",
       },
     })
 

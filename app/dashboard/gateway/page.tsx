@@ -759,6 +759,12 @@ function AccountCard({ account }: { account: GatewayAccount }) {
                         <div className="min-w-0">
                           <p className="truncate font-medium text-foreground">{f.payer}</p>
                           <p className="truncate text-muted-foreground">{f.reference}</p>
+                          {f.originalCurrency && f.originalAmount != null && (
+                            <p className="truncate text-[11px] text-muted-foreground">
+                              {`FX: ${formatMoney(f.originalAmount, f.originalCurrency)} @ ${(f.fxRate ?? 0).toFixed(4)}`}
+                              {f.fxFee ? ` · fee ${formatMoney(f.fxFee, f.currency)}` : ""}
+                            </p>
+                          )}
                         </div>
                         <span className="text-right font-medium text-foreground">
                           {formatMoney(f.amount, f.currency)}
