@@ -1,9 +1,24 @@
 "use client"
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
-import { getMyLedger, persistMyLedgerEntry } from "@/app/actions/ledger"
-import { reconcileMyApprovedCredits } from "@/app/actions/approvals"
+import { persistMyLedgerEntry } from "@/app/actions/ledger"
 import { convertCurrency } from "@/lib/fx"
+
+// Reads go through the GET Route Handler (`/api/ledger`), NOT the `getMyLedger`
+// Server Action, because Server Actions are serialized with client navigations
+// and would freeze the dashboard's first navigation when ~20 providers all read
+// on login. The writes below (`persistMyLedgerEntry`) stay Server Actions: they
+// only fire on a deliberate user action, never during the login mount storm.
+async function fetchLedgerEntries(): Promise<LedgerEntry[] | null> {
+  try {
+    const res = await fetch("/api/ledger", { cache: "no-store" })
+    if (!res.ok) return null
+    const json = (await res.json()) as { ok: boolean; entries?: LedgerEntry[] }
+    return json.ok && Array.isArray(json.entries) ? json.entries : null
+  } catch {
+    return null
+  }
+}
 
 export type LedgerDirection = "credit" | "debit"
 export type LedgerStatus = "completed" | "hold"
@@ -66,25 +81,16 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false
 
-    const load = () =>
-      // Back-fill ledger credits for any already-approved requests, then pull the
-      // authoritative server ledger. Reconcile first so freshly back-filled
-      // credits are included in the same fetch.
-      reconcileMyApprovedCredits()
-        .catch(() => {
-          // best-effort; reconciliation failure must not block reading the ledger
-        })
-        .then(() => getMyLedger())
-        .then((serverEntries) => {
-          if (cancelled || !serverEntries) return
-          const sorted = [...serverEntries].sort(
-            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
-          )
-          setEntries(sorted)
-        })
-        .catch(() => {
-          // Server unreachable (e.g. DB not configured) — leave entries as-is.
-        })
+    // The route handler reconciles already-approved credits server-side before
+    // returning, so a single GET covers both steps without an extra round trip.
+    const load = async () => {
+      const serverEntries = await fetchLedgerEntries()
+      if (cancelled || !serverEntries) return
+      const sorted = [...serverEntries].sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+      )
+      setEntries(sorted)
+    }
 
     load().finally(() => {
       if (!cancelled) setHydrated(true)
@@ -161,22 +167,14 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   // (e.g. an administrator editing the signed-in account's ledger, or an instant
   // transfer) so the live view reflects the change without a reload.
   const refresh = () => {
-    reconcileMyApprovedCredits()
-      .catch(() => {
-        // best-effort; do not block the refresh on reconciliation
-      })
-      .then(() => getMyLedger())
-      .then((serverEntries) => {
-        if (!serverEntries) return
-        setEntries(
-          [...serverEntries].sort(
-            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
-          ),
-        )
-      })
-      .catch(() => {
-        // Server unreachable — keep current entries.
-      })
+    void fetchLedgerEntries().then((serverEntries) => {
+      if (!serverEntries) return
+      setEntries(
+        [...serverEntries].sort(
+          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+        ),
+      )
+    })
   }
 
   return (

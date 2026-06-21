@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from "react"
 import { getActiveUserId } from "@/lib/user-scope"
-import { getMyBeneficiaries, syncMyBeneficiaries } from "@/app/actions/beneficiaries"
+import { syncMyBeneficiaries } from "@/app/actions/beneficiaries"
 import { DEMO_USER_ID } from "@/lib/users"
 import { demoBeneficiaries } from "@/lib/demo-beneficiaries"
 import { validateIban } from "@/lib/iban-swift"
@@ -71,16 +71,26 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     let active = true
 
-    const load = () =>
-      getMyBeneficiaries()
-        .then((res) => {
-          if (!active) return
-          if (res.ok) {
-            skipNextSync.current = true
-            setBeneficiaries(res.beneficiaries.map((b) => b.data as unknown as Beneficiary))
-          }
-        })
-        .catch(() => {})
+    // Read through the GET Route Handler (`/api/beneficiaries`), NOT the
+    // `getMyBeneficiaries` Server Action: Server Actions are serialized with
+    // client navigations and would freeze the dashboard's first navigation when
+    // ~20 providers all read on login. A route-handler fetch stays off that
+    // queue. The write path (`syncMyBeneficiaries`) stays a Server Action — it
+    // only fires on a deliberate user change, never during the login mount storm.
+    const load = async () => {
+      try {
+        const res = await fetch("/api/beneficiaries", { cache: "no-store" })
+        if (!active || !res.ok) return
+        const json = (await res.json()) as { ok: boolean; beneficiaries?: { data: unknown }[] }
+        if (!active) return
+        if (json.ok && Array.isArray(json.beneficiaries)) {
+          skipNextSync.current = true
+          setBeneficiaries(json.beneficiaries.map((b) => b.data as unknown as Beneficiary))
+        }
+      } catch {
+        // keep whatever we already have on a transient failure
+      }
+    }
 
     load().finally(() => {
       if (active) setHydrated(true)
