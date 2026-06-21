@@ -57,6 +57,21 @@ export default async function LoginPage({
           <LoginForm />
         </div>
 
+        <div className="mt-6 rounded-lg border border-border bg-muted/40 p-4 text-center">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Platform operated by
+          </p>
+          <p className="mt-1 text-sm font-semibold text-foreground">NAFTAHUB PLC</p>
+          <p className="text-xs text-muted-foreground">Company number 16421621</p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground text-pretty">
+            Registered office: 71-75 Shelton Street, Covent Garden, London, United Kingdom, WC2H 9JQ
+          </p>
+          <p className="mt-3 border-t border-border pt-3 text-xs text-muted-foreground text-pretty">
+            Under the umbrella of the Swiss fiduciary holding{" "}
+            <span className="font-medium text-foreground">MCC Holding (MCC Capital)</span>
+          </p>
+        </div>
+
         <p className="mt-6 text-center text-xs text-muted-foreground">
           {"\u00A9"} 2024 MCC Holding SA. For qualified investors only.
         </p>
