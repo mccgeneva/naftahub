@@ -173,6 +173,14 @@ export async function adminCountPending(passcode: string): Promise<Record<string
 // on the approval itself still posts to the client's ledger on approval.
 const CREDIT_KINDS = new Set<ApprovalKind>(["monetization", "dof", "project_funding"])
 
+// Approval kinds that, when approved, RESERVE (place a hold/block on) the
+// owner's balance — funds earmarked to settle the underlying transaction (e.g.
+// a commodity purchase reserving the contract value to pay the supplier). Used
+// as a fallback so the amount/currency stored on the approval still places a
+// hold on approval even when no explicit `ledgerEffect` was attached (e.g. a
+// deal registered before ledger effects were wired in).
+const HOLD_KINDS = new Set<ApprovalKind>(["commodity"])
+
 /**
  * Resolve the ledger entry an approved request should post (or null if none).
  * Prefers an explicit `ledgerEffect`; otherwise falls back to the approval's
@@ -217,6 +225,25 @@ function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
       category: KIND_LABELS[req.kind],
     }
   }
+  // Fallback: reserve (hold) the stored amount for known reserving kinds (e.g. a
+  // commodity deal approved before ledger effects were attached) so the funds
+  // are blocked on the client's balance to settle the supplier.
+  if (HOLD_KINDS.has(req.kind)) {
+    const amount = Number(req.amount)
+    if (!Number.isFinite(amount) || amount <= 0) return null
+    return {
+      id: `APPR-${req.id}`,
+      direction: "debit",
+      amount,
+      currency: req.currency || "USD",
+      status: "hold",
+      date: new Date().toISOString(),
+      counterparty: req.title,
+      reference: req.id,
+      comment: `Reserved for approved ${KIND_LABELS[req.kind]} — ${req.title}`,
+      category: "Commodity Trade — Reserved Funds",
+    }
+  }
   return null
 }
 
@@ -251,8 +278,12 @@ export async function reconcileMyApprovedCredits(): Promise<{ ok: boolean; appli
     let applied = 0
     for (const req of approved) {
       const entry = ledgerEntryForApproval(req)
-      if (entry && entry.direction === "credit") {
-        // Post to the shared-data owner (Master for a sub) so the credit lands
+      // Back-fill both credits (incoming proceeds) and holds (reserved funds for
+      // approved commodity deals) so the balance reflects them on the same
+      // ledger it is read from, even for requests approved before the effect
+      // was wired in. Idempotent on `APPR-<id>`, so re-posting never doubles up.
+      if (entry && (entry.direction === "credit" || entry.status === "hold")) {
+        // Post to the shared-data owner (Master for a sub) so the entry lands
         // on the same ledger the balance is read from.
         const ownerId = await resolveDataOwnerIdFor(req.userId)
         await upsertLedgerEntry(ownerId, entry)
