@@ -16,6 +16,7 @@ import {
 } from "@/lib/reconciliation"
 import { parseSwiftMessage, toReconciliationInput } from "@/lib/swift-mt"
 import { getApprovalById } from "@/lib/approvals-db"
+import { deleteLedgerEntry } from "@/lib/ledger-db"
 import { convertCurrency } from "@/lib/fx"
 
 /**
@@ -248,7 +249,16 @@ export async function recordGatewayDepositForApproval(
 
     const payload = (approval.payload ?? {}) as {
       iban?: string
+      recalled?: boolean
+      recallStatus?: string
       record?: { iban?: string; amount?: number; beneficiary?: string; reference?: string }
+    }
+
+    // A recalled payment must NOT (re)fund a gateway. The recall reverses both
+    // the sender debit and this recipient credit; without this guard the
+    // idempotent backfill sweep would simply re-create the credit we removed.
+    if (payload.recalled === true || payload.recallStatus === "recalled") {
+      return { matched: false }
     }
     const record = payload.record ?? {}
     const beneficiaryIban = normalizeIban(payload.iban ?? record.iban)
@@ -403,6 +413,64 @@ export async function recordGatewayDepositForApproval(
   } catch (err) {
     console.log("[v0] recordGatewayDepositForApproval failed:", (err as Error).message)
     return { matched: false }
+  }
+}
+
+/**
+ * REVERSE a previously-recorded gateway deposit when its source payment is
+ * recalled. Removes the funding event from the matched Collect-funds account and
+ * deletes the `GWD-<approvalId>` credit from the gateway owner's ledger, so the
+ * recipient's Master Account balance unwinds exactly as if the payment never
+ * landed. A no-op when the payment never matched a gateway (e.g. a plain
+ * external IBAN), which is the correct behaviour for those recalls.
+ *
+ * Idempotent and safe: derives everything from the deterministic `GWD-<id>` key.
+ * Returns whether a recipient credit was actually reversed.
+ */
+export async function reverseGatewayDepositForApproval(
+  originalApprovalId: string,
+): Promise<{ reversed: boolean }> {
+  try {
+    const ledgerEntryId = `GWD-${originalApprovalId}`
+    const accounts = await readActiveAccounts()
+    const account = accounts.find((a) => (a.funding ?? []).some((f) => f.ledgerEntryId === ledgerEntryId))
+    if (!account) return { reversed: false }
+
+    // Remove the recipient credit from the gateway owner's (data-owner) ledger.
+    const ledgerOwnerId = await resolveDataOwnerIdFor(account.userId)
+    try {
+      await deleteLedgerEntry(ledgerOwnerId, ledgerEntryId)
+    } catch (err) {
+      console.log("[v0] reverse gateway credit delete failed:", (err as Error).message)
+    }
+
+    // Drop the funding event from the account so its history and totals match.
+    const reversedEvent = (account.funding ?? []).find((f) => f.ledgerEntryId === ledgerEntryId)
+    const updated: GatewayAccount = {
+      ...account,
+      funding: (account.funding ?? []).filter((f) => f.ledgerEntryId !== ledgerEntryId),
+    }
+    await query(
+      `UPDATE gateway_accounts SET payload = $3::jsonb, updated_at = now()
+       WHERE user_id = $1 AND request_id = $2`,
+      [account.userId, account.id, JSON.stringify(updated)],
+    )
+
+    await logActivity({
+      action: `Recalled payment ${originalApprovalId} reversed a gateway collection of ${reversedEvent?.currency ?? account.currency} ${(reversedEvent?.amount ?? 0).toLocaleString("en-US")} on account ${account.id}`,
+      category: "Administration",
+      details: {
+        summary: `The collected funds previously credited to gateway account ${account.id} (${account.accountHolder}) under ledger reference ${ledgerEntryId} were reversed because the source payment ${originalApprovalId} was recalled. The Master Account balance has been debited back accordingly.`,
+        referenceId: originalApprovalId,
+        ledgerReference: ledgerEntryId,
+        decision: "Reversed on recall",
+      },
+    })
+
+    return { reversed: true }
+  } catch (err) {
+    console.log("[v0] reverseGatewayDepositForApproval failed:", (err as Error).message)
+    return { reversed: false }
   }
 }
 

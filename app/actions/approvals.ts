@@ -27,7 +27,11 @@ import {
   type LedgerEffect,
 } from "@/lib/approvals-db"
 import { KIND_LABELS, KIND_HREF, type ApprovalKind } from "@/lib/approval-kinds"
-import { recordGatewayDepositForApproval, backfillGatewayDepositsForUser } from "@/app/actions/reconciliation"
+import {
+  recordGatewayDepositForApproval,
+  backfillGatewayDepositsForUser,
+  reverseGatewayDepositForApproval,
+} from "@/app/actions/reconciliation"
 import { MASTER_CONSENT_KINDS } from "@/lib/account-hierarchy"
 
 // --- Auth helpers -----------------------------------------------------------
@@ -284,6 +288,128 @@ export async function revokeMyCommodityDeal(
   } catch (err) {
     console.log("[v0] revokeMyCommodityDeal failed:", (err as Error).message)
     return { ok: false, error: "The deal could not be revoked. Please try again." }
+  }
+}
+
+/**
+ * Request a RECALL of one of the signed-in client's already-approved (sent)
+ * payments. A recall is a SWIFT-style return request: it must clear the same
+ * administrator gate as a payment before any money moves. On approval the
+ * reversal (a) refunds the sender the full debited amount and (b) reverses any
+ * gateway/recipient credit the payment produced — see `adminDecideApproval`.
+ *
+ * Security: takes ONLY the original approval id, re-loads it server-side, and
+ * verifies the caller owns it. Every monetary value is derived from the stored,
+ * already-approved record — never from client input.
+ */
+export async function requestPaymentRecall(
+  originalApprovalId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const session = await resolveCurrentSession()
+  if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
+  try {
+    const original = await getApprovalById(originalApprovalId)
+    if (!original || original.userId !== session.id) {
+      return { ok: false, error: "This payment could not be found." }
+    }
+    if (original.kind !== "payment") {
+      return { ok: false, error: "Only outgoing payments can be recalled." }
+    }
+    if (original.status !== "approved") {
+      return { ok: false, error: "Only an approved (sent) payment can be recalled." }
+    }
+
+    const payload = (original.payload ?? {}) as {
+      iban?: string
+      recalled?: boolean
+      recallStatus?: string
+      record?: Record<string, unknown>
+    }
+    if (payload.recalled === true || payload.recallStatus === "pending" || payload.recallStatus === "recalled") {
+      return { ok: false, error: "A recall for this payment has already been requested." }
+    }
+
+    const record = (payload.record ?? {}) as {
+      beneficiary?: string
+      iban?: string
+      reference?: string
+      total?: number
+      uetr?: string
+    }
+    // The sender was debited the TOTAL (amount + 2% platform fee); a full recall
+    // makes them whole by refunding exactly that.
+    const refundAmount = Number(original.amount ?? record.total ?? 0)
+    const refundCurrency = original.currency ?? "EUR"
+    if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+      return { ok: false, error: "This payment's amount could not be determined." }
+    }
+
+    const beneficiary = record.beneficiary ?? original.title
+    const reference = record.reference || record.uetr || originalApprovalId
+
+    const recall = await insertApproval({
+      userId: session.id,
+      kind: "payment_recall",
+      title: `Recall — Payment to ${beneficiary}`,
+      summary: `Request to recall ${refundCurrency} ${refundAmount.toLocaleString("en-US")} sent to ${beneficiary}${reference ? ` · ${reference}` : ""}`,
+      amount: refundAmount,
+      currency: refundCurrency,
+      payload: {
+        originalApprovalId,
+        originalLocalId: (record as { id?: string }).id ?? null,
+        beneficiary,
+        iban: payload.iban ?? record.iban ?? null,
+        reference,
+      },
+      // On approval this credit refunds the sender's data-owner ledger.
+      ledgerEffect: {
+        direction: "credit",
+        amount: refundAmount,
+        currency: refundCurrency,
+        status: "completed",
+        counterparty: beneficiary,
+        reference,
+        category: "Payment Recall — Refund",
+      },
+    })
+
+    // Stamp the original so the matcher stops re-funding it and the client list
+    // can surface a "recall requested" state (recordFromApproval spreads
+    // payload.record into the view model).
+    try {
+      const newPayload = {
+        ...payload,
+        recallStatus: "pending",
+        recallApprovalId: recall.id,
+        record: { ...(payload.record ?? {}), recallStatus: "pending" },
+      }
+      await updateApprovalPayload(originalApprovalId, newPayload)
+    } catch (err) {
+      console.log("[v0] recall stamp failed:", (err as Error).message)
+    }
+
+    try {
+      const profile = await resolveAccountProfileById(session.id)
+      await logActivity({
+        action: `Requested recall of payment ${originalApprovalId} (${refundCurrency} ${refundAmount.toLocaleString("en-US")} to ${beneficiary})`,
+        category: "Payments",
+        user: profile.fullName,
+        details: {
+          summary: `Client requested a recall of approved payment ${originalApprovalId} to ${beneficiary} for ${refundCurrency} ${refundAmount.toLocaleString("en-US")}. The recall is pending Administrator approval; on approval the funds are refunded to the sender and any recipient credit is reversed. Reference: ${reference}.`,
+          referenceId: recall.id,
+          originalPaymentId: originalApprovalId,
+          amount: `${refundCurrency} ${refundAmount.toLocaleString("en-US")}`,
+          decision: "Recall requested",
+        },
+      })
+    } catch (err) {
+      console.log("[v0] recall activity log failed:", (err as Error).message)
+    }
+
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] requestPaymentRecall failed:", (err as Error).message)
+    return { ok: false, error: "The recall could not be submitted. Please try again." }
   }
 }
 
@@ -637,6 +763,38 @@ export async function adminDecideApproval(
           await recordGatewayDepositForApproval(updated.id)
         } catch (err) {
           console.log("[v0] gateway IBAN auto-match failed:", (err as Error).message)
+        }
+      }
+
+      // An approved RECALL fully unwinds the original payment. applyLedgerEffect
+      // above already credited the sender's refund (the recall's ledgerEffect);
+      // here we (a) reverse any recipient gateway credit and (b) stamp the
+      // original payment as recalled so the idempotent backfill never re-funds
+      // it. All monetary effects are keyed deterministically, so this is safe to
+      // re-run.
+      if (updated.kind === "payment_recall") {
+        const originalApprovalId = (updated.payload as { originalApprovalId?: string })?.originalApprovalId
+        if (originalApprovalId) {
+          try {
+            await reverseGatewayDepositForApproval(originalApprovalId)
+          } catch (err) {
+            console.log("[v0] recall recipient reversal failed:", (err as Error).message)
+          }
+          try {
+            const original = await getApprovalById(originalApprovalId)
+            if (original) {
+              const op = (original.payload ?? {}) as Record<string, unknown>
+              const orec = (op.record ?? {}) as Record<string, unknown>
+              await updateApprovalPayload(originalApprovalId, {
+                ...op,
+                recalled: true,
+                recallStatus: "recalled",
+                record: { ...orec, recallStatus: "recalled" },
+              })
+            }
+          } catch (err) {
+            console.log("[v0] original recall stamp failed:", (err as Error).message)
+          }
         }
       }
     }
