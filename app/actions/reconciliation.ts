@@ -15,6 +15,12 @@ import {
   type ReconciliationStatus,
 } from "@/lib/reconciliation"
 import { parseSwiftMessage, toReconciliationInput } from "@/lib/swift-mt"
+import { getApprovalById } from "@/lib/approvals-db"
+
+/** Strip a IBAN/account string down to comparable A–Z0–9 (uppercase). */
+function normalizeIban(raw: string | undefined | null): string {
+  return (raw ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "")
+}
 
 // ---------------------------------------------------------------------------
 // Auth helpers (mirror app/actions/gateway.ts)
@@ -200,6 +206,143 @@ async function creditMatchedAccount(
   )
 
   return receiptRef
+}
+
+// ---------------------------------------------------------------------------
+// IBAN auto-match: bridge an APPROVED outgoing payment into a Collect-funds
+// gateway account whose assigned IBAN equals the payment's beneficiary IBAN.
+// ---------------------------------------------------------------------------
+
+/**
+ * When an outgoing payment is approved, if its beneficiary IBAN matches an
+ * active gateway (Collect funds) account, record it as a received funding event
+ * on that account and credit the gateway owner's Master Account.
+ *
+ * Safe to expose as a server action: it takes ONLY an approval id and derives
+ * every monetary value from the server-stored, already-approved record — never
+ * from client input. It is idempotent (keyed on a deterministic ledger entry id
+ * `GWD-<approvalId>`), so re-approval / reconcile re-runs never double-credit.
+ */
+export async function recordGatewayDepositForApproval(
+  approvalId: string,
+): Promise<{ matched: boolean }> {
+  try {
+    const approval = await getApprovalById(approvalId)
+    // Only genuine, fully-approved outgoing payments can fund a deposit account.
+    if (!approval || approval.kind !== "payment" || approval.status !== "approved") {
+      return { matched: false }
+    }
+
+    const payload = (approval.payload ?? {}) as {
+      iban?: string
+      record?: { iban?: string; amount?: number; beneficiary?: string; reference?: string }
+    }
+    const record = payload.record ?? {}
+    const beneficiaryIban = normalizeIban(payload.iban ?? record.iban)
+    if (!beneficiaryIban) return { matched: false }
+
+    // The funded amount is the PRINCIPAL (record.amount), not the total that
+    // includes the 2% platform fee — the fee is not received by the payee.
+    const amount = Number(record.amount ?? approval.amount ?? 0)
+    if (!Number.isFinite(amount) || amount <= 0) return { matched: false }
+
+    const currency = (approval.currency ?? "").toUpperCase()
+
+    const accounts = await readActiveAccounts()
+    const matches = accounts.filter(
+      (a) =>
+        a.coordinates?.scheme === "iban" &&
+        normalizeIban(a.coordinates?.iban) === beneficiaryIban &&
+        (!currency || a.currency.toUpperCase() === currency),
+    )
+    // Require an unambiguous single match before moving money.
+    if (matches.length !== 1) return { matched: false }
+    const account = matches[0]
+
+    // Idempotency: deterministic credit id derived from the approval.
+    const ledgerEntryId = `GWD-${approval.id}`
+    if ((account.funding ?? []).some((f) => f.ledgerEntryId === ledgerEntryId)) {
+      return { matched: true }
+    }
+
+    // The payer is the client who SENT the funds (the approval owner).
+    const sender = await resolveAccountProfileById(approval.userId)
+    const reference = record.reference?.trim() || account.coordinates?.reference || account.id
+    const bankName = account.coordinates?.partnerBankName
+
+    const entry: LedgerEntry = {
+      id: ledgerEntryId,
+      direction: "credit",
+      amount,
+      currency: account.currency,
+      status: "completed",
+      date: new Date().toISOString(),
+      counterparty: sender.fullName,
+      bank: bankName,
+      reference: account.id,
+      category: "Reconciled Collection",
+      comment: `Inbound transfer from ${sender.fullName} (approved payment ${approval.id}, reference ${reference}) auto-matched by IBAN to gateway account ${account.id} and credited to the Master Account.`,
+    }
+
+    await query(
+      `INSERT INTO ledger_entries
+         (user_id, entry_id, direction, amount, currency, status, entry_date,
+          counterparty, account, bank, reference, comment, category)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT (user_id, entry_id) DO NOTHING`,
+      [
+        account.userId,
+        entry.id,
+        entry.direction,
+        entry.amount,
+        entry.currency,
+        entry.status,
+        entry.date,
+        entry.counterparty ?? "",
+        entry.account ?? null,
+        entry.bank ?? null,
+        entry.reference ?? null,
+        entry.comment ?? null,
+        entry.category ?? null,
+      ],
+    )
+
+    const now = new Date().toISOString()
+    const event: FundingEvent = {
+      id: `FND-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+      amount,
+      currency: account.currency,
+      reference,
+      payer: sender.fullName,
+      recordedAt: now,
+      reconciled: true,
+      reconciledAt: now,
+      ledgerEntryId,
+    }
+    const updated: GatewayAccount = { ...account, funding: [event, ...(account.funding ?? [])] }
+    await query(
+      `UPDATE gateway_accounts SET payload = $3::jsonb, updated_at = now()
+       WHERE user_id = $1 AND request_id = $2`,
+      [account.userId, account.id, JSON.stringify(updated)],
+    )
+
+    await logActivity({
+      action: `Approved payment ${approval.id} auto-matched by IBAN and credited ${account.currency} ${amount.toLocaleString("en-US")} to gateway account ${account.id}`,
+      category: "Administration",
+      details: {
+        summary: `Outgoing payment ${approval.id} from ${sender.fullName} was matched by beneficiary IBAN to active gateway account ${account.id} (${account.accountHolder}) and recorded as received funding, crediting the Master Account under ledger reference ${ledgerEntryId}.`,
+        referenceId: approval.id,
+        amount: `${account.currency} ${amount.toLocaleString("en-US")}`,
+        ledgerReference: ledgerEntryId,
+        decision: "Auto-matched by IBAN",
+      },
+    })
+
+    return { matched: true }
+  } catch (err) {
+    console.log("[v0] recordGatewayDepositForApproval failed:", (err as Error).message)
+    return { matched: false }
+  }
 }
 
 function genId() {
