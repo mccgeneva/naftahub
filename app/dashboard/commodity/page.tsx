@@ -43,6 +43,7 @@ import { toast } from "sonner"
 import { useActivityLog } from "@/components/activity-tracker"
 import { VerifiedBankField } from "@/components/verified-bank-field"
 import { SwiftGpiTracker } from "@/components/swift-gpi-tracker"
+import { CommodityQuotations } from "@/components/dashboard/commodity-quotations"
 import {
   useCommodityDeals,
   DEAL_STAGES,
@@ -202,7 +203,7 @@ export default function CommodityTradingPage() {
     hydrated,
   } = useCommodityDeals()
 
-  const [tab, setTab] = useState("workflow")
+  const [tab, setTab] = useState("quotations")
   const [form, setForm] = useState({ ...emptyDeal })
   const [sendingBicValid, setSendingBicValid] = useState(false)
   const [receivingBicValid, setReceivingBicValid] = useState(false)
@@ -346,7 +347,12 @@ export default function CommodityTradingPage() {
       </Card>
 
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
+          <TabsTrigger value="quotations" className="gap-1.5">
+            <Globe className="h-4 w-4" />
+            <span className="hidden sm:inline">Quotations</span>
+            <span className="sm:hidden">Prices</span>
+          </TabsTrigger>
           <TabsTrigger value="workflow" className="gap-1.5">
             <Layers className="h-4 w-4" />
             <span className="hidden sm:inline">Deal Workflow</span>
@@ -368,6 +374,11 @@ export default function CommodityTradingPage() {
             <span className="sm:hidden">POF</span>
           </TabsTrigger>
         </TabsList>
+
+        {/* QUOTATIONS TAB */}
+        <TabsContent value="quotations">
+          <CommodityQuotations />
+        </TabsContent>
 
         {/* DEAL WORKFLOW TAB */}
         <TabsContent value="workflow" className="space-y-6">
