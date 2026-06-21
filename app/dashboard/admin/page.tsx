@@ -98,6 +98,7 @@ import {
 } from "@/lib/leverage-requests-store"
 import { ADMIN_PASSCODE, ADMIN_SESSION_KEY } from "@/lib/admin-config"
 import { resetAccountData } from "@/lib/reset-account"
+import { resetMyServerAccountData } from "@/app/actions/reset-account"
 import { AdminGatewaySection } from "@/components/dashboard/admin-gateway-section"
 import { SwiftRoutingQueue } from "@/components/admin/swift-routing-queue"
 import { AdminReconciliationSection } from "@/components/dashboard/admin-reconciliation-section"
@@ -1557,23 +1558,38 @@ export default function AdminPage() {
     setRejectDealReason("")
   }
 
-  const handleResetAccount = () => {
+  const handleResetAccount = async () => {
     setResetting(true)
+
+    // 1) Wipe the SERVER-side data first. Balances, transactions, requests,
+    // beneficiaries, instruments and notifications live in Neon, so clearing
+    // localStorage alone would let them re-hydrate after login. This is the fix
+    // for "I reset but the money is still on the balance after I log in".
+    const serverResult = await resetMyServerAccountData(ADMIN_PASSCODE)
+    if (!serverResult.ok) {
+      setResetting(false)
+      toast.error("Reset failed", { description: serverResult.error })
+      return
+    }
+
     logActivity({
       action: "Administrator reset all account data to a brand-new state",
       category: "Administration",
       details: {
         summary:
-          "Administrator performed a full account reset. All balances were set to 0.00 and every transaction, payment request, bank instrument, Yield/PPP application, and beneficiary was permanently deleted. The account was restored to the state of a newly created platform account.",
+          "Administrator performed a full account reset. All balances were set to 0.00 and every transaction, payment request, bank instrument, Yield/PPP application, and beneficiary was permanently deleted from the server and local storage. The account was restored to the state of a newly created platform account.",
         decision: "Account Reset",
         scope: "Balances, transactions, payment requests, instruments, Yield/PPP applications, beneficiaries",
+        serverRowsCleared: String(serverResult.cleared),
       },
     })
+
+    // 2) Clear the per-user localStorage stores too, then reload so every
+    // in-memory store re-hydrates from its (now empty) server + local defaults.
     resetAccountData()
     toast.success("Account reset to brand-new state", {
       description: "All balances, transactions, requests, and beneficiaries have been cleared.",
     })
-    // Reload so every in-memory store re-hydrates from its empty defaults.
     setTimeout(() => {
       window.location.reload()
     }, 600)
