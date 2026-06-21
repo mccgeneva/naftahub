@@ -303,6 +303,24 @@ export async function decideApproval(
 }
 
 /**
+ * Replace an approval's JSONB payload. Used when the administrator customizes a
+ * request before deciding it (e.g. finalizing a payment card's network, tier,
+ * limit and features) so the finalized record is delivered to the client.
+ * Returns the updated record, or null if the request no longer exists.
+ */
+export async function updateApprovalPayload(
+  id: string,
+  payload: Record<string, unknown>,
+): Promise<ApprovalRequest | null> {
+  await ensureTable()
+  const { rows } = await query(
+    `UPDATE approval_requests SET payload = $2::jsonb WHERE id = $1 RETURNING *`,
+    [id, JSON.stringify(payload ?? {})],
+  )
+  return rows.length ? rowToRequest(rows[0]) : null
+}
+
+/**
  * Record the ADMINISTRATOR's verdict (first gate). Recomputes the overall
  * status from both gates so a dual-gate request lands on "awaiting_master"
  * rather than "approved" until the Master also consents. Only acts while the

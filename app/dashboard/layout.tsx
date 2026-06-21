@@ -15,6 +15,7 @@ import { BeneficiariesProvider } from "@/lib/beneficiaries-store"
 import { LedgerProvider } from "@/lib/ledger-store"
 import { PaymentRequestsProvider } from "@/lib/payment-requests-store"
 import { InstrumentRequestsProvider } from "@/lib/instrument-requests-store"
+import { CardRequestsProvider } from "@/lib/card-requests-store"
 import { MonetizationRequestsProvider } from "@/lib/monetization-requests-store"
 import { PPPRequestsProvider } from "@/lib/ppp-requests-store"
 import { ProjectFundingProvider } from "@/lib/project-funding-store"
@@ -51,6 +52,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <LedgerProvider>
       <PaymentRequestsProvider>
       <InstrumentRequestsProvider>
+      <CardRequestsProvider>
       <MonetizationRequestsProvider>
       <PPPRequestsProvider>
       <ProjectFundingProvider>
@@ -94,6 +96,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </ProjectFundingProvider>
       </PPPRequestsProvider>
       </MonetizationRequestsProvider>
+      </CardRequestsProvider>
       </InstrumentRequestsProvider>
       </PaymentRequestsProvider>
       </LedgerProvider>

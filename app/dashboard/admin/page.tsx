@@ -33,6 +33,7 @@ import {
   ChevronRight,
   ArrowLeft,
   ClipboardList,
+  CreditCard,
   Send,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -112,6 +113,7 @@ import { BalanceManager } from "@/components/admin/balance-manager"
 import { SkrManager } from "@/components/admin/skr-manager"
 import { SkrOverview } from "@/components/admin/skr-overview"
 import { InstrumentIssuer } from "@/components/admin/instrument-issuer"
+import { CardManager } from "@/components/admin/card-manager"
 import { CertificateManager } from "@/components/admin/certificate-manager"
 import { BankekaBroadcastManager } from "@/components/admin/bankeka-broadcast-manager"
 import { toast } from "sonner"
@@ -1736,6 +1738,7 @@ export default function AdminPage() {
         { id: "fiduciary", label: "Fiduciary & Assets", description: "Process fiduciary service jobs.", icon: Landmark, count: pendingFiduciary.length },
         { id: "dof", label: "Download of Funds", description: "Authorize download-of-funds requests.", icon: Banknote, count: pendingDOF.length },
         { id: "monetization", label: "Monetization", description: "Review instrument monetization requests.", icon: Layers, count: pendingMonetization.length },
+        { id: "cards", label: "Payment Cards", description: "Review, customize and issue client payment cards.", icon: CreditCard, count: dbPending.card ?? 0 },
       ],
     },
     {
@@ -2256,6 +2259,13 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      </div>
+      )}
+
+      {/* Payment Cards section */}
+      {activeView === "cards" && (
+      <div className="space-y-6">
+        <CardManager />
       </div>
       )}
 
