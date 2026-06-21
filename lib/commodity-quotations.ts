@@ -271,10 +271,19 @@ export function getQuote(
   return { product, port, basis, price, changePct }
 }
 
-/** Format a quotation price with its unit. */
+/**
+ * Canonical uppercase display label for a trading unit. Internally units are
+ * stored lowercase ("bbl") / uppercase ("MT"); traders expect both rendered in
+ * capitals — "BBL" and "MT".
+ */
+export function formatUnit(unit: "bbl" | "MT"): string {
+  return unit.toUpperCase()
+}
+
+/** Format a quotation price with its unit (e.g. "$679.49/MT", "$92.10/BBL"). */
 export function formatQuotePrice(price: number, unit: "bbl" | "MT"): string {
   return `$${price.toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  })}/${unit}`
+  })}/${formatUnit(unit)}`
 }
