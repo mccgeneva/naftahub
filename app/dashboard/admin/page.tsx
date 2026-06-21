@@ -35,6 +35,7 @@ import {
   ClipboardList,
   CreditCard,
   Send,
+  RefreshCw,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -97,8 +98,8 @@ import {
   type LeverageRequest,
 } from "@/lib/leverage-requests-store"
 import { ADMIN_PASSCODE, ADMIN_SESSION_KEY } from "@/lib/admin-config"
-import { resetAccountData } from "@/lib/reset-account"
-import { resetMyServerAccountData } from "@/app/actions/reset-account"
+import { resetServerAccountDataForUser } from "@/app/actions/reset-account"
+import { listUsers, type AdminUserView } from "@/app/actions/admin-users"
 import { AdminGatewaySection } from "@/components/dashboard/admin-gateway-section"
 import { SwiftRoutingQueue } from "@/components/admin/swift-routing-queue"
 import { AdminReconciliationSection } from "@/components/dashboard/admin-reconciliation-section"
@@ -247,6 +248,10 @@ export default function AdminPage() {
   const [resetDialogOpen, setResetDialogOpen] = useState(false)
   const [resetConfirm, setResetConfirm] = useState("")
   const [resetting, setResetting] = useState(false)
+  // Danger-Zone target picker: which specific account to reset.
+  const [resetAccounts, setResetAccounts] = useState<AdminUserView[]>([])
+  const [resetAccountsLoading, setResetAccountsLoading] = useState(false)
+  const [resetTargetId, setResetTargetId] = useState<string>("")
 
   // Restore unlock state for the current tab session.
   useEffect(() => {
@@ -1558,14 +1563,40 @@ export default function AdminPage() {
     setRejectDealReason("")
   }
 
+  // Load the selectable account directory when the Danger Zone is opened.
+  const loadResetAccounts = async () => {
+    setResetAccountsLoading(true)
+    const res = await listUsers(ADMIN_PASSCODE)
+    setResetAccountsLoading(false)
+    if (res.ok) {
+      setResetAccounts(res.users)
+    } else {
+      toast.error("Could not load accounts", { description: res.error })
+    }
+  }
+
+  useEffect(() => {
+    if (activeView === "danger" && resetAccounts.length === 0 && !resetAccountsLoading) {
+      void loadResetAccounts()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView])
+
+  const resetTarget = resetAccounts.find((a) => a.id === resetTargetId) ?? null
+
   const handleResetAccount = async () => {
+    if (!resetTargetId) {
+      toast.error("Select an account to reset first.")
+      return
+    }
     setResetting(true)
 
-    // 1) Wipe the SERVER-side data first. Balances, transactions, requests,
-    // beneficiaries, instruments and notifications live in Neon, so clearing
-    // localStorage alone would let them re-hydrate after login. This is the fix
-    // for "I reset but the money is still on the balance after I log in".
-    const serverResult = await resetMyServerAccountData(ADMIN_PASSCODE)
+    // Wipe the SELECTED account's SERVER-side data. Balances, transactions,
+    // requests, beneficiaries, instruments and notifications live in Neon, and
+    // the in-memory stores re-hydrate from the server on login — so the server
+    // wipe is what makes the reset actually stick. The action is scoped strictly
+    // to the chosen account id, so no other user's data is touched.
+    const serverResult = await resetServerAccountDataForUser(ADMIN_PASSCODE, resetTargetId)
     if (!serverResult.ok) {
       setResetting(false)
       toast.error("Reset failed", { description: serverResult.error })
@@ -1573,26 +1604,24 @@ export default function AdminPage() {
     }
 
     logActivity({
-      action: "Administrator reset all account data to a brand-new state",
+      action: `Administrator reset account data for ${serverResult.targetName}`,
       category: "Administration",
       details: {
-        summary:
-          "Administrator performed a full account reset. All balances were set to 0.00 and every transaction, payment request, bank instrument, Yield/PPP application, and beneficiary was permanently deleted from the server and local storage. The account was restored to the state of a newly created platform account.",
+        summary: `Administrator reset the account "${serverResult.targetName}" (${serverResult.targetEmail}) to a brand-new state. All balances set to 0.00 and every transaction, payment request, bank instrument, Yield/PPP application, beneficiary and notification permanently deleted on the server. No other account was affected.`,
         decision: "Account Reset",
+        targetAccount: `${serverResult.targetName} — ${serverResult.targetEmail}`,
         scope: "Balances, transactions, payment requests, instruments, Yield/PPP applications, beneficiaries",
         serverRowsCleared: String(serverResult.cleared),
       },
     })
 
-    // 2) Clear the per-user localStorage stores too, then reload so every
-    // in-memory store re-hydrates from its (now empty) server + local defaults.
-    resetAccountData()
-    toast.success("Account reset to brand-new state", {
-      description: "All balances, transactions, requests, and beneficiaries have been cleared.",
+    setResetting(false)
+    setResetDialogOpen(false)
+    setResetConfirm("")
+    toast.success(`Account reset: ${serverResult.targetName}`, {
+      description: `Cleared ${serverResult.cleared} record(s). The account is now in a brand-new state and will show empty balances on next login.`,
     })
-    setTimeout(() => {
-      window.location.reload()
-    }, 600)
+    setResetTargetId("")
   }
 
   const handleApprove = (request: PaymentRequest) => {
@@ -4480,19 +4509,54 @@ export default function AdminPage() {
             Danger Zone
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="space-y-1">
-              <p className="text-sm font-medium text-foreground">Reset Account Data</p>
-              <p className="text-sm text-muted-foreground text-pretty">
-                Permanently restore this account to a brand-new state: all balances set to 0.00 and
-                every transaction, payment request, bank instrument, Yield/PPP application, and
-                beneficiary deleted. This cannot be undone.
-              </p>
+        <CardContent className="space-y-4">
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-foreground">Reset Account Data</p>
+            <p className="text-sm text-muted-foreground text-pretty">
+              Permanently restore a single account to a brand-new state: all balances set to 0.00 and
+              every transaction, payment request, bank instrument, Yield/PPP application, beneficiary
+              and notification deleted. The reset is scoped strictly to the selected account — no other
+              user&apos;s data is affected. This cannot be undone.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div className="w-full space-y-2 sm:max-w-sm">
+              <Label htmlFor="reset-account-select">Account to reset</Label>
+              <div className="flex items-center gap-2">
+                <Select value={resetTargetId} onValueChange={setResetTargetId}>
+                  <SelectTrigger id="reset-account-select" className="flex-1">
+                    <SelectValue
+                      placeholder={resetAccountsLoading ? "Loading accounts…" : "Select an account…"}
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {resetAccounts.map((a) => (
+                      <SelectItem key={a.id} value={a.id}>
+                        {a.fullName || a.company || a.email} — {a.email}
+                        {a.relationship !== "master" ? " (sub-account)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="shrink-0"
+                  onClick={loadResetAccounts}
+                  disabled={resetAccountsLoading}
+                  title="Refresh account list"
+                >
+                  <RefreshCw className={`h-4 w-4 ${resetAccountsLoading ? "animate-spin" : ""}`} />
+                  <span className="sr-only">Refresh account list</span>
+                </Button>
+              </div>
             </div>
             <Button
               variant="destructive"
               className="shrink-0"
+              disabled={!resetTargetId}
               onClick={() => {
                 setResetConfirm("")
                 setResetDialogOpen(true)
@@ -4517,18 +4581,33 @@ export default function AdminPage() {
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Reset account to brand-new state?</DialogTitle>
+            <DialogTitle>Reset this account to a brand-new state?</DialogTitle>
             <DialogDescription>
               This permanently deletes all balances, transactions, payment requests, bank
-              instruments, Yield/PPP applications, and beneficiaries. The account will behave exactly
-              like a newly created platform account.
+              instruments, Yield/PPP applications, beneficiaries and notifications for the selected
+              account only. It will behave exactly like a newly created platform account.
             </DialogDescription>
           </DialogHeader>
+          <div className="rounded-lg border border-border bg-muted/40 p-3">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Account being reset
+            </p>
+            {resetTarget ? (
+              <>
+                <p className="mt-1 text-sm font-semibold text-foreground">
+                  {resetTarget.fullName || resetTarget.company || resetTarget.email}
+                </p>
+                <p className="text-xs text-muted-foreground">{resetTarget.email}</p>
+              </>
+            ) : (
+              <p className="mt-1 text-sm text-destructive">No account selected.</p>
+            )}
+          </div>
           <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 p-3">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
             <p className="text-xs text-muted-foreground text-pretty">
-              This action cannot be undone. Type <span className="font-semibold text-foreground">RESET</span>{" "}
-              below to confirm.
+              This action cannot be undone and affects only this account. Type{" "}
+              <span className="font-semibold text-foreground">RESET</span> below to confirm.
             </p>
           </div>
           <div className="space-y-2">
@@ -4552,7 +4631,7 @@ export default function AdminPage() {
             <Button
               variant="destructive"
               onClick={handleResetAccount}
-              disabled={resetConfirm.trim().toUpperCase() !== "RESET" || resetting}
+              disabled={!resetTargetId || resetConfirm.trim().toUpperCase() !== "RESET" || resetting}
             >
               <Trash2 className="mr-2 h-4 w-4" />
               {resetting ? "Resetting…" : "Reset Account"}

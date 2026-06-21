@@ -2,12 +2,12 @@
 
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { query } from "@/lib/db"
-import { resolveCurrentSession, resolveDataOwnerIdFor } from "@/lib/session-user"
+import { getDynamicUserById } from "@/lib/admin-users-db"
 
 /**
  * Every server-side table that holds per-account data, all keyed by `user_id`.
- * Wiping these rows for the signed-in account restores it to a brand-new state
- * on the SERVER — the authoritative source the in-memory stores hydrate from.
+ * Wiping these rows for a single account restores it to a brand-new state on the
+ * SERVER — the authoritative source the in-memory stores hydrate from.
  * (Clearing localStorage alone is not enough: balances, transactions, requests,
  * beneficiaries, etc. live in Neon and would otherwise reappear after login.)
  */
@@ -22,33 +22,42 @@ const PER_USER_TABLES = [
   "user_notifications", // notification feed
 ] as const
 
-export type ResetAccountResult = { ok: true; cleared: number } | { ok: false; error: string }
+export type ResetAccountResult =
+  | { ok: true; cleared: number; targetName: string; targetEmail: string }
+  | { ok: false; error: string }
 
 /**
- * Administrator Danger-Zone reset of the CURRENTLY signed-in account's
- * server-side data. Deletes every per-user row across the account-data tables
- * for both the account's own id AND its shared-data owner id (a sub-account's
- * balance lives under its Master), so the balance truly drops to zero and does
- * not re-hydrate after the page reload. Other accounts are never touched.
+ * Administrator Danger-Zone reset of ONE specific account's server-side data.
+ *
+ * Isolation guarantee: the wipe is scoped STRICTLY to the selected account's own
+ * `user_id`. It deliberately does NOT expand to a shared-data owner (a
+ * sub-account's Master), because deleting the Master's rows would also wipe the
+ * balance/history shared with the Master and its other sub-accounts. Restricting
+ * the DELETE to the chosen id guarantees no other user's data is ever affected.
  */
-export async function resetMyServerAccountData(passcode: string): Promise<ResetAccountResult> {
+export async function resetServerAccountDataForUser(
+  passcode: string,
+  targetUserId: string,
+): Promise<ResetAccountResult> {
   if (String(passcode) !== ADMIN_PASSCODE) {
     return { ok: false, error: "Administrator authorization failed." }
   }
 
-  const session = await resolveCurrentSession()
-  if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
+  const id = targetUserId?.trim()
+  if (!id) return { ok: false, error: "Select an account to reset first." }
 
-  // Scope the wipe to this account's own id and the id whose shared financial
-  // data it operates on (Master, for a sub-account). De-duplicated.
-  const ownerId = await resolveDataOwnerIdFor(session.id)
-  const ids = Array.from(new Set([session.id, ownerId].filter(Boolean)))
-  if (ids.length === 0) return { ok: false, error: "Could not resolve the account to reset." }
+  // Confirm the account exists so a typo / stale id can never silently no-op,
+  // and so we can echo back exactly which account was reset.
+  const target = await getDynamicUserById(id)
+  if (!target) {
+    return { ok: false, error: "The selected account could not be found." }
+  }
 
   let cleared = 0
   for (const table of PER_USER_TABLES) {
     try {
-      const res = await query(`DELETE FROM ${table} WHERE user_id = ANY($1::text[])`, [ids])
+      // Strictly this account's own rows — never ANY()/owner expansion.
+      const res = await query(`DELETE FROM ${table} WHERE user_id = $1`, [id])
       cleared += res.rowCount ?? 0
     } catch (err) {
       // A missing table (never bootstrapped yet) is not an error for a reset —
@@ -57,5 +66,10 @@ export async function resetMyServerAccountData(passcode: string): Promise<ResetA
     }
   }
 
-  return { ok: true, cleared }
+  return {
+    ok: true,
+    cleared,
+    targetName: target.profile.fullName || target.profile.company || target.email,
+    targetEmail: target.email,
+  }
 }
