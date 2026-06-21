@@ -20,6 +20,7 @@ export type ApprovalKind =
   | "euroclear"
   | "commodity"
   | "bank_account"
+  | "card"
 
 export const APPROVAL_KINDS: ApprovalKind[] = [
   "payment",
@@ -35,6 +36,7 @@ export const APPROVAL_KINDS: ApprovalKind[] = [
   "euroclear",
   "commodity",
   "bank_account",
+  "card",
 ]
 
 export const KIND_LABELS: Record<ApprovalKind, string> = {
@@ -51,6 +53,7 @@ export const KIND_LABELS: Record<ApprovalKind, string> = {
   euroclear: "Euroclear Settlement",
   commodity: "Commodity Deal",
   bank_account: "Bank Account Registration",
+  card: "Payment Card",
 }
 
 /** Best-effort deep link to the section where a client reviews this kind. */
@@ -65,6 +68,7 @@ export const KIND_HREF: Partial<Record<ApprovalKind, string>> = {
   dof: "/dashboard/download-of-funds",
   commodity: "/dashboard/commodities",
   bank_account: "/dashboard/accounts",
+  card: "/dashboard/cards",
 }
 
 export function kindLabel(kind: ApprovalKind): string {

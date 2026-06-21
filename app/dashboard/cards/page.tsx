@@ -1,266 +1,185 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useMemo, useState, useEffect } from "react"
 import { toast } from "sonner"
-import { Snowflake, Settings, Eye, EyeOff, ShieldCheck, Plus, Lock, Smartphone, Globe } from "lucide-react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
+import { CreditCard as CreditCardIcon, CheckCircle2, Clock, Ban } from "lucide-react"
+import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Progress } from "@/components/ui/progress"
-import { Switch } from "@/components/ui/switch"
-import { CardVisual, useCards } from "@/components/dashboard/bank-cards"
+import { CardVisual, type BankCard } from "@/components/dashboard/bank-cards"
 import { useActivityLog } from "@/components/activity-tracker"
+import { useCurrentUser } from "@/lib/use-current-user"
+import {
+  useCardRequests,
+  TIER_LABELS,
+  type ClientCard,
+  type NewCardRequest,
+} from "@/lib/card-requests-store"
+import { RequestCardDialog } from "@/components/dashboard/cards/request-card-dialog"
+import { CardDetailPanel } from "@/components/dashboard/cards/card-detail-panel"
 
-const cardControls = [
-  { id: "online", label: "Online payments", icon: Globe, enabled: true },
-  { id: "contactless", label: "Contactless", icon: Smartphone, enabled: true },
-  { id: "atm", label: "ATM withdrawals", icon: Lock, enabled: false },
-]
+const STATUS_BADGE: Record<ClientCard["status"], { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+  pending: { label: "Pending", variant: "default" },
+  active: { label: "Active", variant: "secondary" },
+  blocked: { label: "Blocked", variant: "destructive" },
+  rejected: { label: "Declined", variant: "destructive" },
+  cancelled: { label: "Cancelled", variant: "outline" },
+}
+
+/** Map a ClientCard onto the shared embossed card visual. */
+function toBankCard(c: ClientCard): BankCard {
+  return {
+    id: c.id,
+    label: `${c.network} ${TIER_LABELS[c.tier]}`,
+    holder: c.holder,
+    last4: c.last4,
+    expiry: c.expiry,
+    network: c.network === "Visa" ? "VISA" : "Mastercard",
+    variant: c.variant,
+    frozen: c.status === "blocked" || c.status === "pending",
+  }
+}
 
 export default function CardsPage() {
   const log = useActivityLog()
-  const initialCards = useCards()
-  const [cardList, setCardList] = useState(initialCards)
-  const [activeId, setActiveId] = useState(initialCards[0].id)
-  const activeCard = cardList.find((c) => c.id === activeId) ?? cardList[0]
+  const user = useCurrentUser()
+  const { cards, requestCard } = useCardRequests()
 
-  // Re-sync card holder names once the signed-in user resolves on the client.
+  const [activeId, setActiveId] = useState<string | null>(null)
+
+  // Keep a valid selection as the list changes (new request, activation, etc.).
   useEffect(() => {
-    setCardList((prev) =>
-      prev.map((c) => {
-        const fresh = initialCards.find((ic) => ic.id === c.id)
-        return fresh ? { ...c, holder: fresh.holder } : c
-      }),
-    )
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialCards[0]?.holder])
+    if (cards.length === 0) {
+      if (activeId !== null) setActiveId(null)
+      return
+    }
+    if (!activeId || !cards.some((c) => c.id === activeId)) {
+      setActiveId(cards[0].id)
+    }
+  }, [cards, activeId])
 
-  const [detailsVisible, setDetailsVisible] = useState(false)
+  const activeCard = cards.find((c) => c.id === activeId) ?? null
 
-  const requestNewCard = () => {
+  const counts = useMemo(() => {
+    return {
+      active: cards.filter((c) => c.status === "active").length,
+      pending: cards.filter((c) => c.status === "pending").length,
+      blocked: cards.filter((c) => c.status === "blocked").length,
+    }
+  }, [cards])
+
+  const handleRequest = (req: NewCardRequest) => {
+    const card = requestCard(req)
+    setActiveId(card.id)
     log({
-      action: "Requested a new MCC Capital card",
+      action: `Requested a new ${req.network} ${TIER_LABELS[req.tier]} card`,
       category: "Cards",
       details: {
-        summary: "Client requested the issuance of a new MCC Capital card.",
-        requestedAt: new Date().toLocaleString("en-GB"),
+        summary: `Client requested a new ${req.network} ${TIER_LABELS[req.tier]} ${req.format} card with a ${req.currency} ${req.requestedLimit.toLocaleString("en-US")} monthly limit${req.purpose ? ` for ${req.purpose}` : ""}. Awaiting administrator approval.`,
+        network: req.network,
+        tier: TIER_LABELS[req.tier],
+        requestedLimit: `${req.currency} ${req.requestedLimit.toLocaleString("en-US")}`,
+        purpose: req.purpose ?? "(not specified)",
       },
     })
     toast.success("Card request submitted", {
-      description: "Your new card request is being processed.",
+      description: "MCC Capital will review and activate your card shortly.",
     })
   }
 
-  const toggleDetails = () => {
-    setDetailsVisible((v) => !v)
-    log({
-      action: `${detailsVisible ? "Hid" : "Revealed"} card details for ${activeCard.label} ending ${activeCard.last4}`,
-      category: "Cards",
-      details: {
-        summary: `Client ${detailsVisible ? "hid" : "revealed"} the sensitive details for card "${activeCard.label}" (•••• ${activeCard.last4}).`,
-        card: activeCard.label,
-        last4: activeCard.last4,
-      },
-    })
-  }
-
-  const openCardSettings = () => {
-    log({
-      action: `Opened settings for ${activeCard.label} ending ${activeCard.last4}`,
-      category: "Cards",
-      details: {
-        summary: `Client opened the settings panel for card "${activeCard.label}" (•••• ${activeCard.last4}).`,
-        card: activeCard.label,
-        last4: activeCard.last4,
-      },
-    })
-    toast.info(`${activeCard.label} settings`, {
-      description: "Card settings are managed by your relationship manager.",
-    })
-  }
-
-  const adjustLimit = () => {
-    log({
-      action: "Requested a monthly spending limit adjustment",
-      category: "Cards",
-      details: {
-        summary: `Client requested an adjustment to the monthly spending limit for card "${activeCard.label}" (•••• ${activeCard.last4}).`,
-        card: activeCard.label,
-        currentLimit: "€50,000",
-        requestedAt: new Date().toLocaleString("en-GB"),
-      },
-    })
-    toast.success("Limit adjustment requested", {
-      description: "Your relationship manager will review the request shortly.",
-    })
-  }
-
-  const toggleFreeze = (id: string) => {
-    setCardList((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, frozen: !c.frozen } : c)),
-    )
-    const card = cardList.find((c) => c.id === id)
-    const willFreeze = !card?.frozen
-    log({
-      action: `${willFreeze ? "Froze" : "Unfroze"} card ${card?.label ?? id} ending ${card?.last4 ?? "****"}`,
-      category: "Cards",
-      details: {
-        summary: `Client ${willFreeze ? "froze" : "unfroze"} the card "${card?.label ?? id}" (•••• ${card?.last4 ?? "****"}). The card is now ${willFreeze ? "frozen and cannot be used" : "active and ready for use"}.`,
-        card: card?.label ?? id,
-        last4: card?.last4 ?? "",
-        newState: willFreeze ? "Frozen" : "Active",
-      },
-    })
-  }
+  const holder = user.cardHolderPerson || user.cardHolderCompany || ""
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Cards</h1>
           <p className="text-sm text-muted-foreground">
-            Manage your physical and virtual MCC Capital cards
+            Request, activate and manage your MCC Capital Visa &amp; Mastercard cards
           </p>
         </div>
-        <Button size="sm" onClick={requestNewCard}>
-          <Plus className="mr-2 h-4 w-4" />
-          Request New Card
-        </Button>
+        <RequestCardDialog holder={holder} onRequest={handleRequest} />
       </div>
 
-      {/* Card carousel */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {cardList.map((card) => (
-          <button
-            key={card.id}
-            onClick={() => setActiveId(card.id)}
-            className="text-left focus:outline-none"
-            aria-label={`Select ${card.label}`}
-          >
-            <CardVisual
-              card={card}
-              className={
-                activeId === card.id ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""
-              }
-            />
-          </button>
-        ))}
+      {/* Status overview */}
+      <div className="grid grid-cols-3 gap-3">
+        <StatTile icon={CheckCircle2} label="Active" value={counts.active} tone="text-emerald-500" />
+        <StatTile icon={Clock} label="Pending" value={counts.pending} tone="text-amber-500" />
+        <StatTile icon={Ban} label="Blocked" value={counts.blocked} tone="text-destructive" />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Card controls */}
-        <Card className="bg-card border-border lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="text-lg font-semibold">
-              {activeCard.label} •••• {activeCard.last4}
-            </CardTitle>
-            <p className="text-xs text-muted-foreground">Card settings and security controls</p>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant={activeCard.frozen ? "default" : "outline"}
-                size="sm"
-                onClick={() => toggleFreeze(activeCard.id)}
-              >
-                <Snowflake className="mr-2 h-4 w-4" />
-                {activeCard.frozen ? "Unfreeze Card" : "Freeze Card"}
-              </Button>
-              <Button variant="outline" size="sm" onClick={toggleDetails}>
-                {detailsVisible ? (
-                  <EyeOff className="mr-2 h-4 w-4" />
-                ) : (
-                  <Eye className="mr-2 h-4 w-4" />
-                )}
-                {detailsVisible ? "Hide Details" : "Show Details"}
-              </Button>
-              <Button variant="outline" size="sm" onClick={openCardSettings}>
-                <Settings className="mr-2 h-4 w-4" />
-                Settings
-              </Button>
-            </div>
-
-            {detailsVisible && (
-              <div className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-secondary/30 p-4 sm:grid-cols-3">
-                <div className="col-span-2 sm:col-span-3">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Card Number
-                  </p>
-                  <p className="font-mono text-sm text-foreground">
-                    {`4929 8841 0073 ${activeCard.last4}`}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Expires
-                  </p>
-                  <p className="font-mono text-sm text-foreground">{activeCard.expiry}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    CVV
-                  </p>
-                  <p className="font-mono text-sm text-foreground">•••</p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Network
-                  </p>
-                  <p className="font-mono text-sm text-foreground">{activeCard.network}</p>
-                </div>
-              </div>
-            )}
-
-            <div className="space-y-3 pt-2">
-              {cardControls.map((control) => (
-                <div
-                  key={control.id}
-                  className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-3"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-                      <control.icon className="h-4 w-4 text-primary" />
-                    </div>
-                    <span className="text-sm text-foreground">{control.label}</span>
-                  </div>
-                  <Switch defaultChecked={control.enabled} />
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Spending limit */}
+      {cards.length === 0 ? (
         <Card className="bg-card border-border">
-          <CardHeader>
-            <CardTitle className="text-lg font-semibold">Monthly Spending</CardTitle>
-            <p className="text-xs text-muted-foreground">Limit resets on the 1st</p>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <div className="flex items-end justify-between">
-                <span className="text-2xl font-bold text-foreground">€0</span>
-                <span className="text-sm text-muted-foreground">of €50,000</span>
-              </div>
-              <Progress value={0} className="mt-2" />
-              <p className="mt-1 text-xs text-muted-foreground">0% of monthly limit used</p>
+          <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+              <CreditCardIcon className="h-6 w-6 text-primary" />
             </div>
-            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4 text-primary" />
-                <span className="text-sm font-medium text-foreground">3-D Secure enabled</span>
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                All online transactions require biometric approval.
+            <div>
+              <p className="text-sm font-medium text-foreground">No cards yet</p>
+              <p className="text-sm text-muted-foreground">
+                Request your first MCC Capital card to get started.
               </p>
             </div>
-            <Button variant="outline" size="sm" className="w-full" onClick={adjustLimit}>
-              Adjust Limit
-            </Button>
+            <RequestCardDialog holder={holder} onRequest={handleRequest} />
           </CardContent>
         </Card>
-      </div>
+      ) : (
+        <>
+          {/* Card carousel */}
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {cards.map((card) => {
+              const badge = STATUS_BADGE[card.status]
+              return (
+                <button
+                  key={card.id}
+                  onClick={() => setActiveId(card.id)}
+                  className="group relative text-left focus:outline-none"
+                  aria-label={`Select ${card.network} ${TIER_LABELS[card.tier]} card`}
+                >
+                  <CardVisual
+                    card={toBankCard(card)}
+                    className={
+                      activeId === card.id ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""
+                    }
+                  />
+                  <Badge variant={badge.variant} className="absolute right-3 top-3 text-[10px]">
+                    {badge.label}
+                  </Badge>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Selected card management */}
+          {activeCard && <CardDetailPanel key={activeCard.id} card={activeCard} />}
+        </>
+      )}
     </div>
+  )
+}
+
+function StatTile({
+  icon: Icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: typeof CheckCircle2
+  label: string
+  value: number
+  tone: string
+}) {
+  return (
+    <Card className="bg-card border-border">
+      <CardContent className="flex items-center gap-3 p-4">
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-secondary/50">
+          <Icon className={`h-5 w-5 ${tone}`} />
+        </div>
+        <div>
+          <p className="text-xl font-bold text-foreground">{value}</p>
+          <p className="text-xs text-muted-foreground">{label}</p>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
