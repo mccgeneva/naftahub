@@ -63,61 +63,10 @@ function generateFiduciaryId(): string {
 }
 
 export function FiduciaryRequestsProvider({ children }: { children: React.ReactNode }) {
-  const [requests, setRequests] = useState<FiduciaryRequest[]>([])
-  const [hydrated, setHydrated] = useState(false)
-
-  // Load persisted requests once on mount so submissions survive navigation,
-  // reloads, and logout/login.
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(storageKey())
-      setRequests(stored ? (JSON.parse(stored) as FiduciaryRequest[]) : [])
-    } catch {
-      setRequests([])
-    }
-    setHydrated(true)
-  }, [])
-
-  // Persist on change, but only after hydration to avoid clobbering stored data.
-  useEffect(() => {
-    if (!hydrated) return
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(requests))
-    } catch {
-      // ignore quota/availability errors
-    }
-  }, [requests, hydrated])
-
-  // Keep state in sync across tabs/windows (e.g. the Administrator approves in
-  // one place while the client views in another) and on tab refocus.
-  useEffect(() => {
-    if (!hydrated) return
-    const resync = () => {
-      try {
-        const stored = window.localStorage.getItem(storageKey())
-        setRequests(stored ? (JSON.parse(stored) as FiduciaryRequest[]) : [])
-      } catch {
-        // ignore parse/availability errors
-      }
-    }
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === storageKey()) resync()
-    }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") resync()
-    }
-    window.addEventListener("storage", onStorage)
-    window.addEventListener("focus", resync)
-    document.addEventListener("visibilitychange", onVisible)
-    return () => {
-      window.removeEventListener("storage", onStorage)
-      window.removeEventListener("focus", resync)
-      document.removeEventListener("visibilitychange", onVisible)
-    }
-  }, [hydrated])
-
-  // Reconcile administrator decisions made cross-client (in the DB) back here.
-  useApprovalReconcile("fiduciary", hydrated, requests, setRequests)
+  // List sourced entirely from the server (Neon), so submissions and admin
+  // decisions are visible on any device/browser. No localStorage involved.
+  const { records: requests, setRecords: setRequests, hydrated, refresh } =
+    useServerRequestList<FiduciaryRequest>("fiduciary")
 
   const addRequest: FiduciaryRequestsContextValue["addRequest"] = (request) => {
     const full: FiduciaryRequest = {
@@ -126,26 +75,29 @@ export function FiduciaryRequestsProvider({ children }: { children: React.ReactN
       status: "pending",
       submittedAt: new Date().toISOString(),
     }
-    setRequests((prev) => [full, ...prev])
-    // Mirror into the DB so the Administrator (custody desk) can review it.
+    setRequests([full, ...requests])
+    // Mirror into the DB so the custody desk can review it; persist the COMPLETE
+    // record under `payload.record` so the server can rebuild the view anywhere.
     void mirrorSubmission({
       kind: "fiduciary",
       title: `${full.serviceLabel} · ${full.assetType}`,
       summary: `${full.serviceLabel} — ${full.assetType}${full.estimatedValue ? ` (${full.currency} ${full.estimatedValue.toLocaleString("en-US")})` : ""}`,
       amount: full.estimatedValue || undefined,
       currency: full.currency,
-      payload: { localId: full.id, serviceType: full.serviceType, assetType: full.assetType },
-    }).then((approvalId) => {
-      if (!approvalId) return
-      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+      payload: { localId: full.id, serviceType: full.serviceType, assetType: full.assetType, record: full },
+    }).then(() => {
+      void refresh()
     })
     return full
   }
 
+  // Admin decisions flow through the DB and surface here via server hydration.
+  // These local mutators update the in-memory view immediately for interface
+  // compatibility; the next refresh reconciles against authoritative state.
   const approveRequest: FiduciaryRequestsContextValue["approveRequest"] = (id, note) => {
     let updated: FiduciaryRequest | null = null
-    setRequests((prev) =>
-      prev.map((r) => {
+    setRequests(
+      requests.map((r) => {
         if (r.id === id && r.status === "pending") {
           updated = {
             ...r,
@@ -163,8 +115,8 @@ export function FiduciaryRequestsProvider({ children }: { children: React.ReactN
 
   const rejectRequest: FiduciaryRequestsContextValue["rejectRequest"] = (id, reason) => {
     let updated: FiduciaryRequest | null = null
-    setRequests((prev) =>
-      prev.map((r) => {
+    setRequests(
+      requests.map((r) => {
         if (r.id === id && r.status === "pending") {
           updated = {
             ...r,

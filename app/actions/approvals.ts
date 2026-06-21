@@ -21,6 +21,7 @@ import {
   adminRevokeApprovedApproval,
   markApprovalDelivered,
   getApprovalById,
+  updateApprovalPayload,
   type ApprovalRequest,
   type ApprovalStatus,
   type LedgerEffect,
@@ -137,6 +138,37 @@ export async function cancelMyApproval(id: string): Promise<{ ok: boolean; error
   } catch (err) {
     console.log("[v0] cancelMyApproval failed:", (err as Error).message)
     return { ok: false, error: "The request could not be cancelled. Please try again." }
+  }
+}
+
+/**
+ * Persist a client-owned change to the view-model stored under `payload.record`
+ * of one of the signed-in user's OWN approvals. Used for post-approval state
+ * that the client manages locally but that must follow them across devices —
+ * e.g. a card's spending limit, block/unblock, or usage controls. Ownership is
+ * enforced against the session, and only `payload.record` is merged so the
+ * lifecycle / decision fields and admin-set values are never overwritten here.
+ */
+export async function updateMyApprovalRecord(
+  approvalId: string,
+  patch: Record<string, unknown>,
+): Promise<{ ok: boolean; error?: string }> {
+  const session = await resolveCurrentSession()
+  if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
+  try {
+    const existing = await getApprovalById(approvalId)
+    if (!existing || existing.userId !== session.id) {
+      return { ok: false, error: "This record could not be found." }
+    }
+    const prevPayload = existing.payload ?? {}
+    const prevRecord = (prevPayload.record as Record<string, unknown> | undefined) ?? {}
+    const nextPayload = { ...prevPayload, record: { ...prevRecord, ...patch } }
+    const updated = await updateApprovalPayload(approvalId, nextPayload)
+    if (!updated) return { ok: false, error: "The change could not be saved. Please try again." }
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] updateMyApprovalRecord failed:", (err as Error).message)
+    return { ok: false, error: "The change could not be saved. Please try again." }
   }
 }
 

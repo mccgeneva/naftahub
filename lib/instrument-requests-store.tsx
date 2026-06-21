@@ -1,10 +1,10 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
-import { scopedKey } from "@/lib/user-scope"
+import { createContext, useContext } from "react"
 import { buildInstrumentIdentifiers } from "@/lib/instrument-identifiers"
-import { mirrorSubmission } from "@/lib/approval-sync"
-import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
+import { mirrorSubmission, mapApprovalStatus, type ApprovalRecord } from "@/lib/approval-sync"
+import { useServerRequestList } from "@/lib/use-server-request-list"
+import { cancelMyApproval } from "@/app/actions/approvals"
 
 /**
  * Ensure an instrument carries the full identifier set. Records created before
@@ -67,8 +67,26 @@ export interface Instrument {
   form?: string
 }
 
-const KEY_BASE = "mcc.instruments.v1"
-const storageKey = () => scopedKey(KEY_BASE)
+/**
+ * Build an Instrument from a server approval record. Two payload shapes exist:
+ *  - Client requests carry the full view-model under `payload.record`.
+ *  - Administrator-ISSUED instruments carry it under `payload.instrument` with
+ *    `issuedByAdmin: true` (the client cannot create these themselves).
+ * Either way the DB lifecycle (`status`/`decidedAt`/`decisionNote`) wins, and
+ * "approved" maps onto the instrument's "active" status.
+ */
+function instrumentFromApproval(rec: ApprovalRecord): Instrument | null {
+  const p = rec.payload as { record?: Instrument; instrument?: Instrument; issuedByAdmin?: boolean } | undefined
+  const base = p?.issuedByAdmin ? p?.instrument : (p?.record ?? p?.instrument)
+  if (!base || typeof base !== "object" || !base.id) return null
+  return ensureIdentifiers({
+    ...base,
+    approvalId: rec.id,
+    status: mapApprovalStatus(rec.status, { approvedStatus: "active" }) as InstrumentStatus,
+    decidedAt: rec.decidedAt ?? base.decidedAt,
+    decisionNote: rec.decisionNote ?? base.decisionNote,
+  })
+}
 
 interface InstrumentRequestsContextValue {
   instruments: Instrument[]
@@ -90,120 +108,15 @@ interface InstrumentRequestsContextValue {
 const InstrumentRequestsContext = createContext<InstrumentRequestsContextValue | null>(null)
 
 export function InstrumentRequestsProvider({ children }: { children: React.ReactNode }) {
-  const [instruments, setInstruments] = useState<Instrument[]>([])
-  const [hydrated, setHydrated] = useState(false)
-
-  // Load persisted instruments once on mount so requests survive navigation,
-  // reloads, and logout/login.
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(storageKey())
-      const parsed = stored ? (JSON.parse(stored) as Instrument[]) : []
-      setInstruments(parsed.map(ensureIdentifiers))
-    } catch {
-      setInstruments([])
-    }
-    setHydrated(true)
-  }, [])
-
-  // Persist on change, but only after hydration to avoid clobbering stored data.
-  useEffect(() => {
-    if (!hydrated) return
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(instruments))
-    } catch {
-      // ignore quota/availability errors
-    }
-  }, [instruments, hydrated])
-
-  // Keep state in sync when the data changes in another tab/window (e.g. the
-  // Administrator approves in one place while the client views in another) or
-  // when the user returns to a tab that was open in the background.
-  useEffect(() => {
-    if (!hydrated) return
-    const resync = () => {
-      try {
-        const stored = window.localStorage.getItem(storageKey())
-        const parsed = stored ? (JSON.parse(stored) as Instrument[]) : []
-        setInstruments(parsed.map(ensureIdentifiers))
-      } catch {
-        // ignore parse/availability errors
-      }
-    }
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === storageKey()) resync()
-    }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") resync()
-    }
-    window.addEventListener("storage", onStorage)
-    window.addEventListener("focus", resync)
-    document.addEventListener("visibilitychange", onVisible)
-    return () => {
-      window.removeEventListener("storage", onStorage)
-      window.removeEventListener("focus", resync)
-      document.removeEventListener("visibilitychange", onVisible)
-    }
-  }, [hydrated])
-
-  // Reconcile administrator decisions made cross-client (in the DB) back here.
-  // Instruments use "active" for an approved record, so we map onto that.
-  useApprovalReconcile("instrument", hydrated, instruments, setInstruments, undefined, {
-    approvedStatus: "active",
-  })
-
-  // Materialise administrator-ISSUED instruments (cross-device, read-only for
-  // the client). Clients can no longer create instruments themselves; the
-  // administrator issues them through the approvals backbone, which delivers
-  // the full instrument in the approval payload (`issuedByAdmin`). We pull any
-  // approved, admin-issued instrument that is not already in the local
-  // portfolio and add it as an active holding. Deduped by id so repeated polls
-  // never create duplicates.
-  useEffect(() => {
-    if (!hydrated) return
-    let cancelled = false
-    const pull = async () => {
-      try {
-        const res = await fetch("/api/approvals?kind=instrument")
-        if (!res.ok) return
-        const data = (await res.json()) as {
-          ok: boolean
-          items: { id: string; status: string; decidedAt?: string; payload?: Record<string, unknown> }[]
-        }
-        const issued = (data.items ?? []).filter((it) => {
-          const p = it.payload as { issuedByAdmin?: boolean; instrument?: unknown } | undefined
-          return it.status === "approved" && !!p?.issuedByAdmin && !!p.instrument
-        })
-        if (!issued.length || cancelled) return
-        setInstruments((prev) => {
-          const have = new Set(prev.map((i) => i.id))
-          const additions: Instrument[] = []
-          for (const it of issued) {
-            const inst = (it.payload as { instrument?: Instrument }).instrument
-            if (!inst?.id || have.has(inst.id)) continue
-            additions.push(
-              ensureIdentifiers({
-                ...inst,
-                status: "active",
-                approvalId: it.id,
-                decidedAt: it.decidedAt ?? new Date().toISOString(),
-              }),
-            )
-            have.add(inst.id)
-          }
-          return additions.length ? [...additions, ...prev] : prev
-        })
-      } catch {
-        // ignore network/parse errors — the next poll retries
-      }
-    }
-    void pull()
-    const id = setInterval(pull, 30000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [hydrated])
+  // List sourced entirely from the server (Neon). The custom mapper folds in
+  // BOTH client-submitted requests and administrator-issued instruments, so the
+  // portfolio is identical on any device/browser. No localStorage involved.
+  const {
+    records: instruments,
+    setRecords: setInstruments,
+    hydrated,
+    refresh,
+  } = useServerRequestList<Instrument>("instrument", { fromApproval: instrumentFromApproval })
 
   const addInstrument: InstrumentRequestsContextValue["addInstrument"] = (instrument) => {
     const full: Instrument = {
@@ -211,26 +124,29 @@ export function InstrumentRequestsProvider({ children }: { children: React.React
       status: "pending",
       submittedAt: new Date().toISOString(),
     }
-    setInstruments((prev) => [full, ...prev])
-    // Mirror into the DB so the Administrator can review it cross-client.
+    setInstruments([full, ...instruments])
+    // Mirror into the DB so the Administrator can review it cross-client; persist
+    // the COMPLETE record under `payload.record` so the server rebuilds it anywhere.
     void mirrorSubmission({
       kind: "instrument",
       title: `${full.typeFull} · ${full.issuer}`,
       summary: `${full.currency} ${full.faceValue.toLocaleString("en-US")} ${full.typeFull} issued by ${full.issuer} (${full.purpose})`,
       amount: full.faceValue,
       currency: full.currency,
-      payload: { localId: full.id, type: full.type, issuer: full.issuer, isin: full.isin },
-    }).then((approvalId) => {
-      if (!approvalId) return
-      setInstruments((prev) => prev.map((i) => (i.id === full.id ? { ...i, approvalId } : i)))
+      payload: { localId: full.id, type: full.type, issuer: full.issuer, isin: full.isin, record: full },
+    }).then(() => {
+      void refresh()
     })
     return full
   }
 
+  // Admin decisions flow through the DB and surface here via server hydration.
+  // These local mutators update the in-memory view immediately for interface
+  // compatibility; the next refresh reconciles against authoritative state.
   const approveInstrument: InstrumentRequestsContextValue["approveInstrument"] = (id) => {
     let updated: Instrument | null = null
-    setInstruments((prev) =>
-      prev.map((i) => {
+    setInstruments(
+      instruments.map((i) => {
         if (i.id === id && i.status === "pending") {
           updated = { ...i, status: "active", decidedAt: new Date().toISOString() }
           return updated
@@ -243,8 +159,8 @@ export function InstrumentRequestsProvider({ children }: { children: React.React
 
   const rejectInstrument: InstrumentRequestsContextValue["rejectInstrument"] = (id, reason) => {
     let updated: Instrument | null = null
-    setInstruments((prev) =>
-      prev.map((i) => {
+    setInstruments(
+      instruments.map((i) => {
         if (i.id === id && i.status === "pending") {
           updated = {
             ...i,
@@ -261,13 +177,24 @@ export function InstrumentRequestsProvider({ children }: { children: React.React
   }
 
   const cancelInstrument: InstrumentRequestsContextValue["cancelInstrument"] = (id) => {
-    setInstruments((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, status: "cancelled" } : i)),
-    )
+    const target = instruments.find((i) => i.id === id)
+    setInstruments(instruments.map((i) => (i.id === id ? { ...i, status: "cancelled" } : i)))
+    // Persist the cancellation server-side when the request is still pending, so
+    // it stays cancelled on every device. Approved/active holdings cannot be
+    // cancelled through the approvals API and remain a local view change only.
+    if (target?.approvalId && target.status === "pending") {
+      void cancelMyApproval(target.approvalId).then(() => void refresh())
+    }
   }
 
   const deleteInstrument: InstrumentRequestsContextValue["deleteInstrument"] = (id) => {
-    setInstruments((prev) => prev.filter((i) => i.id !== id))
+    const target = instruments.find((i) => i.id === id)
+    setInstruments(instruments.filter((i) => i.id !== id))
+    // Mirror a delete of a still-pending request to the server (cancel) so it
+    // does not reappear on the next hydrate. Decided records are server-owned.
+    if (target?.approvalId && target.status === "pending") {
+      void cancelMyApproval(target.approvalId).then(() => void refresh())
+    }
   }
 
   return (

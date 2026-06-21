@@ -1,9 +1,9 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
-import { scopedKey } from "@/lib/user-scope"
-import { mirrorSubmission } from "@/lib/approval-sync"
-import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
+import { createContext, useContext } from "react"
+import { mirrorSubmission, mapApprovalStatus, type ApprovalRecord } from "@/lib/approval-sync"
+import { useServerRequestList } from "@/lib/use-server-request-list"
+import { cancelMyApproval, updateMyApprovalRecord } from "@/app/actions/approvals"
 
 // ---------------------------------------------------------------------------
 // Payment card lifecycle store.
@@ -112,8 +112,39 @@ export function genExpiry(): string {
   return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getFullYear()).slice(-2)}`
 }
 
-const KEY_BASE = "mcc.cards.v1"
-const storageKey = () => scopedKey(KEY_BASE)
+/**
+ * Build a ClientCard from a server approval record. The payload may carry:
+ *  - `card`: the administrator-FINALIZED card (network, tier, limit, features)
+ *    set when the request was approved or when the admin issued a card directly.
+ *  - `record`: the client's own post-activation management edits (spending
+ *    limit, block state, usage controls) — these follow the user across devices.
+ * The finalized card is the base; client edits overlay it. The DB lifecycle
+ * decides pending/active/rejected, except a client "blocked" state is preserved.
+ */
+function cardFromApproval(rec: ApprovalRecord): ClientCard | null {
+  const p = rec.payload as { card?: Partial<ClientCard> & { id: string }; record?: Partial<ClientCard> } | undefined
+  const finalized = p?.card
+  const clientEdits = p?.record
+  // While pending there is no finalized card yet; show the requested card.
+  const base = finalized ?? (clientEdits as (Partial<ClientCard> & { id: string }) | undefined)
+  if (!base?.id) return null
+
+  const lifecycle = mapApprovalStatus(rec.status, { approvedStatus: "active", rejectedStatus: "rejected" })
+  // Honour a client-set "blocked" on an otherwise-active card.
+  const clientStatus = clientEdits?.status
+  const status: CardStatus =
+    lifecycle === "active" && clientStatus === "blocked" ? "blocked" : (lifecycle as CardStatus)
+
+  return hydrateCard({
+    ...base,
+    ...(clientEdits ?? {}),
+    id: base.id,
+    approvalId: rec.id,
+    status,
+    decidedAt: rec.decidedAt ?? base.decidedAt,
+    decisionNote: rec.decisionNote ?? base.decisionNote,
+  })
+}
 
 /** Normalize a possibly-partial stored/remote card into a complete ClientCard. */
 function hydrateCard(raw: Partial<ClientCard> & { id: string }): ClientCard {
@@ -174,137 +205,21 @@ interface CardRequestsContextValue {
 const CardRequestsContext = createContext<CardRequestsContextValue | null>(null)
 
 export function CardRequestsProvider({ children }: { children: React.ReactNode }) {
-  const [cards, setCards] = useState<ClientCard[]>([])
-  const [hydrated, setHydrated] = useState(false)
+  // List sourced entirely from the server (Neon). The custom mapper folds the
+  // administrator-finalized card together with the client's own management
+  // edits, so the wallet is identical on any device/browser. No localStorage.
+  const {
+    records: cards,
+    setRecords: setCards,
+    hydrated,
+    refresh,
+  } = useServerRequestList<ClientCard>("card", { fromApproval: cardFromApproval })
 
-  // Load persisted cards once on mount.
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(storageKey())
-      const parsed = stored ? (JSON.parse(stored) as (Partial<ClientCard> & { id: string })[]) : []
-      setCards(parsed.map(hydrateCard))
-    } catch {
-      setCards([])
-    }
-    setHydrated(true)
-  }, [])
-
-  // Persist after hydration.
-  useEffect(() => {
-    if (!hydrated) return
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(cards))
-    } catch {
-      // ignore quota/availability errors
-    }
-  }, [cards, hydrated])
-
-  // Cross-tab / cross-window sync.
-  useEffect(() => {
-    if (!hydrated) return
-    const resync = () => {
-      try {
-        const stored = window.localStorage.getItem(storageKey())
-        const parsed = stored ? (JSON.parse(stored) as (Partial<ClientCard> & { id: string })[]) : []
-        setCards(parsed.map(hydrateCard))
-      } catch {
-        // ignore
-      }
-    }
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === storageKey()) resync()
-    }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") resync()
-    }
-    window.addEventListener("storage", onStorage)
-    document.addEventListener("visibilitychange", onVisible)
-    return () => {
-      window.removeEventListener("storage", onStorage)
-      document.removeEventListener("visibilitychange", onVisible)
-    }
-  }, [hydrated])
-
-  // Reconcile administrator REJECTIONS back into local records. Approvals are
-  // handled by the payload poll below (so customized fields are adopted), so we
-  // intentionally leave the approved mapping pointing at "pending" — the poll
-  // flips it to active with the finalized card.
-  useApprovalReconcile("card", hydrated, cards, setCards, undefined, {
-    approvedStatus: "pending",
-    rejectedStatus: "rejected",
-  })
-
-  // Pull administrator decisions on card approvals and adopt the FINALIZED card
-  // from the payload. Handles both client-originated requests that were approved
-  // (possibly customized) and admin-issued cards (cross-device, brand-new).
-  useEffect(() => {
-    if (!hydrated) return
-    let cancelled = false
-    const pull = async () => {
-      try {
-        const res = await fetch("/api/approvals?kind=card")
-        if (!res.ok) return
-        const data = (await res.json()) as {
-          ok: boolean
-          items: {
-            id: string
-            status: string
-            decidedAt?: string
-            payload?: Record<string, unknown>
-          }[]
-        }
-        const approved = (data.items ?? []).filter(
-          (it) => it.status === "approved" && !!(it.payload as { card?: unknown })?.card,
-        )
-        if (!approved.length || cancelled) return
-        setCards((prev) => {
-          let changed = false
-          const byApprovalId = new Map(prev.filter((c) => c.approvalId).map((c) => [c.approvalId!, c]))
-          const next = [...prev]
-          for (const it of approved) {
-            const finalCard = (it.payload as { card?: Partial<ClientCard> & { id: string } }).card
-            if (!finalCard?.id) continue
-            const existing = byApprovalId.get(it.id)
-            if (existing) {
-              // Only adopt while still pending locally so we never clobber the
-              // client's own post-activation management edits.
-              if (existing.status !== "pending") continue
-              const idx = next.findIndex((c) => c.id === existing.id)
-              if (idx === -1) continue
-              next[idx] = hydrateCard({
-                ...finalCard,
-                approvalId: it.id,
-                holder: finalCard.holder || existing.holder,
-                status: "active",
-                decidedAt: it.decidedAt ?? new Date().toISOString(),
-              })
-              changed = true
-            } else if (!next.some((c) => c.id === finalCard.id)) {
-              // Admin-issued (or another device): adopt as a brand-new active card.
-              next.unshift(
-                hydrateCard({
-                  ...finalCard,
-                  approvalId: it.id,
-                  status: "active",
-                  decidedAt: it.decidedAt ?? new Date().toISOString(),
-                }),
-              )
-              changed = true
-            }
-          }
-          return changed ? next : prev
-        })
-      } catch {
-        // ignore — the next poll retries
-      }
-    }
-    void pull()
-    const id = setInterval(pull, 30000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [hydrated])
+  /** Persist a client-owned management edit to a card's server record. */
+  const persistCardEdit = (card: ClientCard | undefined, patch: Partial<ClientCard>) => {
+    if (!card?.approvalId) return
+    void updateMyApprovalRecord(card.approvalId, patch as Record<string, unknown>)
+  }
 
   const requestCard: CardRequestsContextValue["requestCard"] = (req) => {
     const tier = req.tier
@@ -323,8 +238,10 @@ export function CardRequestsProvider({ children }: { children: React.ReactNode }
       variant: tierVariant(tier),
       submittedAt: new Date().toISOString(),
     })
-    setCards((prev) => [card, ...prev])
+    setCards([card, ...cards])
     // Mirror into the DB so the administrator can review/customize cross-client.
+    // The requested card is stored under BOTH `card` (so a pending request still
+    // renders before the admin finalizes it) and is the basis the admin edits.
     void mirrorSubmission({
       kind: "card",
       title: `${card.label} card`,
@@ -332,40 +249,62 @@ export function CardRequestsProvider({ children }: { children: React.ReactNode }
       amount: card.requestedLimit ?? null,
       currency: card.currency,
       payload: { card: { ...card } },
-    }).then((approvalId) => {
-      if (!approvalId) return
-      setCards((prev) => prev.map((c) => (c.id === card.id ? { ...c, approvalId } : c)))
+    }).then(() => {
+      void refresh()
     })
     return card
   }
 
   const setLimit: CardRequestsContextValue["setLimit"] = (id, limit) => {
-    setCards((prev) => prev.map((c) => (c.id === id ? { ...c, monthlyLimit: Math.max(0, limit) } : c)))
+    const next = Math.max(0, limit)
+    const target = cards.find((c) => c.id === id)
+    setCards(cards.map((c) => (c.id === id ? { ...c, monthlyLimit: next } : c)))
+    persistCardEdit(target, { monthlyLimit: next })
   }
 
   const setBlocked: CardRequestsContextValue["setBlocked"] = (id, blocked) => {
-    setCards((prev) =>
-      prev.map((c) => {
+    const target = cards.find((c) => c.id === id)
+    let nextStatus: CardStatus | undefined
+    setCards(
+      cards.map((c) => {
         if (c.id !== id) return c
-        if (blocked && c.status === "active") return { ...c, status: "blocked" }
-        if (!blocked && c.status === "blocked") return { ...c, status: "active" }
+        if (blocked && c.status === "active") {
+          nextStatus = "blocked"
+          return { ...c, status: "blocked" }
+        }
+        if (!blocked && c.status === "blocked") {
+          nextStatus = "active"
+          return { ...c, status: "active" }
+        }
         return c
       }),
     )
+    if (nextStatus) persistCardEdit(target, { status: nextStatus })
   }
 
   const setControl: CardRequestsContextValue["setControl"] = (id, control, enabled) => {
-    setCards((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, controls: { ...c.controls, [control]: enabled } } : c)),
-    )
+    const target = cards.find((c) => c.id === id)
+    const nextControls = target ? { ...target.controls, [control]: enabled } : undefined
+    setCards(cards.map((c) => (c.id === id ? { ...c, controls: { ...c.controls, [control]: enabled } } : c)))
+    if (nextControls) persistCardEdit(target, { controls: nextControls })
   }
 
   const cancelRequest: CardRequestsContextValue["cancelRequest"] = (id) => {
-    setCards((prev) => prev.map((c) => (c.id === id && c.status === "pending" ? { ...c, status: "cancelled" } : c)))
+    const target = cards.find((c) => c.id === id)
+    setCards(cards.map((c) => (c.id === id && c.status === "pending" ? { ...c, status: "cancelled" } : c)))
+    if (target?.approvalId && target.status === "pending") {
+      void cancelMyApproval(target.approvalId).then(() => void refresh())
+    }
   }
 
   const deleteCard: CardRequestsContextValue["deleteCard"] = (id) => {
-    setCards((prev) => prev.filter((c) => c.id !== id))
+    const target = cards.find((c) => c.id === id)
+    setCards(cards.filter((c) => c.id !== id))
+    // Removing a still-pending request cancels it server-side; decided cards are
+    // server-owned and will re-hydrate (a delete is a local view action only).
+    if (target?.approvalId && target.status === "pending") {
+      void cancelMyApproval(target.approvalId).then(() => void refresh())
+    }
   }
 
   return (

@@ -1,10 +1,9 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
+import { createContext, useContext } from "react"
 import { generateUetr } from "@/lib/swift-gpi"
-import { scopedKey } from "@/lib/user-scope"
 import { mirrorSubmission } from "@/lib/approval-sync"
-import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
+import { useServerRequestList } from "@/lib/use-server-request-list"
 
 export type MonetizationStatus = "pending" | "approved" | "rejected"
 
@@ -62,9 +61,6 @@ export interface MonetizationRequest {
   creditedEntryId?: string // ledger entry id created on approval
 }
 
-const KEY_BASE = "mcc.monetization-requests.v1"
-const storageKey = () => scopedKey(KEY_BASE)
-
 interface MonetizationRequestsContextValue {
   requests: MonetizationRequest[]
   /** Create a new pending request (no funds move yet). Returns the stored record. */
@@ -89,62 +85,10 @@ function generateMonetizationId(): string {
 }
 
 export function MonetizationRequestsProvider({ children }: { children: React.ReactNode }) {
-  const [requests, setRequests] = useState<MonetizationRequest[]>([])
-  const [hydrated, setHydrated] = useState(false)
-
-  // Load persisted requests once on mount so submissions survive navigation,
-  // reloads, and logout/login.
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(storageKey())
-      setRequests(stored ? (JSON.parse(stored) as MonetizationRequest[]) : [])
-    } catch {
-      setRequests([])
-    }
-    setHydrated(true)
-  }, [])
-
-  // Persist on change, but only after hydration to avoid clobbering stored data.
-  useEffect(() => {
-    if (!hydrated) return
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(requests))
-    } catch {
-      // ignore quota/availability errors
-    }
-  }, [requests, hydrated])
-
-  // Keep state in sync when the data changes in another tab/window (e.g. the
-  // Administrator approves in one place while the client views in another) or
-  // when the user returns to a tab that was open in the background.
-  useEffect(() => {
-    if (!hydrated) return
-    const resync = () => {
-      try {
-        const stored = window.localStorage.getItem(storageKey())
-        setRequests(stored ? (JSON.parse(stored) as MonetizationRequest[]) : [])
-      } catch {
-        // ignore parse/availability errors
-      }
-    }
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === storageKey()) resync()
-    }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") resync()
-    }
-    window.addEventListener("storage", onStorage)
-    window.addEventListener("focus", resync)
-    document.addEventListener("visibilitychange", onVisible)
-    return () => {
-      window.removeEventListener("storage", onStorage)
-      window.removeEventListener("focus", resync)
-      document.removeEventListener("visibilitychange", onVisible)
-    }
-  }, [hydrated])
-
-  // Reconcile administrator decisions made cross-client (in the DB) back here.
-  useApprovalReconcile("monetization", hydrated, requests, setRequests)
+  // List sourced entirely from the server (Neon), so submissions and admin
+  // decisions are visible on any device/browser. No localStorage involved.
+  const { records: requests, setRecords: setRequests, hydrated, refresh } =
+    useServerRequestList<MonetizationRequest>("monetization")
 
   const addRequest: MonetizationRequestsContextValue["addRequest"] = (request) => {
     const full: MonetizationRequest = {
@@ -154,22 +98,21 @@ export function MonetizationRequestsProvider({ children }: { children: React.Rea
       status: "pending",
       submittedAt: new Date().toISOString(),
     }
-    setRequests((prev) => [full, ...prev])
+    setRequests([full, ...requests])
     // Mirror into the DB so the Administrator can review it cross-client. We
     // attach a server-side ledger effect (a CREDIT for the gross proceeds) so
     // that when the admin approves — in a DIFFERENT browser/session via the
     // pending-approvals queue — the proceeds are posted to the OWNER's server
-    // ledger. The client's LedgerProvider pulls that via getMyLedger() on
-    // hydrate/refresh, so the approved monetization shows up as available funds.
-    // The local store only tracks request status; it never posts to the ledger
-    // itself (no onNewlyApproved callback), so there is no double counting.
+    // ledger and pulled via getMyLedger(). We persist the COMPLETE record under
+    // `payload.record` so the server can rebuild the view anywhere. The list
+    // store never posts to the ledger itself, so there is no double counting.
     void mirrorSubmission({
       kind: "monetization",
       title: `${full.instrumentTypeFull} · ${full.issuer}`,
       summary: `Monetize ${full.currency} ${full.monetizedValue.toLocaleString("en-US")} ${full.instrumentTypeFull}${full.leverageRatio ? ` (leveraged 1:${full.leverageRatio} on ${full.currency} ${full.faceValue.toLocaleString("en-US")} face)` : ""} at ${full.advanceRatePercent}% (proceeds ${full.proceedsCurrency} ${full.grossProceeds.toLocaleString("en-US")})`,
       amount: full.grossProceeds,
       currency: full.proceedsCurrency,
-      payload: { localId: full.id, uetr: full.uetr, structure: full.structure, instrumentId: full.instrumentId },
+      payload: { localId: full.id, uetr: full.uetr, structure: full.structure, instrumentId: full.instrumentId, record: full },
       ledgerEffect: {
         direction: "credit",
         amount: full.grossProceeds,
@@ -182,20 +125,22 @@ export function MonetizationRequestsProvider({ children }: { children: React.Rea
         reference: full.mt760Ref || full.uetr,
         category: "Instrument Monetization",
       },
-    }).then((approvalId) => {
-      if (!approvalId) return
-      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+    }).then(() => {
+      void refresh()
     })
     return full
   }
 
+  // Admin decisions flow through the DB and surface here via server hydration.
+  // These local mutators update the in-memory view immediately for interface
+  // compatibility; the next refresh reconciles against authoritative state.
   const approveRequest: MonetizationRequestsContextValue["approveRequest"] = (
     id,
     creditedEntryId,
   ) => {
     let updated: MonetizationRequest | null = null
-    setRequests((prev) =>
-      prev.map((r) => {
+    setRequests(
+      requests.map((r) => {
         if (r.id === id && r.status === "pending") {
           updated = {
             ...r,
@@ -213,8 +158,8 @@ export function MonetizationRequestsProvider({ children }: { children: React.Rea
 
   const rejectRequest: MonetizationRequestsContextValue["rejectRequest"] = (id, reason) => {
     let updated: MonetizationRequest | null = null
-    setRequests((prev) =>
-      prev.map((r) => {
+    setRequests(
+      requests.map((r) => {
         if (r.id === id && r.status === "pending") {
           updated = {
             ...r,

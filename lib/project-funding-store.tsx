@@ -1,10 +1,9 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
-import { scopedKey } from "@/lib/user-scope"
+import { createContext, useContext } from "react"
 import type { AesEquityComponent } from "@/lib/aes"
 import { mirrorSubmission } from "@/lib/approval-sync"
-import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
+import { useServerRequestList } from "@/lib/use-server-request-list"
 
 export type ProjectFundingStatus = "pending" | "approved" | "rejected"
 
@@ -61,9 +60,6 @@ export interface ProjectFundingRequest {
   cashCommitment?: number
 }
 
-const KEY_BASE = "mcc.project-funding-requests.v1"
-const storageKey = () => scopedKey(KEY_BASE)
-
 export interface ApproveFundingOptions {
   riskScore?: number
   cashCommitment?: number
@@ -89,61 +85,10 @@ interface ProjectFundingContextValue {
 const ProjectFundingContext = createContext<ProjectFundingContextValue | null>(null)
 
 export function ProjectFundingProvider({ children }: { children: React.ReactNode }) {
-  const [requests, setRequests] = useState<ProjectFundingRequest[]>([])
-  const [hydrated, setHydrated] = useState(false)
-
-  // Load persisted requests once on mount so applications survive navigation,
-  // reloads, and logout/login.
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(storageKey())
-      setRequests(stored ? (JSON.parse(stored) as ProjectFundingRequest[]) : [])
-    } catch {
-      setRequests([])
-    }
-    setHydrated(true)
-  }, [])
-
-  // Persist on change, but only after hydration to avoid clobbering stored data.
-  useEffect(() => {
-    if (!hydrated) return
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(requests))
-    } catch {
-      // ignore quota/availability errors
-    }
-  }, [requests, hydrated])
-
-  // Keep state in sync across tabs/windows (e.g. the Administrator approves in
-  // one place while the client views in another) and on tab refocus.
-  useEffect(() => {
-    if (!hydrated) return
-    const resync = () => {
-      try {
-        const stored = window.localStorage.getItem(storageKey())
-        setRequests(stored ? (JSON.parse(stored) as ProjectFundingRequest[]) : [])
-      } catch {
-        // ignore parse/availability errors
-      }
-    }
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === storageKey()) resync()
-    }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") resync()
-    }
-    window.addEventListener("storage", onStorage)
-    window.addEventListener("focus", resync)
-    document.addEventListener("visibilitychange", onVisible)
-    return () => {
-      window.removeEventListener("storage", onStorage)
-      window.removeEventListener("focus", resync)
-      document.removeEventListener("visibilitychange", onVisible)
-    }
-  }, [hydrated])
-
-  // Reconcile administrator decisions made cross-client (in the DB) back here.
-  useApprovalReconcile("project_funding", hydrated, requests, setRequests)
+  // List sourced entirely from the server (Neon), so applications and admin
+  // decisions are visible on any device/browser. No localStorage involved.
+  const { records: requests, setRecords: setRequests, hydrated, refresh } =
+    useServerRequestList<ProjectFundingRequest>("project_funding")
 
   const addRequest: ProjectFundingContextValue["addRequest"] = (request) => {
     const full: ProjectFundingRequest = {
@@ -151,26 +96,29 @@ export function ProjectFundingProvider({ children }: { children: React.ReactNode
       status: "pending",
       submittedAt: new Date().toISOString(),
     }
-    setRequests((prev) => [full, ...prev])
-    // Mirror into the DB so the Administrator can review it cross-client.
+    setRequests([full, ...requests])
+    // Mirror into the DB so the Administrator can review it cross-client; persist
+    // the COMPLETE record under `payload.record` so the server rebuilds it anywhere.
     void mirrorSubmission({
       kind: "project_funding",
       title: `${full.projectName} · ${full.sector}`,
       summary: `${full.currency} ${full.facility.toLocaleString("en-US")} facility for ${full.projectName} (${full.jurisdiction}) — equity ${full.currency} ${full.totalEquity.toLocaleString("en-US")} @ ${full.effectiveRate}%`,
       amount: full.facility,
       currency: full.currency,
-      payload: { localId: full.id, sector: full.sector, jurisdiction: full.jurisdiction },
-    }).then((approvalId) => {
-      if (!approvalId) return
-      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+      payload: { localId: full.id, sector: full.sector, jurisdiction: full.jurisdiction, record: full },
+    }).then(() => {
+      void refresh()
     })
     return full
   }
 
+  // Admin decisions flow through the DB and surface here via server hydration.
+  // These local mutators update the in-memory view immediately for interface
+  // compatibility; the next refresh reconciles against authoritative state.
   const approveRequest: ProjectFundingContextValue["approveRequest"] = (id, opts) => {
     let updated: ProjectFundingRequest | null = null
-    setRequests((prev) =>
-      prev.map((r) => {
+    setRequests(
+      requests.map((r) => {
         if (r.id === id && r.status === "pending") {
           updated = {
             ...r,
@@ -190,8 +138,8 @@ export function ProjectFundingProvider({ children }: { children: React.ReactNode
 
   const rejectRequest: ProjectFundingContextValue["rejectRequest"] = (id, reason) => {
     let updated: ProjectFundingRequest | null = null
-    setRequests((prev) =>
-      prev.map((r) => {
+    setRequests(
+      requests.map((r) => {
         if (r.id === id && r.status === "pending") {
           updated = {
             ...r,
