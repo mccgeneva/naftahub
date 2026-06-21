@@ -583,11 +583,38 @@ export async function adminDecideApproval(
     // Record the administrator's verdict (first gate). For a Sub-account
     // payment this lands the request on "awaiting_master" rather than
     // "approved" until the Master also consents.
-    const updated = await recordAdminDecision(id, decision, "Administrator", note)
+    let updated = await recordAdminDecision(id, decision, "Administrator", note)
     if (!updated) return { ok: false, error: "This request has already been decided." }
 
     // Money only moves once ALL required gates clear (final status approved).
     if (updated.status === "approved") {
+      // A leverage line must be marked ACTIVE on approval: stamp activatedAt
+      // (interest accrual start) and the borrowed-funds credit entry id into the
+      // record, so the line shows live and accrues interest regardless of which
+      // admin surface approved it. Done before applyLedgerEffect so the stored
+      // creditEntryId matches the entry that is about to be posted.
+      if (updated.kind === "leverage") {
+        try {
+          const rec = (updated.payload?.record ?? {}) as Record<string, unknown>
+          if (!rec.activatedAt) {
+            const activatedAt = updated.decidedAt ?? new Date().toISOString()
+            const newPayload = {
+              ...(updated.payload ?? {}),
+              record: {
+                ...rec,
+                status: "approved",
+                decidedAt: activatedAt,
+                activatedAt,
+                creditEntryId: `APPR-${updated.id}`,
+              },
+            }
+            const persisted = await updateApprovalPayload(updated.id, newPayload)
+            if (persisted) updated = persisted
+          }
+        } catch (err) {
+          console.log("[v0] leverage activation stamp failed:", (err as Error).message)
+        }
+      }
       try {
         await applyLedgerEffect(updated)
       } catch (err) {

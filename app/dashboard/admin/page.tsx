@@ -108,7 +108,7 @@ import { UserManager } from "@/components/admin/user-manager"
 import { MembershipManager } from "@/components/admin/membership-manager"
 import { BeneficiaryManager } from "@/components/admin/beneficiary-manager"
 import { PendingApprovals } from "@/components/admin/pending-approvals"
-import { adminCountPending } from "@/app/actions/approvals"
+import { adminCountPending, adminDecideApproval } from "@/app/actions/approvals"
 import { KIND_LABELS, type ApprovalKind } from "@/lib/approval-kinds"
 import { adminListPendingKyc } from "@/app/actions/beneficiaries"
 import { BalanceManager } from "@/components/admin/balance-manager"
@@ -754,22 +754,30 @@ export default function AdminPage() {
   const formatLeverageMoney2 = (r: LeverageRequest, value: number) =>
     `${r.currency} ${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
-  const handleApproveLeverage = (request: LeverageRequest) => {
-    // Credit the borrowed (leveraged) funds to the client's balance.
-    const creditRef = `LEV-CR-${Date.now().toString().slice(-8)}`
-    const entry = addReceipt({
-      id: creditRef,
-      amount: request.borrowedAmount,
-      currency: request.currency,
-      status: "completed",
-      date: new Date().toISOString(),
-      counterparty: "MCC Leverage Desk",
-      reference: request.id,
-      category: "Leverage Credit",
-      comment: `Borrowed funds credited on activation of 1:${request.leverageRatio} leverage line ${request.id} (${request.accountLabel}). Debit interest ${(request.interestRate * 100).toFixed(1)}% per year.`,
-    })
-    const approved = approveLeverage(request.id, entry.id)
-    if (!approved) return
+  const handleApproveLeverage = async (request: LeverageRequest) => {
+    // The borrowed funds must be credited to the CLIENT's balance (the shared
+    // data owner), not the admin's own ledger. Approve through the server so the
+    // DB approval flips to "approved" and `applyLedgerEffect` posts the
+    // borrowed-funds credit (APPR-<approvalId>) onto the client's ledger — the
+    // same ledger their Account Balances reads from. The previous version
+    // credited the admin's own books via addReceipt and only mutated local
+    // state, so the client's balance never moved.
+    if (!request.approvalId) {
+      toast.error("Cannot activate leverage", {
+        description: "This request is still syncing. Please refresh and try again.",
+      })
+      return
+    }
+    const res = await adminDecideApproval(ADMIN_PASSCODE, request.approvalId, "approved")
+    if (!res.ok) {
+      toast.error("Could not activate leverage line", { description: res.error })
+      return
+    }
+    const creditRef = `APPR-${request.approvalId}`
+    // Reflect activation locally for instant feedback; the server record (now
+    // approved + activated) is authoritative on the next refresh. Don't gate the
+    // confirmation on this — the server approval already succeeded.
+    approveLeverage(request.id, creditRef)
     toast.success("Leverage line activated", {
       description: `${formatLeverageMoney(request, request.borrowedAmount)} credited. ${request.id} is live at 1:${request.leverageRatio} (buying power ${formatLeverageMoney(request, request.buyingPower)}).`,
     })
