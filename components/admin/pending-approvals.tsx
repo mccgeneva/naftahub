@@ -31,7 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Check, X, Loader2, ClipboardList, Filter, RefreshCw } from "lucide-react"
+import { Check, X, Loader2, ClipboardList, Filter, RefreshCw, User, Wallet } from "lucide-react"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
 import {
@@ -39,6 +39,10 @@ import {
   adminDecideApproval,
   adminBulkDecide,
 } from "@/app/actions/approvals"
+import {
+  getClientFinancialSnapshotAdmin,
+  type ClientFinancialSnapshot,
+} from "@/app/actions/ledger"
 import { APPROVAL_KINDS, KIND_LABELS, type ApprovalKind } from "@/lib/approval-kinds"
 import type { ApprovalRequest, ApprovalStatus } from "@/lib/approvals-db"
 
@@ -88,6 +92,25 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
   // Reject-with-reason dialog state. `bulk` true → applies to selection.
   const [rejectTarget, setRejectTarget] = useState<{ id?: string; bulk: boolean } | null>(null)
   const [rejectReason, setRejectReason] = useState("")
+
+  // Client financial-snapshot dialog (due-diligence before approving).
+  const [clientView, setClientView] = useState<{
+    open: boolean
+    loading: boolean
+    label: string
+    snapshot: ClientFinancialSnapshot | null
+    error: string | null
+  }>({ open: false, loading: false, label: "", snapshot: null, error: null })
+
+  const openClientSnapshot = async (userId: string, label: string) => {
+    setClientView({ open: true, loading: true, label, snapshot: null, error: null })
+    const res = await getClientFinancialSnapshotAdmin(ADMIN_PASSCODE, userId)
+    if (res.ok) {
+      setClientView({ open: true, loading: false, label, snapshot: res.snapshot, error: null })
+    } else {
+      setClientView({ open: true, loading: false, label, snapshot: null, error: res.error })
+    }
+  }
 
   const [clients, setClients] = useState<SelectableClient[]>([])
   useEffect(() => {
@@ -399,9 +422,20 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                       </div>
                       <p className="truncate text-sm font-medium text-foreground">{req.title}</p>
                       {req.summary && <p className="text-xs text-muted-foreground text-pretty">{req.summary}</p>}
-                      <p className="text-[11px] text-muted-foreground">
-                        {clientLabel(req.userId)} · submitted {formatDate(req.createdAt)}
-                      </p>
+                      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-muted-foreground">
+                        <span>
+                          {clientLabel(req.userId)} · submitted {formatDate(req.createdAt)}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 gap-1 px-1.5 text-[11px] text-primary hover:text-primary"
+                          onClick={() => openClientSnapshot(req.userId, clientLabel(req.userId))}
+                        >
+                          <User className="h-3 w-3" />
+                          View client &amp; funds
+                        </Button>
+                      </div>
                       {req.decisionNote && (
                         <p className="text-[11px] text-muted-foreground">
                           Reason: <span className="text-foreground">{req.decisionNote}</span>
@@ -463,6 +497,110 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
             <Button variant="destructive" onClick={confirmReject} disabled={acting || !rejectReason.trim()}>
               {acting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <X className="mr-1 h-4 w-4" />}
               Confirm rejection
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Client financial-capability snapshot */}
+      <Dialog open={clientView.open} onOpenChange={(o) => !o && setClientView((s) => ({ ...s, open: false }))}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <User className="h-4 w-4 text-primary" />
+              Client due diligence
+            </DialogTitle>
+            <DialogDescription className="text-pretty">
+              Account holder and available funds, so you can confirm the client can fund this deal
+              before approving.
+            </DialogDescription>
+          </DialogHeader>
+
+          {clientView.loading ? (
+            <div className="flex items-center justify-center py-10 text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </div>
+          ) : clientView.error ? (
+            <p className="py-6 text-center text-sm text-destructive">{clientView.error}</p>
+          ) : clientView.snapshot ? (
+            <div className="space-y-4">
+              {/* Identity */}
+              <div className="rounded-lg border border-border p-3">
+                <p className="text-sm font-semibold text-foreground">{clientView.snapshot.fullName}</p>
+                {clientView.snapshot.company && clientView.snapshot.company !== "—" && (
+                  <p className="text-xs text-muted-foreground">{clientView.snapshot.company}</p>
+                )}
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {clientView.snapshot.accountBadge && (
+                    <Badge variant="outline" className="text-[10px]">
+                      {clientView.snapshot.accountBadge}
+                    </Badge>
+                  )}
+                  {clientView.snapshot.relationship && (
+                    <Badge variant="secondary" className="text-[10px] capitalize">
+                      {clientView.snapshot.relationship}
+                    </Badge>
+                  )}
+                  {clientView.snapshot.country && (
+                    <Badge variant="outline" className="text-[10px]">
+                      {clientView.snapshot.country}
+                    </Badge>
+                  )}
+                </div>
+                {clientView.snapshot.email && (
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">{clientView.snapshot.email}</p>
+                )}
+              </div>
+
+              {/* Available funds */}
+              <div>
+                <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <Wallet className="h-3.5 w-3.5" />
+                  Available funds
+                </p>
+                {clientView.snapshot.balances.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+                    No ledger balances on record for this account.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-border rounded-lg border border-border">
+                    {clientView.snapshot.balances.map((b) => (
+                      <li key={b.currency} className="flex items-center justify-between gap-3 px-3 py-2">
+                        <span className="text-xs font-medium text-muted-foreground">{b.currency}</span>
+                        <div className="text-right">
+                          <p className="text-sm font-semibold tabular-nums text-foreground">
+                            {b.currency}{" "}
+                            {b.available.toLocaleString("en-US", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </p>
+                          {b.onHold > 0 && (
+                            <p className="text-[10px] text-amber-600">
+                              {b.currency} {b.onHold.toLocaleString("en-US", { maximumFractionDigits: 2 })} on
+                              hold
+                            </p>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <p className="text-[11px] text-muted-foreground">
+                {clientView.snapshot.totalEntries} ledger{" "}
+                {clientView.snapshot.totalEntries === 1 ? "entry" : "entries"}
+                {clientView.snapshot.lastActivity
+                  ? ` · last activity ${formatDate(clientView.snapshot.lastActivity)}`
+                  : ""}
+              </p>
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClientView((s) => ({ ...s, open: false }))}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
