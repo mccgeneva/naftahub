@@ -8,6 +8,7 @@
 
 export type ApprovalKind =
   | "payment"
+  | "payment_recall"
   | "leverage"
   | "leverage_switchoff"
   | "ppp"
@@ -24,6 +25,7 @@ export type ApprovalKind =
 
 export const APPROVAL_KINDS: ApprovalKind[] = [
   "payment",
+  "payment_recall",
   "leverage",
   "leverage_switchoff",
   "ppp",
@@ -41,6 +43,7 @@ export const APPROVAL_KINDS: ApprovalKind[] = [
 
 export const KIND_LABELS: Record<ApprovalKind, string> = {
   payment: "Outgoing Payment",
+  payment_recall: "Payment Recall",
   leverage: "Leverage Line",
   leverage_switchoff: "Leverage Switch-Off",
   ppp: "Yield / PPP",
@@ -59,6 +62,7 @@ export const KIND_LABELS: Record<ApprovalKind, string> = {
 /** Best-effort deep link to the section where a client reviews this kind. */
 export const KIND_HREF: Partial<Record<ApprovalKind, string>> = {
   payment: "/dashboard/payments",
+  payment_recall: "/dashboard/payments",
   leverage: "/dashboard/leverage",
   ppp: "/dashboard/yield",
   instrument: "/dashboard/instruments",

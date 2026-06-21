@@ -31,6 +31,9 @@ export interface PaymentRequest {
   routedBankKey?: string // PartnerBank.key the payment is settled through
   routedBankName?: string // human-readable partner bank name (denormalised)
   routedBankBic?: string // partner bank BIC (denormalised for display/audit)
+  // --- Recall lifecycle (set on the original payment when a recall is filed) -
+  /** "pending" once a recall is requested, "recalled" once it is approved. */
+  recallStatus?: "pending" | "recalled"
 }
 
 /** Routing details assigned to an outgoing payment when it is approved. */

@@ -19,6 +19,7 @@ import {
   XCircle,
   AlertCircle,
   ShieldCheck,
+  Undo2,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -53,6 +54,7 @@ import { cn } from "@/lib/utils"
 import { useBeneficiaries } from "@/lib/beneficiaries-store"
 import { useLedger } from "@/lib/ledger-store"
 import { usePaymentRequests, type PaymentRequest } from "@/lib/payment-requests-store"
+import { requestPaymentRecall } from "@/app/actions/approvals"
 import { exportToCsv } from "@/lib/export-utils"
 import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
 import { usePdfViewer } from "@/lib/pdf-viewer"
@@ -203,6 +205,73 @@ export default function PaymentsPage() {
   const [viewPaymentTarget, setViewPaymentTarget] = useState<Payment | null>(null)
   const [reportTarget, setReportTarget] = useState<Payment | null>(null)
   const [reportMessage, setReportMessage] = useState("")
+  // Recall: the payment a recall is being confirmed for, an in-flight flag, and
+  // a local set of ids already requested this session (so the UI reflects the
+  // pending state immediately, before the 30s server poll catches up).
+  const [recallTarget, setRecallTarget] = useState<Payment | null>(null)
+  const [recallBusy, setRecallBusy] = useState(false)
+  const [recalledLocal, setRecalledLocal] = useState<Set<string>>(new Set())
+
+  // Map a payment-history row (keyed by local id) back to its source request so
+  // we can read the DB approval id and any recall lifecycle state.
+  const requestByLocalId = useMemo(() => {
+    const map = new Map<string, PaymentRequest>()
+    for (const r of requests) map.set(r.id, r)
+    return map
+  }, [requests])
+
+  // An outgoing, approved (completed) payment that has not already been recalled
+  // or had a recall filed can be recalled by the client.
+  const canRecall = (payment: Payment): boolean => {
+    if (payment.type !== "outgoing" || payment.status !== "completed") return false
+    if (recalledLocal.has(payment.id)) return false
+    const req = requestByLocalId.get(payment.id)
+    return !!req?.approvalId && !req.recallStatus
+  }
+
+  const recallStateLabel = (payment: Payment): string | null => {
+    if (recalledLocal.has(payment.id)) return "Recall requested"
+    const req = requestByLocalId.get(payment.id)
+    if (req?.recallStatus === "pending") return "Recall requested"
+    if (req?.recallStatus === "recalled") return "Recalled"
+    return null
+  }
+
+  const confirmRecall = async () => {
+    if (!recallTarget) return
+    const payment = recallTarget
+    const req = requestByLocalId.get(payment.id)
+    if (!req?.approvalId) {
+      toast.error("This payment can't be recalled yet", {
+        description: "Please wait a moment for it to finish syncing, then try again.",
+      })
+      setRecallTarget(null)
+      return
+    }
+    setRecallBusy(true)
+    const res = await requestPaymentRecall(req.approvalId)
+    setRecallBusy(false)
+    if (res.ok) {
+      setRecalledLocal((prev) => new Set(prev).add(payment.id))
+      setRecallTarget(null)
+      logActivity({
+        action: `Requested recall of payment ${payment.id} to ${payment.beneficiary}`,
+        category: "Payments",
+        details: {
+          summary: `Client filed a recall for payment ${payment.id} (${payment.amount} to ${payment.beneficiary}). Pending Administrator approval; on approval the funds are refunded and any recipient credit is reversed.`,
+          referenceId: payment.id,
+          counterparty: payment.beneficiary,
+          amount: payment.amount,
+          status: "Recall requested",
+        },
+      })
+      toast.success("Recall submitted for approval", {
+        description: `Your recall of ${payment.amount} to ${payment.beneficiary} is pending Administrator approval. Funds are returned once it is approved.`,
+      })
+    } else {
+      toast.error("Recall could not be submitted", { description: res.error })
+    }
+  }
 
   const viewPayment = (payment: Payment) => {
     setViewPaymentTarget(payment)
@@ -913,6 +982,15 @@ export default function PaymentsPage() {
                               <StatusIcon className="mr-1 h-3 w-3" />
                               {payment.status}
                             </Badge>
+                            {recallStateLabel(payment) && (
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20"
+                              >
+                                <Undo2 className="mr-1 h-3 w-3" />
+                                {recallStateLabel(payment)}
+                              </Badge>
+                            )}
                           </div>
                         </div>
                         <DropdownMenu>
@@ -937,6 +1015,12 @@ export default function PaymentsPage() {
                             <DropdownMenuItem onSelect={() => copyUetr(payment)}>
                               Copy UETR
                             </DropdownMenuItem>
+                            {canRecall(payment) && (
+                              <DropdownMenuItem onSelect={() => setRecallTarget(payment)}>
+                                <Undo2 className="mr-2 h-4 w-4" />
+                                Recall Payment
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuItem
                               className="text-destructive"
                               onSelect={() => {
@@ -1025,7 +1109,7 @@ export default function PaymentsPage() {
                             </p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-3">
                           <p className="text-lg font-bold text-foreground">
                             -{payment.amount}
                           </p>
@@ -1035,6 +1119,27 @@ export default function PaymentsPage() {
                           >
                             {payment.status}
                           </Badge>
+                          {recallStateLabel(payment) ? (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20"
+                            >
+                              <Undo2 className="mr-1 h-3 w-3" />
+                              {recallStateLabel(payment)}
+                            </Badge>
+                          ) : (
+                            canRecall(payment) && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8"
+                                onClick={() => setRecallTarget(payment)}
+                              >
+                                <Undo2 className="mr-2 h-4 w-4" />
+                                Recall
+                              </Button>
+                            )
+                          )}
                         </div>
                       </div>
                     )
@@ -1172,6 +1277,44 @@ export default function PaymentsPage() {
                   Cancel
                 </Button>
                 <Button onClick={submitReport}>Submit Report</Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Recall payment dialog */}
+      <Dialog open={!!recallTarget} onOpenChange={(open) => !open && !recallBusy && setRecallTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          {recallTarget && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Recall this payment?</DialogTitle>
+                <DialogDescription>
+                  This sends a recall request for an administrator to approve. Once approved, the
+                  full amount is refunded to your account and any credit to the beneficiary is
+                  reversed. No funds move until it is approved.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="rounded-lg border border-border bg-secondary/30 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">{recallTarget.beneficiary}</span>
+                  <span className="text-sm font-semibold text-foreground">{recallTarget.amount}</span>
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <code className="text-xs text-muted-foreground">{recallTarget.id}</code>
+                  <span className="text-muted-foreground">•</span>
+                  <span className="text-xs text-muted-foreground">{recallTarget.iban}</span>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setRecallTarget(null)} disabled={recallBusy}>
+                  Cancel
+                </Button>
+                <Button onClick={confirmRecall} disabled={recallBusy}>
+                  <Undo2 className="mr-2 h-4 w-4" />
+                  {recallBusy ? "Submitting…" : "Request Recall"}
+                </Button>
               </DialogFooter>
             </>
           )}
