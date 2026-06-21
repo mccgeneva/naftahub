@@ -2,8 +2,8 @@
 
 import { BadgeCheck, FileText, ExternalLink } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
+import { ProfileAvatarEditor } from "@/components/dashboard/profile-avatar-editor"
 import { Separator } from "@/components/ui/separator"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { KYC_DOCUMENT_LABELS, blobFileUrl } from "@/lib/kyc-types"
@@ -46,9 +46,7 @@ export default function ProfilePage() {
       {/* Identity header */}
       <Card>
         <CardContent className="flex flex-col sm:flex-row sm:items-center gap-4 pt-6">
-          <Avatar className="h-16 w-16">
-            <AvatarFallback className="bg-primary text-primary-foreground text-xl">{user.initials}</AvatarFallback>
-          </Avatar>
+          <ProfileAvatarEditor />
           <div className="flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-lg font-semibold text-foreground">{user.fullName}</h2>
