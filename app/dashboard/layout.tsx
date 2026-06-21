@@ -10,6 +10,7 @@ import { PdfViewerProvider } from "@/lib/pdf-viewer"
 import { SessionGuard } from "@/components/session-guard"
 import { PointerEventsGuard } from "@/components/pointer-events-guard"
 import { DemoSeedGate } from "@/components/demo-seed-gate"
+import { AccountResetGate } from "@/components/account-reset-gate"
 import { FundingCapitalReconciler } from "@/components/funding-capital-reconciler"
 import { BeneficiariesProvider } from "@/lib/beneficiaries-store"
 import { LedgerProvider } from "@/lib/ledger-store"
@@ -47,6 +48,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     <CurrentUserProvider initialIdentity={identity}>
     <PdfViewerProvider>
     <ActivityTracker>
+      <AccountResetGate>
       <DemoSeedGate>
       <BeneficiariesProvider>
       <LedgerProvider>
@@ -102,6 +104,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </LedgerProvider>
       </BeneficiariesProvider>
       </DemoSeedGate>
+      </AccountResetGate>
     </ActivityTracker>
     </PdfViewerProvider>
     </CurrentUserProvider>
