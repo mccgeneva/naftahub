@@ -31,7 +31,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
@@ -67,6 +69,13 @@ import {
   type InstrumentType,
   type TradeStructure,
 } from "@/lib/commodity-deals-store"
+import {
+  PETROLEUM_PRODUCTS,
+  COMMODITY_CATEGORIES,
+  CUSTOM_COMMODITY_ID,
+  getCatalogProduct,
+  type CommodityUnit,
+} from "@/lib/petroleum-products"
 
 const CURRENCIES = ["USD", "EUR", "GBP", "CHF", "AED", "SGD"]
 
@@ -105,8 +114,11 @@ const emptyDeal = {
   title: "",
   category: "Commodity Trade" as DealCategory,
   tradeStructure: "FOB" as TradeStructure,
+  // Catalog selection drives the unit; commodity holds the resolved name.
+  commodityId: "",
   commodity: "",
-  quantity: "",
+  quantityAmount: "",
+  quantityUnit: "MT" as CommodityUnit,
   approxValue: "",
   currency: "USD",
   buyerName: "",
@@ -234,6 +246,34 @@ export default function CommodityTradingPage() {
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }))
 
+  // Selecting a catalog commodity auto-applies its canonical trading unit
+  // (bbl for crude, MT for refined products) so the quantity is always quoted
+  // in the correct unit. "Other" lets the user name a non-petroleum commodity
+  // and pick the unit manually.
+  const selectedCatalog =
+    form.commodityId && form.commodityId !== CUSTOM_COMMODITY_ID
+      ? getCatalogProduct(form.commodityId)
+      : undefined
+  const isCustomCommodity = form.commodityId === CUSTOM_COMMODITY_ID
+  // The unit is locked to the catalog default unless the grade is dual-unit
+  // (e.g. fuel oil / naphtha / condensate cargoes) or a custom commodity.
+  const unitEditable = isCustomCommodity || !!selectedCatalog?.dualUnit
+
+  const handleCommoditySelect = (id: string) => {
+    if (id === CUSTOM_COMMODITY_ID) {
+      setForm((prev) => ({ ...prev, commodityId: id, commodity: "", quantityUnit: "MT" }))
+      return
+    }
+    const product = getCatalogProduct(id)
+    if (!product) return
+    setForm((prev) => ({
+      ...prev,
+      commodityId: id,
+      commodity: product.name,
+      quantityUnit: product.unit,
+    }))
+  }
+
   const sortedDeals = useMemo(
     () => [...deals].sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()),
     [deals],
@@ -268,12 +308,18 @@ export default function CommodityTradingPage() {
       return
     }
 
+    // Compose the stored quantity as "<amount> <unit>" using the unit resolved
+    // from the selected commodity (e.g. "100,000 MT", "2,000,000 bbl").
+    const commodityName = form.commodity.trim()
+    const qtyAmount = form.quantityAmount.trim()
+    const quantityStr = qtyAmount ? `${qtyAmount} ${form.quantityUnit}` : ""
+
     const deal = addDeal({
       title: form.title.trim(),
       category: form.category,
       tradeStructure: form.tradeStructure,
-      commodity: form.commodity.trim(),
-      quantity: form.quantity.trim(),
+      commodity: commodityName,
+      quantity: quantityStr,
       approxValue: value,
       currency: form.currency,
       buyerName: form.buyerName.trim(),
@@ -298,7 +344,7 @@ export default function CommodityTradingPage() {
       action: `Client submitted commodity deal ${deal.id} (${formatCurrency(value, form.currency)})`,
       category: "Commodity Trading",
       details: {
-        summary: `Client submitted ${form.category} deal ${deal.id} "${form.title}": ${form.commodity || "—"} ${form.quantity ? `(${form.quantity})` : ""} valued ~${formatCurrency(value, form.currency)}. Buyer ${form.buyerName}, Seller ${form.sellerName}. Sending bank ${form.sendingBank || "—"} ${form.sendingBankBic ? `(${form.sendingBankBic})` : ""} → receiving bank ${form.receivingBank || "—"} ${form.receivingBankBic ? `(${form.receivingBankBic})` : ""}. Instrument ${form.instrumentType}. UETR ${deal.uetr}.`,
+        summary: `Client submitted ${form.category} deal ${deal.id} "${form.title}": ${commodityName || "—"} ${quantityStr ? `(${quantityStr})` : ""} valued ~${formatCurrency(value, form.currency)}. Buyer ${form.buyerName}, Seller ${form.sellerName}. Sending bank ${form.sendingBank || "—"} ${form.sendingBankBic ? `(${form.sendingBankBic})` : ""} → receiving bank ${form.receivingBank || "—"} ${form.receivingBankBic ? `(${form.receivingBankBic})` : ""}. Instrument ${form.instrumentType}. UETR ${deal.uetr}.`,
         referenceId: deal.id,
         uetr: deal.uetr,
         category: form.category,
@@ -488,23 +534,81 @@ export default function CommodityTradingPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="commodity">Commodity / asset</Label>
-                  <Input
-                    id="commodity"
-                    value={form.commodity}
-                    onChange={(e) => set("commodity", e.target.value)}
-                    placeholder="e.g. Jet Fuel A1, Gold Bullion, Urea"
-                  />
+                  <Label>Commodity / asset</Label>
+                  <Select value={form.commodityId} onValueChange={handleCommoditySelect}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a commodity" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      {COMMODITY_CATEGORIES.map((cat) => (
+                        <SelectGroup key={cat}>
+                          <SelectLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                            {cat}
+                          </SelectLabel>
+                          {PETROLEUM_PRODUCTS.filter((p) => p.category === cat).map((p) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.name} · {p.unit === "bbl" ? "bbl" : "MT"}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))}
+                      <SelectGroup>
+                        <SelectLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                          Other
+                        </SelectLabel>
+                        <SelectItem value={CUSTOM_COMMODITY_ID}>Other / custom commodity…</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  {isCustomCommodity && (
+                    <Input
+                      id="commodity-custom"
+                      value={form.commodity}
+                      onChange={(e) => set("commodity", e.target.value)}
+                      placeholder="e.g. Gold Bullion, Urea, Iron Ore"
+                    />
+                  )}
+                  {selectedCatalog && (
+                    <p className="text-xs text-muted-foreground">
+                      Priced in{" "}
+                      <span className="font-medium text-foreground">
+                        {selectedCatalog.unit === "bbl" ? "barrels (bbl)" : "metric tonnes (MT)"}
+                      </span>
+                      {selectedCatalog.dualUnit ? " — may also trade in the alternate unit." : "."}
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="quantity">Quantity / nominal</Label>
-                  <Input
-                    id="quantity"
-                    value={form.quantity}
-                    onChange={(e) => set("quantity", e.target.value)}
-                    placeholder="e.g. 100,000 MT / 2,000,000 BBL"
-                  />
+                  <div className="flex gap-2">
+                    <Input
+                      id="quantity"
+                      className="flex-1"
+                      inputMode="decimal"
+                      value={form.quantityAmount}
+                      onChange={(e) => set("quantityAmount", e.target.value)}
+                      placeholder={form.quantityUnit === "bbl" ? "e.g. 2,000,000" : "e.g. 100,000"}
+                    />
+                    {unitEditable ? (
+                      <Select
+                        value={form.quantityUnit}
+                        onValueChange={(v) => set("quantityUnit", v as CommodityUnit)}
+                      >
+                        <SelectTrigger className="w-28 shrink-0">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="MT">MT</SelectItem>
+                          <SelectItem value="bbl">bbl</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <span className="flex w-28 shrink-0 items-center justify-center rounded-md border border-input bg-muted text-sm font-medium text-muted-foreground">
+                        {form.quantityUnit === "bbl" ? "bbl" : "MT"}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="space-y-2">
