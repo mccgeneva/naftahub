@@ -3,6 +3,7 @@
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { query } from "@/lib/db"
 import { getDynamicUserById } from "@/lib/admin-users-db"
+import { resolveCurrentSession } from "@/lib/session-user"
 
 /**
  * Every server-side table that holds per-account data, all keyed by `user_id`.
@@ -25,6 +26,54 @@ const PER_USER_TABLES = [
 export type ResetAccountResult =
   | { ok: true; cleared: number; targetName: string; targetEmail: string }
   | { ok: false; error: string }
+
+/**
+ * Per-account "reset epoch". The balance/transactions and most stores are ALSO
+ * cached in each user's own browser localStorage. An admin reset runs on the
+ * admin's device + the server, so it can never reach the user's localStorage —
+ * which is why "I reset but the money is still there after the user logs in".
+ *
+ * The fix: stamp a server-side timestamp here on every reset. The client (see
+ * components/account-reset-gate.tsx) compares this epoch against a locally
+ * stored one on load and, when the server's is newer, purges all local account
+ * stores before the data providers hydrate. The server is thus the single
+ * source of truth and a reset always "sticks", on any device.
+ */
+let resetMarksEnsured = false
+async function ensureResetMarksTable(): Promise<void> {
+  if (resetMarksEnsured) return
+  await query(
+    `CREATE TABLE IF NOT EXISTS account_reset_marks (
+       user_id  text        PRIMARY KEY,
+       reset_at timestamptz NOT NULL DEFAULT now()
+     )`,
+  )
+  resetMarksEnsured = true
+}
+
+/**
+ * Returns the most recent reset timestamp (ISO string) that applies to the
+ * signed-in session — checking both this account's own id and its shared-data
+ * owner id (a sub-account inherits its Master's reset). Null when never reset.
+ */
+export async function getMyResetEpoch(): Promise<string | null> {
+  const session = await resolveCurrentSession()
+  if (!session) return null
+  const ids = Array.from(new Set([session.id, session.dataOwnerId].filter(Boolean)))
+  if (ids.length === 0) return null
+  try {
+    await ensureResetMarksTable()
+    const { rows } = await query(
+      `SELECT MAX(reset_at) AS reset_at FROM account_reset_marks WHERE user_id = ANY($1)`,
+      [ids],
+    )
+    const v = rows[0]?.reset_at
+    return v ? new Date(v as string).toISOString() : null
+  } catch (err) {
+    console.log("[v0] getMyResetEpoch failed:", (err as Error).message)
+    return null
+  }
+}
 
 /**
  * Administrator Danger-Zone reset of ONE specific account's server-side data.
@@ -64,6 +113,20 @@ export async function resetServerAccountDataForUser(
       // there is simply nothing to clear. Log and continue with the rest.
       console.log(`[v0] reset: skipped ${table}:`, (err as Error).message)
     }
+  }
+
+  // Stamp the reset epoch so the selected account's own browser purges its local
+  // caches (balances/transactions/etc.) on its next load — making the reset
+  // actually stick on the user's device, not just on the server.
+  try {
+    await ensureResetMarksTable()
+    await query(
+      `INSERT INTO account_reset_marks (user_id, reset_at) VALUES ($1, now())
+       ON CONFLICT (user_id) DO UPDATE SET reset_at = now()`,
+      [id],
+    )
+  } catch (err) {
+    console.log("[v0] reset: failed to stamp reset epoch:", (err as Error).message)
   }
 
   return {
