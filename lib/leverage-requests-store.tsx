@@ -1,9 +1,9 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
-import { scopedKey } from "@/lib/user-scope"
-import { mirrorSubmission } from "@/lib/approval-sync"
-import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
+import { createContext, useContext } from "react"
+import { mirrorSubmission, mapApprovalStatus, type ApprovalRecord } from "@/lib/approval-sync"
+import { useServerRequestList } from "@/lib/use-server-request-list"
+import { updateMyApprovalRecord } from "@/app/actions/approvals"
 
 export type LeverageRequestStatus =
   | "pending" // activation requested, awaiting admin
@@ -136,8 +136,31 @@ export interface LeverageModification {
   note?: string
 }
 
-const KEY_BASE = "mcc.leverage-requests.v1"
-const storageKey = () => scopedKey(KEY_BASE)
+/**
+ * Build a LeverageRequest from a server approval record. The complete record
+ * lives under `payload.record`. The DB lifecycle decides pending/approved/
+ * rejected; once a line is approved, its post-approval sub-states
+ * ("switchoff_pending" / "closed") are client/admin-managed and kept in the
+ * record itself, so those win over the coarse DB "approved".
+ */
+function leverageFromApproval(rec: ApprovalRecord): LeverageRequest | null {
+  const base = rec.payload?.record as LeverageRequest | undefined
+  if (!base || typeof base !== "object" || !base.id) return null
+  const lifecycle = mapApprovalStatus(rec.status) as LeverageRequestStatus
+  const recordStatus = base.status
+  // After approval the record may carry switch-off / closed sub-states.
+  const status: LeverageRequestStatus =
+    lifecycle === "approved" && (recordStatus === "switchoff_pending" || recordStatus === "closed")
+      ? recordStatus
+      : lifecycle
+  return {
+    ...base,
+    approvalId: rec.id,
+    status,
+    decidedAt: rec.decidedAt ?? base.decidedAt,
+    decisionNote: rec.decisionNote ?? base.decisionNote,
+  }
+}
 
 const MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000
 
@@ -225,59 +248,21 @@ interface LeverageRequestsContextValue {
 const LeverageRequestsContext = createContext<LeverageRequestsContextValue | null>(null)
 
 export function LeverageRequestsProvider({ children }: { children: React.ReactNode }) {
-  const [requests, setRequests] = useState<LeverageRequest[]>([])
-  const [hydrated, setHydrated] = useState(false)
+  // List sourced entirely from the server (Neon), so activation lines and their
+  // post-approval state are identical on any device/browser. No localStorage.
+  const {
+    records: requests,
+    setRecords: setRequests,
+    hydrated,
+    refresh,
+  } = useServerRequestList<LeverageRequest>("leverage", { fromApproval: leverageFromApproval })
 
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(storageKey())
-      setRequests(stored ? (JSON.parse(stored) as LeverageRequest[]) : [])
-    } catch {
-      setRequests([])
+  /** Persist a change to a line's server record so it follows the user. */
+  const persistRecord = (line: LeverageRequest | null) => {
+    if (line?.approvalId) {
+      void updateMyApprovalRecord(line.approvalId, { ...line }).then(() => void refresh())
     }
-    setHydrated(true)
-  }, [])
-
-  useEffect(() => {
-    if (!hydrated) return
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(requests))
-    } catch {
-      // ignore quota/availability errors
-    }
-  }, [requests, hydrated])
-
-  // Keep state in sync across tabs/windows (e.g. Administrator approves while the
-  // client watches) and when returning to a backgrounded tab.
-  useEffect(() => {
-    if (!hydrated) return
-    const resync = () => {
-      try {
-        const stored = window.localStorage.getItem(storageKey())
-        setRequests(stored ? (JSON.parse(stored) as LeverageRequest[]) : [])
-      } catch {
-        // ignore parse/availability errors
-      }
-    }
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === storageKey()) resync()
-    }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") resync()
-    }
-    window.addEventListener("storage", onStorage)
-    window.addEventListener("focus", resync)
-    document.addEventListener("visibilitychange", onVisible)
-    return () => {
-      window.removeEventListener("storage", onStorage)
-      window.removeEventListener("focus", resync)
-      document.removeEventListener("visibilitychange", onVisible)
-    }
-  }, [hydrated])
-
-  // Reconcile administrator decisions on activation requests (pending →
-  // approved/rejected) made cross-client in the DB back into local records.
-  useApprovalReconcile("leverage", hydrated, requests, setRequests)
+  }
 
   const addRequest: LeverageRequestsContextValue["addRequest"] = (request) => {
     const full: LeverageRequest = {
@@ -285,18 +270,18 @@ export function LeverageRequestsProvider({ children }: { children: React.ReactNo
       status: "pending",
       submittedAt: new Date().toISOString(),
     }
-    setRequests((prev) => [full, ...prev])
-    // Mirror the activation request into the DB for cross-client review.
+    setRequests([full, ...requests])
+    // Mirror the activation request into the DB for cross-client review; persist
+    // the COMPLETE record under `payload.record` so the server rebuilds it anywhere.
     void mirrorSubmission({
       kind: "leverage",
       title: `${full.accountLabel} · 1:${full.leverageRatio}`,
       summary: `${full.currency} ${full.equity.toLocaleString("en-US")} equity at 1:${full.leverageRatio} on ${full.accountLabel} (buying power ${full.currency} ${full.buyingPower.toLocaleString("en-US")})`,
       amount: full.equity,
       currency: full.currency,
-      payload: { localId: full.id, account: full.account, leverageRatio: full.leverageRatio, instrumentType: full.instrumentType },
-    }).then((approvalId) => {
-      if (!approvalId) return
-      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+      payload: { localId: full.id, account: full.account, leverageRatio: full.leverageRatio, instrumentType: full.instrumentType, record: full },
+    }).then(() => {
+      void refresh()
     })
     return full
   }
@@ -373,6 +358,7 @@ export function LeverageRequestsProvider({ children }: { children: React.ReactNo
         return updated
       }),
     )
+    persistRecord(updated)
     return updated
   }
 
@@ -389,6 +375,9 @@ export function LeverageRequestsProvider({ children }: { children: React.ReactNo
         return r
       }),
     )
+    // Persist the switch-off request so the admin sees it and it survives across
+    // devices. The DB approval stays "approved"; the sub-state lives in the record.
+    persistRecord(updated)
     return updated
   }
 
@@ -413,6 +402,7 @@ export function LeverageRequestsProvider({ children }: { children: React.ReactNo
         return r
       }),
     )
+    persistRecord(updated)
     return updated
   }
 
@@ -433,6 +423,7 @@ export function LeverageRequestsProvider({ children }: { children: React.ReactNo
         return r
       }),
     )
+    persistRecord(updated)
     return updated
   }
 

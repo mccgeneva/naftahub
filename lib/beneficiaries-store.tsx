@@ -73,50 +73,50 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
   // Guards the demo beneficiary-book backfill so it runs at most once per mount.
   const demoBackfillDone = useRef(false)
 
-  // Load persisted beneficiaries once on mount. The durable source of truth is
-  // the server (Neon), so admins can manage beneficiaries on behalf of users and
-  // data survives across devices. We fall back to the local cache when the
-  // server is unavailable (e.g. local dev without DATABASE_URL).
+  // Load beneficiaries on mount from the server (Neon), the single source of
+  // truth, so admins can manage beneficiaries on behalf of users and data
+  // follows the user across any device/browser. Re-fetch on focus and on a 30s
+  // poll so admin-side changes appear without a reload. Nothing is cached in
+  // localStorage.
   useEffect(() => {
     let active = true
 
-    // Seed instantly from the local cache for a fast first paint.
-    let cached: Beneficiary[] = []
-    try {
-      const stored = window.localStorage.getItem(storageKey())
-      if (stored) cached = JSON.parse(stored) as Beneficiary[]
-    } catch {
-      // ignore malformed storage
-    }
-    if (cached.length) setBeneficiaries(cached)
+    const load = () =>
+      getMyBeneficiaries()
+        .then((res) => {
+          if (!active) return
+          if (res.ok) {
+            skipNextSync.current = true
+            setBeneficiaries(res.beneficiaries.map((b) => b.data as unknown as Beneficiary))
+          }
+        })
+        .catch(() => {})
 
-    // Then reconcile with the authoritative server copy.
-    getMyBeneficiaries()
-      .then((res) => {
-        if (!active) return
-        if (res.ok && res.beneficiaries.length) {
-          setBeneficiaries(res.beneficiaries.map((b) => b.data as unknown as Beneficiary))
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (active) setHydrated(true)
-      })
+    load().finally(() => {
+      if (active) setHydrated(true)
+    })
+
+    const onFocus = () => void load()
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void load()
+    }
+    window.addEventListener("focus", onFocus)
+    document.addEventListener("visibilitychange", onVisible)
+    const id = setInterval(() => void load(), 30000)
 
     return () => {
       active = false
+      window.removeEventListener("focus", onFocus)
+      document.removeEventListener("visibilitychange", onVisible)
+      clearInterval(id)
     }
   }, [])
 
-  // Persist on change: write the local cache (instant) and mirror to the server
-  // (durable). Mirroring after hydration keeps the admin-visible copy in sync.
+  // Persist on change: mirror to the server (durable), keeping the admin-visible
+  // copy in sync. The first write after a server-driven setBeneficiaries is
+  // skipped so we never echo freshly-fetched data straight back.
   useEffect(() => {
     if (!hydrated) return
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(beneficiaries))
-    } catch {
-      // ignore quota/availability errors
-    }
     if (skipNextSync.current) {
       skipNextSync.current = false
       return

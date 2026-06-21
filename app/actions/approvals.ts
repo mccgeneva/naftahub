@@ -173,6 +173,35 @@ export async function updateMyApprovalRecord(
 }
 
 /**
+ * Administrator-scoped merge into the view-model stored under `payload.record`
+ * of ANY user's approval. Used for admin-driven changes to a client's record
+ * that must follow the client across devices — e.g. commodity document
+ * verification/rejection and stage advances, or leverage ratio modifications and
+ * switch-off settlement. Passcode-guarded; only `payload.record` is merged so
+ * the DB lifecycle and decision fields are never overwritten here.
+ */
+export async function adminUpdateApprovalRecord(
+  passcode: string,
+  approvalId: string,
+  patch: Record<string, unknown>,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
+  try {
+    const existing = await getApprovalById(approvalId)
+    if (!existing) return { ok: false, error: "This record could not be found." }
+    const prevPayload = existing.payload ?? {}
+    const prevRecord = (prevPayload.record as Record<string, unknown> | undefined) ?? {}
+    const nextPayload = { ...prevPayload, record: { ...prevRecord, ...patch } }
+    const updated = await updateApprovalPayload(approvalId, nextPayload)
+    if (!updated) return { ok: false, error: "The change could not be saved. Please try again." }
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] adminUpdateApprovalRecord failed:", (err as Error).message)
+    return { ok: false, error: "The change could not be saved. Please try again." }
+  }
+}
+
+/**
  * Revoke one of the signed-in client's APPROVED commodity deals before it has
  * been delivered, and REFUND the reserved funds. The DB guard refuses to revoke
  * a delivered deal, so once the administrator flags delivery the deal is locked.
