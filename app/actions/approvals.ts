@@ -27,6 +27,7 @@ import {
   type LedgerEffect,
 } from "@/lib/approvals-db"
 import { KIND_LABELS, KIND_HREF, type ApprovalKind } from "@/lib/approval-kinds"
+import { recordGatewayDepositForApproval } from "@/app/actions/reconciliation"
 import { MASTER_CONSENT_KINDS } from "@/lib/account-hierarchy"
 
 // --- Auth helpers -----------------------------------------------------------
@@ -619,6 +620,17 @@ export async function adminDecideApproval(
         await applyLedgerEffect(updated)
       } catch (err) {
         console.log("[v0] applyLedgerEffect failed:", (err as Error).message)
+      }
+
+      // If this approved outgoing payment is addressed to a Collect-funds
+      // gateway IBAN, record it as a received deposit on that account and credit
+      // the gateway owner's Master Account. Idempotent and self-validating.
+      if (updated.kind === "payment") {
+        try {
+          await recordGatewayDepositForApproval(updated.id)
+        } catch (err) {
+          console.log("[v0] gateway IBAN auto-match failed:", (err as Error).message)
+        }
       }
     }
 
