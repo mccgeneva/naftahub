@@ -31,13 +31,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Check, X, Loader2, ClipboardList, Filter, RefreshCw, User, Wallet } from "lucide-react"
+import { Check, X, Loader2, ClipboardList, Filter, RefreshCw, User, Wallet, PackageCheck } from "lucide-react"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
 import {
   adminListApprovals,
   adminDecideApproval,
   adminBulkDecide,
+  adminMarkCommodityDelivered,
 } from "@/app/actions/approvals"
 import {
   getClientFinancialSnapshotAdmin,
@@ -201,6 +202,18 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
   const openReject = (id: string) => {
     setRejectReason("")
     setRejectTarget({ id, bulk: false })
+  }
+
+  const markDelivered = async (id: string) => {
+    setActing(true)
+    const res = await adminMarkCommodityDelivered(ADMIN_PASSCODE, id)
+    setActing(false)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    toast.success("Deal flagged delivered. It is now locked from client revocation.")
+    mutate()
   }
 
   const bulkApprove = async () => {
@@ -396,6 +409,8 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
           <ul className="space-y-2">
             {filtered.map((req) => {
               const isPending = req.status === "pending"
+              const isDelivered = req.payload?.delivered === true
+              const canMarkDelivered = req.kind === "commodity" && req.status === "approved" && !isDelivered
               return (
                 <li
                   key={req.id}
@@ -418,6 +433,15 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                         <Badge variant={statusVariant[req.status]} className="text-[10px] capitalize">
                           {req.status}
                         </Badge>
+                        {isDelivered && (
+                          <Badge
+                            variant="outline"
+                            className="border-green-500/30 bg-green-500/10 text-green-600 text-[10px]"
+                          >
+                            <PackageCheck className="mr-1 h-3 w-3" />
+                            Delivered
+                          </Badge>
+                        )}
                         <span className="text-sm font-semibold text-foreground">{formatAmount(req)}</span>
                       </div>
                       <p className="truncate text-sm font-medium text-foreground">{req.title}</p>
@@ -462,6 +486,20 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                         onClick={() => openReject(req.id)}
                       >
                         <X className="h-3.5 w-3.5" /> Reject
+                      </Button>
+                    </div>
+                  )}
+                  {canMarkDelivered && (
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 gap-1 text-emerald-600"
+                        disabled={acting}
+                        onClick={() => markDelivered(req.id)}
+                        title="Confirm the commodity has been delivered. Locks the deal so the client can no longer revoke it."
+                      >
+                        <PackageCheck className="h-3.5 w-3.5" /> Mark delivered
                       </Button>
                     </div>
                   )}

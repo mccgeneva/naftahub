@@ -3,7 +3,7 @@
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { resolveCurrentSession, resolveAccountProfileById, resolveDataOwnerIdFor } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
-import { upsertLedgerEntry, readLedgerEntries, availableByCurrency } from "@/lib/ledger-db"
+import { upsertLedgerEntry, readLedgerEntries, availableByCurrency, deleteLedgerEntry } from "@/lib/ledger-db"
 import { convertCurrency } from "@/lib/fx"
 import type { LedgerEntry } from "@/lib/ledger-store"
 import { insertNotification } from "@/lib/notifications-db"
@@ -17,6 +17,8 @@ import {
   recordAdminDecision,
   recordMasterDecision,
   cancelApproval,
+  revokeApprovedApproval,
+  markApprovalDelivered,
   getApprovalById,
   type ApprovalRequest,
   type ApprovalStatus,
@@ -134,6 +136,91 @@ export async function cancelMyApproval(id: string): Promise<{ ok: boolean; error
   } catch (err) {
     console.log("[v0] cancelMyApproval failed:", (err as Error).message)
     return { ok: false, error: "The request could not be cancelled. Please try again." }
+  }
+}
+
+/**
+ * Revoke one of the signed-in client's APPROVED commodity deals before it has
+ * been delivered, and REFUND the reserved funds. The DB guard refuses to revoke
+ * a delivered deal, so once the administrator flags delivery the deal is locked.
+ *
+ * Refund semantics: only the reservation hold (`APPR-<id>`) is released, which
+ * unfreezes the blocked money back into the client's available balance. Any FX
+ * conversion executed to fund the deal (the settled `-fx-sell` / `-fx-buy`
+ * legs) is intentionally LEFT IN PLACE — per policy the bought currency stays
+ * available in that currency's account rather than being converted back.
+ */
+export async function revokeMyCommodityDeal(
+  approvalId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const session = await resolveCurrentSession()
+  if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
+  try {
+    const existing = await getApprovalById(approvalId)
+    if (!existing || existing.userId !== session.id) {
+      return { ok: false, error: "This deal could not be found." }
+    }
+    if (existing.kind !== "commodity") {
+      return { ok: false, error: "Only commodity deals can be revoked here." }
+    }
+    if (existing.status !== "approved") {
+      return { ok: false, error: "Only an approved deal can be revoked." }
+    }
+    if (existing.payload?.delivered === true) {
+      return { ok: false, error: "This deal has been delivered and can no longer be revoked." }
+    }
+
+    const revoked = await revokeApprovedApproval(approvalId, session.id)
+    if (!revoked) {
+      return { ok: false, error: "This deal can no longer be revoked." }
+    }
+
+    // Release the reservation hold → unfreeze the blocked funds. The hold posts
+    // to the shared-data owner (Master for a sub-account), mirroring how the
+    // hold was created in applyLedgerEffect.
+    const ownerId = await resolveDataOwnerIdFor(existing.userId)
+    try {
+      await deleteLedgerEntry(ownerId, `APPR-${approvalId}`)
+    } catch (err) {
+      console.log("[v0] hold release failed:", (err as Error).message)
+    }
+
+    try {
+      await insertNotification({
+        userId: existing.userId,
+        tone: "info",
+        title: "Commodity deal revoked",
+        body: `Your commodity deal "${existing.title}" was revoked. The reserved funds have been released back to your available balance.`,
+        href: KIND_HREF.commodity ?? "/dashboard/commodity",
+      })
+    } catch (err) {
+      console.log("[v0] revoke notification failed:", (err as Error).message)
+    }
+
+    try {
+      const profile = await resolveAccountProfileById(existing.userId)
+      await logActivity({
+        action: `Client revoked commodity deal "${existing.title}" and released reserved funds`,
+        category: "Commodity Trading",
+        user: profile.fullName,
+        details: {
+          referenceId: existing.id,
+          summary: existing.summary || existing.title,
+          amount:
+            existing.amount != null
+              ? `${existing.currency ?? ""} ${existing.amount.toLocaleString("en-US")}`
+              : "(n/a)",
+          decision: "Revoked",
+        },
+      })
+    } catch (err) {
+      console.log("[v0] revoke activity log failed:", (err as Error).message)
+    }
+
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] revokeMyCommodityDeal failed:", (err as Error).message)
+    return { ok: false, error: "The deal could not be revoked. Please try again." }
   }
 }
 
@@ -465,6 +552,69 @@ export async function adminDecideApproval(
   } catch (err) {
     console.log("[v0] adminDecideApproval failed:", (err as Error).message)
     return { ok: false, error: "The decision could not be recorded. Please try again." }
+  }
+}
+
+/**
+ * Administrator flags an approved commodity deal as DELIVERED. This locks the
+ * deal: the client can no longer revoke it (the revoke DB guard refuses any deal
+ * whose payload is flagged delivered). The delivered state is stored on the
+ * approval's payload so it is visible to the client cross-device.
+ */
+export async function adminMarkCommodityDelivered(
+  passcode: string,
+  id: string,
+): Promise<DecideResult> {
+  if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
+  try {
+    const existing = await getApprovalById(id)
+    if (!existing) return { ok: false, error: "Deal not found." }
+    if (existing.kind !== "commodity") {
+      return { ok: false, error: "Only commodity deals can be marked delivered." }
+    }
+    if (existing.status !== "approved") {
+      return { ok: false, error: "Only an approved deal can be marked delivered." }
+    }
+    if (existing.payload?.delivered === true) {
+      return { ok: true, request: existing }
+    }
+
+    const updated = await markApprovalDelivered(id)
+    if (!updated) return { ok: false, error: "This deal can no longer be marked delivered." }
+
+    try {
+      await insertNotification({
+        userId: updated.userId,
+        tone: "success",
+        title: "Commodity deal delivered",
+        body: `Your commodity deal "${updated.title}" has been confirmed delivered by MCC Capital. The deal is now finalized and can no longer be revoked.`,
+        href: KIND_HREF.commodity ?? "/dashboard/commodity",
+      })
+    } catch (err) {
+      console.log("[v0] delivered notification failed:", (err as Error).message)
+    }
+
+    try {
+      const target = await resolveAccountProfileById(updated.userId)
+      await logActivity({
+        action: `Administrator flagged commodity deal "${updated.title}" as delivered for ${target.fullName}`,
+        category: "Administration / Approvals",
+        user: "Administrator",
+        details: {
+          referenceId: updated.id,
+          targetAccount: `${target.fullName} — ${target.email}`,
+          summary: updated.summary || updated.title,
+          decision: "Delivered",
+        },
+      })
+    } catch (err) {
+      console.log("[v0] delivered activity log failed:", (err as Error).message)
+    }
+
+    return { ok: true, request: updated }
+  } catch (err) {
+    console.log("[v0] adminMarkCommodityDelivered failed:", (err as Error).message)
+    return { ok: false, error: "The deal could not be marked delivered. Please try again." }
   }
 }
 

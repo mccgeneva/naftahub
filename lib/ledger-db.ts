@@ -79,6 +79,21 @@ export function availableByCurrency(entries: LedgerEntry[]): Record<string, numb
   return out
 }
 
+/**
+ * Permanently remove a single ledger entry for a user (by entry id). Used to
+ * RELEASE a reservation/hold — e.g. when an approved commodity deal is revoked,
+ * deleting its `APPR-<id>` hold returns (unfreezes) the blocked funds to the
+ * client's available balance. Returns true if a row was deleted.
+ */
+export async function deleteLedgerEntry(userId: string, entryId: string): Promise<boolean> {
+  await ensureLedgerTable()
+  const { rowCount } = await query(
+    `DELETE FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`,
+    [userId, entryId],
+  )
+  return (rowCount ?? 0) > 0
+}
+
 /** Insert or update a single ledger entry for a user. */
 export async function upsertLedgerEntry(userId: string, entry: LedgerEntry): Promise<void> {
   await ensureLedgerTable()
