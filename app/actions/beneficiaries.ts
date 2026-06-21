@@ -81,6 +81,29 @@ export async function syncMyBeneficiaries(
   }
 }
 
+/**
+ * Durably persist a SINGLE beneficiary for the current user and return the
+ * stored row. The client calls this when the user adds (or edits) a beneficiary
+ * so the record is committed to Neon immediately and the UI can confirm success
+ * — independent of the background full-set mirror (`syncMyBeneficiaries`), which
+ * is fire-and-forget and can race with refetches. Returns an error the UI can
+ * show instead of silently losing the record.
+ */
+export async function upsertMyBeneficiary(
+  id: string,
+  data: Record<string, unknown>,
+  status: string,
+): Promise<BeneficiaryMutation> {
+  try {
+    const session = await resolveCurrentSession()
+    if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
+    const row = await upsertBeneficiary(session.id, id, data, status)
+    return { ok: true, beneficiary: row }
+  } catch (err) {
+    return { ok: false, error: friendlyError(err) }
+  }
+}
+
 // --- Admin management (on behalf of any user) ------------------------------
 
 export async function adminListBeneficiaries(passcode: string, userId: string): Promise<BeneficiaryListResult> {
