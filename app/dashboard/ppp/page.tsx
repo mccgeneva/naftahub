@@ -50,7 +50,10 @@ import {
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { useActivityLog } from "@/components/activity-tracker"
-import { usePPPRequests } from "@/lib/ppp-requests-store"
+import { usePPPRequests, type PPPRequest } from "@/lib/ppp-requests-store"
+import { usePdfViewer } from "@/lib/pdf-viewer"
+import { generatePPPConfirmationPdf } from "@/lib/ppp-confirmation-pdf"
+import { Download } from "lucide-react"
 
 const programs = [
   {
@@ -213,8 +216,10 @@ export default function PPPPage() {
   const [sourceOfFunds, setSourceOfFunds] = useState("")
   const [payoutAccount, setPayoutAccount] = useState("")
   const [formError, setFormError] = useState<string | null>(null)
+  const [detailInvestment, setDetailInvestment] = useState<PPPRequest | null>(null)
   const log = useActivityLog()
   const { requests, addRequest, hydrated } = usePPPRequests()
+  const { show: showPdf } = usePdfViewer()
 
   const myApplications = useMemo(
     () =>
@@ -323,18 +328,45 @@ export default function PPPPage() {
     setActiveTab("applications")
   }
 
-  const viewInvestment = (id: string, program: string) => {
+  const viewInvestment = (investment: PPPRequest) => {
+    setDetailInvestment(investment)
     log({
-      action: `Viewed investment details for ${program}`,
+      action: `Viewed investment details for ${investment.programName}`,
       category: "PPP / Yield Programs",
       details: {
-        summary: `Client opened the details for investment ${id} (${program}).`,
-        investmentId: id,
-        program,
+        summary: `Client opened the details for investment ${investment.id} (${investment.programName}).`,
+        investmentId: investment.id,
+        program: investment.programName,
       },
     })
-    toast.info(`Opening details for ${program}`, {
-      description: `Investment reference ${id}.`,
+  }
+
+  const downloadConfirmation = (investment: PPPRequest) => {
+    const generated = generatePPPConfirmationPdf({
+      reference: investment.id,
+      programName: investment.programName,
+      amount: investment.amount,
+      currency: investment.currency,
+      expectedReturn: investment.expectedReturn,
+      returnFrequency: investment.returnFrequency,
+      duration: investment.duration,
+      sourceOfFunds: investment.sourceOfFunds,
+      payoutAccount: investment.payoutAccount,
+      submittedAt: investment.submittedAt,
+      decidedAt: investment.decidedAt,
+    })
+    showPdf(generated)
+    log({
+      action: `Downloaded investment confirmation for ${investment.programName}`,
+      category: "PPP / Yield Programs",
+      details: {
+        summary: `Client generated the investment confirmation PDF for ${investment.id} (${investment.programName}).`,
+        investmentId: investment.id,
+        program: investment.programName,
+      },
+    })
+    toast.success("Investment confirmation ready", {
+      description: `Confirmation for ${investment.id} opened for download.`,
     })
   }
 
@@ -745,14 +777,24 @@ export default function PPPPage() {
                           </>
                         )}
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => viewInvestment(investment.id, investment.programName)}
-                      >
-                        <ExternalLink className="mr-2 h-4 w-4" />
-                        View Details
-                      </Button>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => downloadConfirmation(investment)}
+                        >
+                          <Download className="mr-2 h-4 w-4" />
+                          Download Confirmation
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => viewInvestment(investment)}
+                        >
+                          <ExternalLink className="mr-2 h-4 w-4" />
+                          View Details
+                        </Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -865,6 +907,95 @@ export default function PPPPage() {
               Submit for Approval
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Investment Details Dialog */}
+      <Dialog
+        open={!!detailInvestment}
+        onOpenChange={(open) => !open && setDetailInvestment(null)}
+      >
+        <DialogContent className="sm:max-w-[540px]">
+          {detailInvestment && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  {detailInvestment.programName}
+                  <Badge
+                    variant="outline"
+                    className="bg-green-500/10 text-green-500 border-green-500/20"
+                  >
+                    <CheckCircle2 className="mr-1 h-3 w-3" />
+                    Active
+                  </Badge>
+                </DialogTitle>
+                <DialogDescription>
+                  Investment reference {detailInvestment.id}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4 py-2">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-lg bg-secondary/30 p-3">
+                    <p className="text-xs text-muted-foreground">Invested Amount</p>
+                    <p className="text-lg font-bold text-foreground mt-1">
+                      {formatMoney(detailInvestment.amount, detailInvestment.currency)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-green-500/10 p-3">
+                    <p className="text-xs text-muted-foreground">Current Return</p>
+                    <p className="text-lg font-bold text-green-500 mt-1">
+                      {detailInvestment.currency} 0
+                    </p>
+                    <p className="text-xs text-muted-foreground">Awaiting first payout</p>
+                  </div>
+                </div>
+
+                <div className="divide-y divide-border rounded-lg border border-border">
+                  {[
+                    ["Expected Return", `${detailInvestment.expectedReturn} (${detailInvestment.returnFrequency})`],
+                    ["Duration", detailInvestment.duration],
+                    ["Source of Funds", detailInvestment.sourceOfFunds],
+                    ["Payout Account", detailInvestment.payoutAccount],
+                    [
+                      "Application Submitted",
+                      new Date(detailInvestment.submittedAt).toLocaleString("en-GB"),
+                    ],
+                    ...(detailInvestment.decidedAt
+                      ? [["Approved On", new Date(detailInvestment.decidedAt).toLocaleDateString("en-GB")]]
+                      : []),
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="flex items-center justify-between gap-4 px-3 py-2.5 text-sm"
+                    >
+                      <span className="text-muted-foreground">{label}</span>
+                      <span className="text-right font-medium text-foreground">{value}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <p className="text-xs text-muted-foreground text-pretty">
+                    Returns are projected, not guaranteed, and are distributed per the program
+                    schedule to your nominated payout account. Download the confirmation for your
+                    records.
+                  </p>
+                </div>
+              </div>
+
+              <DialogFooter className="flex-col gap-2 sm:flex-row">
+                <Button variant="outline" onClick={() => setDetailInvestment(null)}>
+                  Close
+                </Button>
+                <Button onClick={() => downloadConfirmation(detailInvestment)}>
+                  <Download className="mr-2 h-4 w-4" />
+                  Download Confirmation
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>
