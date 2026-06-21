@@ -450,6 +450,33 @@ export async function revokeApprovedApproval(
 }
 
 /**
+ * Administrator REVOCATION of an already-APPROVED request, regardless of which
+ * client owns it. Unlike the client revoke, this is NOT scoped to a user id —
+ * administrator authority. Still race-safe: only acts while the request is
+ * `approved` AND has NOT been flagged delivered (a delivered deal is finalized
+ * and cannot be reversed). The caller releases the ledger hold. Returns the
+ * updated record, or null if it can no longer be revoked.
+ */
+export async function adminRevokeApprovedApproval(
+  id: string,
+  note?: string,
+): Promise<ApprovalRequest | null> {
+  await ensureTable()
+  const { rows } = await query(
+    `UPDATE approval_requests
+        SET status = 'cancelled',
+            decided_at = now(),
+            decision_note = $2,
+            payload = payload || '{"revokedByAdmin": true}'::jsonb
+      WHERE id = $1 AND status = 'approved'
+        AND COALESCE(payload->>'delivered', 'false') <> 'true'
+      RETURNING *`,
+    [id, note?.trim() || "Revoked by administrator before delivery."],
+  )
+  return rows.length ? rowToRequest(rows[0]) : null
+}
+
+/**
  * Administrator flags an approved deal as DELIVERED (commodity received /
  * settled). Once delivered the deal is locked: the client can no longer revoke
  * it. Stamps `delivered` + `deliveredAt` into the payload so the state is
