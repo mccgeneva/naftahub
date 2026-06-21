@@ -1,7 +1,7 @@
 "use client"
 
 import { createContext, useContext, useEffect, useRef, useState } from "react"
-import { scopedKey, getActiveUserId } from "@/lib/user-scope"
+import { getActiveUserId } from "@/lib/user-scope"
 import { getMyBeneficiaries, syncMyBeneficiaries } from "@/app/actions/beneficiaries"
 import { DEMO_USER_ID } from "@/lib/users"
 import { demoBeneficiaries } from "@/lib/demo-beneficiaries"
@@ -46,16 +46,6 @@ export interface Beneficiary {
   intermediarySwift?: string
 }
 
-const KEY_BASE = "mcc.beneficiaries.v1"
-const storageKey = () => scopedKey(KEY_BASE)
-
-// One-time marker (per user) for the demo beneficiary-book backfill/reconcile.
-// Bumped to v2 to roll out a one-time repair of invalid IBAN check digits that
-// were persisted by the v1 backfill. Bumping the version lets the reconcile run
-// exactly once more for users who already received v1, then never again — so a
-// demo user who later removes entries doesn't see them re-appear.
-const DEMO_BACKFILL_MARKER = "mcc.demo-beneficiaries-backfill.v2"
-
 interface BeneficiariesContextValue {
   beneficiaries: Beneficiary[]
   setBeneficiaries: React.Dispatch<React.SetStateAction<Beneficiary[]>>
@@ -73,50 +63,50 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
   // Guards the demo beneficiary-book backfill so it runs at most once per mount.
   const demoBackfillDone = useRef(false)
 
-  // Load persisted beneficiaries once on mount. The durable source of truth is
-  // the server (Neon), so admins can manage beneficiaries on behalf of users and
-  // data survives across devices. We fall back to the local cache when the
-  // server is unavailable (e.g. local dev without DATABASE_URL).
+  // Load beneficiaries on mount from the server (Neon), the single source of
+  // truth, so admins can manage beneficiaries on behalf of users and data
+  // follows the user across any device/browser. Re-fetch on focus and on a 30s
+  // poll so admin-side changes appear without a reload. Nothing is cached in
+  // localStorage.
   useEffect(() => {
     let active = true
 
-    // Seed instantly from the local cache for a fast first paint.
-    let cached: Beneficiary[] = []
-    try {
-      const stored = window.localStorage.getItem(storageKey())
-      if (stored) cached = JSON.parse(stored) as Beneficiary[]
-    } catch {
-      // ignore malformed storage
-    }
-    if (cached.length) setBeneficiaries(cached)
+    const load = () =>
+      getMyBeneficiaries()
+        .then((res) => {
+          if (!active) return
+          if (res.ok) {
+            skipNextSync.current = true
+            setBeneficiaries(res.beneficiaries.map((b) => b.data as unknown as Beneficiary))
+          }
+        })
+        .catch(() => {})
 
-    // Then reconcile with the authoritative server copy.
-    getMyBeneficiaries()
-      .then((res) => {
-        if (!active) return
-        if (res.ok && res.beneficiaries.length) {
-          setBeneficiaries(res.beneficiaries.map((b) => b.data as unknown as Beneficiary))
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (active) setHydrated(true)
-      })
+    load().finally(() => {
+      if (active) setHydrated(true)
+    })
+
+    const onFocus = () => void load()
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void load()
+    }
+    window.addEventListener("focus", onFocus)
+    document.addEventListener("visibilitychange", onVisible)
+    const id = setInterval(() => void load(), 30000)
 
     return () => {
       active = false
+      window.removeEventListener("focus", onFocus)
+      document.removeEventListener("visibilitychange", onVisible)
+      clearInterval(id)
     }
   }, [])
 
-  // Persist on change: write the local cache (instant) and mirror to the server
-  // (durable). Mirroring after hydration keeps the admin-visible copy in sync.
+  // Persist on change: mirror to the server (durable), keeping the admin-visible
+  // copy in sync. The first write after a server-driven setBeneficiaries is
+  // skipped so we never echo freshly-fetched data straight back.
   useEffect(() => {
     if (!hydrated) return
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(beneficiaries))
-    } catch {
-      // ignore quota/availability errors
-    }
     if (skipNextSync.current) {
       skipNextSync.current = false
       return
@@ -132,16 +122,13 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
   // (the v1 backfill stored some with bad check digits). Runs against the
   // already-hydrated state (the durable server copy), then the persist effect
   // mirrors corrections back to Neon. Scoped to the demo user and guarded by a
-  // per-user marker so it runs at most once and never re-adds removed rows.
+  // per-session ref. It is idempotent — it only adds canonical rows missing from
+  // the server copy — so re-running across reloads is a no-op and it never
+  // re-adds rows the user has removed. No localStorage involved.
   useEffect(() => {
     if (!hydrated || demoBackfillDone.current) return
     demoBackfillDone.current = true
     if (getActiveUserId() !== DEMO_USER_ID) return
-    try {
-      if (window.localStorage.getItem(scopedKey(DEMO_BACKFILL_MARKER))) return
-    } catch {
-      return
-    }
 
     const canonical = demoBeneficiaries()
     const canonicalById = new Map(canonical.map((b) => [b.id, b]))
@@ -154,15 +141,6 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
       const ref = canonicalById.get(b.id)
       return ref && b.iban && b.iban !== ref.iban && !validateIban(b.iban).valid
     })
-
-    try {
-      window.localStorage.setItem(
-        scopedKey(DEMO_BACKFILL_MARKER),
-        JSON.stringify({ at: new Date().toISOString(), added: missing.length, ibanRepair: needsIbanRepair }),
-      )
-    } catch {
-      // ignore availability errors — marker is best-effort
-    }
 
     if (!missing.length && !needsIbanRepair) return
 

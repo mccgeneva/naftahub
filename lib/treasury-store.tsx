@@ -6,8 +6,9 @@
 // Each client has a single Treasury Services record holding their security
 // deposit status, any leverage facility granted by MCC CAPITAL, the resulting
 // debit exposure financed by MCC HOLDING SA, and a treasury transaction
-// history. Like every other store in the platform it is persisted in
-// localStorage, namespaced per user via `scopedKey` so accounts stay isolated.
+// history. The record is persisted in the shared Neon database (server action
+// `getMyTreasury`), keyed per user, so it is consistent on any device/browser.
+// Nothing is stored in localStorage.
 //
 // Permissions are enforced by surface, matching the specification:
 //   • Customers use `useTreasury()` (this file) to READ their own record only.
@@ -270,9 +271,11 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     }
     window.addEventListener("focus", refresh)
     document.addEventListener("visibilitychange", onVisible)
+    const id = setInterval(() => void refresh(), 30000)
     return () => {
       window.removeEventListener("focus", refresh)
       document.removeEventListener("visibilitychange", onVisible)
+      clearInterval(id)
     }
   }, [hydrated, refresh])
 

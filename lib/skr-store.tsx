@@ -1,7 +1,6 @@
 "use client"
 
 import { createContext, useContext, useCallback, useEffect, useRef, useState } from "react"
-import { scopedKey } from "@/lib/user-scope"
 import {
   getMySkrRecords,
   getMySkrRequests,
@@ -16,12 +15,13 @@ import {
 // their own records; only administrators may create, modify, delete, transfer,
 // or change the status of a record.
 //
-// Persistence mirrors the rest of the platform: the durable source of truth is
-// Neon (lib/skr-db.ts + app/actions/skr.ts), keyed by the owning client's id,
-// so administrators can assign and manage receipts that the client then sees on
-// any device. The client view hydrates from the server and keeps a local
-// localStorage cache purely for fast first paint. Administrators read/write any
-// client's data through the passcode-gated server actions.
+// Persistence is server-only: the single source of truth is Neon (lib/skr-db.ts
+// + app/actions/skr.ts), keyed by the owning client's id, so administrators can
+// assign and manage receipts that the client then sees on any device, and a
+// client's requests follow them across any device/browser. The client view
+// hydrates from the server, re-fetches on focus and on a 30s poll — nothing is
+// read from or written to localStorage. Administrators read/write any client's
+// data through the passcode-gated server actions.
 // ---------------------------------------------------------------------------
 
 export type SkrStatus =
@@ -112,35 +112,6 @@ export interface SkrRequest {
   decisionNote?: string
 }
 
-// Per-user namespaced cache keys. The durable source of truth is now Neon (see
-// lib/skr-db.ts + app/actions/skr.ts); localStorage is retained only as a
-// non-authoritative cache so the client view paints instantly before the
-// server reconciliation resolves.
-const RECORDS_KEY = "mcc.skr-records.v1"
-const REQUESTS_KEY = "mcc.skr-requests.v1"
-
-const recordsKey = () => scopedKey(RECORDS_KEY)
-const requestsKey = () => scopedKey(REQUESTS_KEY)
-
-function readCache<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback
-  try {
-    const raw = window.localStorage.getItem(key)
-    return raw ? (JSON.parse(raw) as T) : fallback
-  } catch {
-    return fallback
-  }
-}
-
-function writeCache(key: string, value: unknown) {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    // ignore quota/availability errors
-  }
-}
-
 /** Generate a unique SKR reference number. */
 export function generateSkrId(): string {
   const n = Math.floor(100000 + Math.random() * 900000)
@@ -193,34 +164,34 @@ export function SkrProvider({ children }: { children: React.ReactNode }) {
       .catch(() => {})
   }, [])
 
-  // Load once on mount: paint instantly from the local cache, then reconcile
-  // with Neon (durable, cross-device, admin-managed).
+  // Load once on mount from Neon (durable, cross-device, admin-managed), then
+  // re-fetch on focus and on a 30s poll so administrator changes appear without
+  // a manual reload. Nothing is cached in localStorage.
   useEffect(() => {
     let active = true
-    const cachedRecords = readCache<SkrRecord[]>(recordsKey(), [])
-    const cachedRequests = readCache<SkrRequest[]>(requestsKey(), [])
-    if (cachedRecords.length) setRecords(cachedRecords)
-    if (cachedRequests.length) setRequests(cachedRequests)
     reconcile().finally(() => {
       if (active) setHydrated(true)
     })
+    const onFocus = () => void reconcile()
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void reconcile()
+    }
+    window.addEventListener("focus", onFocus)
+    document.addEventListener("visibilitychange", onVisible)
+    const id = setInterval(() => void reconcile(), 30000)
     return () => {
       active = false
+      window.removeEventListener("focus", onFocus)
+      document.removeEventListener("visibilitychange", onVisible)
+      clearInterval(id)
     }
   }, [reconcile])
 
-  // Cache records locally on change for fast subsequent paints (read-only — no
-  // server write; records are authored by the administrator).
+  // Mirror requests to the server on change (non-destructive: only new requests
+  // are inserted; the custody desk's decisions are preserved). The first write
+  // after a server-driven setRequests is skipped so we never echo fetched data.
   useEffect(() => {
     if (!hydrated) return
-    writeCache(recordsKey(), records)
-  }, [records, hydrated])
-
-  // Cache requests and mirror them to the server (non-destructive: only new
-  // requests are inserted; the custody desk's decisions are preserved).
-  useEffect(() => {
-    if (!hydrated) return
-    writeCache(requestsKey(), requests)
     if (skipNextSync.current) {
       skipNextSync.current = false
       return

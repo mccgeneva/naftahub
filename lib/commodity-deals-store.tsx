@@ -1,12 +1,11 @@
 "use client"
 
-import { createContext, useContext, useEffect, useRef, useState } from "react"
+import { createContext, useContext, useEffect } from "react"
 import { generateUetr } from "@/lib/swift-gpi"
-import { scopedKey } from "@/lib/user-scope"
-import { mirrorSubmission } from "@/lib/approval-sync"
-import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
+import { mirrorSubmission, mapApprovalStatus, type ApprovalRecord } from "@/lib/approval-sync"
+import { useServerRequestList } from "@/lib/use-server-request-list"
 import { useLedger } from "@/lib/ledger-store"
-import { revokeMyCommodityDeal } from "@/app/actions/approvals"
+import { revokeMyCommodityDeal, updateMyApprovalRecord } from "@/app/actions/approvals"
 
 export type DealStatus = "pending" | "approved" | "rejected" | "cancelled"
 
@@ -118,8 +117,30 @@ export interface CommodityDeal {
   deliveredAt?: string
 }
 
-const KEY_BASE = "mcc.commodity-deals.v1"
-const storageKey = () => scopedKey(KEY_BASE)
+/**
+ * Build a CommodityDeal from a server approval record. The complete deal —
+ * including its documents, stage and the admin "delivered" flag — lives under
+ * `payload.record`, so it is identical on every device. The DB lifecycle decides
+ * pending/approved/rejected/cancelled; an approved deal is shown at the execution
+ * stage to match the in-app approval behaviour. `delivered`/`deliveredAt` are
+ * read from the top-level payload (set by the admin) when present.
+ */
+function dealFromApproval(rec: ApprovalRecord): CommodityDeal | null {
+  const base = rec.payload?.record as CommodityDeal | undefined
+  if (!base || typeof base !== "object" || !base.id) return null
+  const status = mapApprovalStatus(rec.status) as DealStatus
+  const delivered = (rec.payload?.delivered as boolean | undefined) ?? base.delivered
+  return {
+    ...base,
+    approvalId: rec.id,
+    status,
+    stage: status === "approved" ? "execution" : base.stage,
+    delivered,
+    deliveredAt: (rec.payload?.deliveredAt as string | undefined) ?? base.deliveredAt,
+    decidedAt: rec.decidedAt ?? base.decidedAt,
+    decisionNote: rec.decisionNote ?? base.decisionNote,
+  }
+}
 
 // Document type catalogues surfaced in the UI (extensible — "not limited to").
 export const POP_DOC_TYPES = [
@@ -199,151 +220,35 @@ function generateDocId(): string {
 }
 
 export function CommodityDealsProvider({ children }: { children: React.ReactNode }) {
-  const [deals, setDeals] = useState<CommodityDeal[]>([])
-  const [hydrated, setHydrated] = useState(false)
-
-  // Load persisted deals once on mount so submissions survive navigation,
-  // reloads, and logout/login.
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(storageKey())
-      setDeals(stored ? (JSON.parse(stored) as CommodityDeal[]) : [])
-    } catch {
-      setDeals([])
-    }
-    setHydrated(true)
-  }, [])
-
-  // Persist on change, but only after hydration to avoid clobbering stored data.
-  useEffect(() => {
-    if (!hydrated) return
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(deals))
-    } catch {
-      // ignore quota/availability errors
-    }
-  }, [deals, hydrated])
-
-  // Keep state in sync across tabs/windows (client submits while Administrator
-  // reviews elsewhere) and when returning to a backgrounded tab.
-  useEffect(() => {
-    if (!hydrated) return
-    const resync = () => {
-      try {
-        const stored = window.localStorage.getItem(storageKey())
-        setDeals(stored ? (JSON.parse(stored) as CommodityDeal[]) : [])
-      } catch {
-        // ignore parse/availability errors
-      }
-    }
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === storageKey()) resync()
-    }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") resync()
-    }
-    window.addEventListener("storage", onStorage)
-    window.addEventListener("focus", resync)
-    document.addEventListener("visibilitychange", onVisible)
-    return () => {
-      window.removeEventListener("storage", onStorage)
-      window.removeEventListener("focus", resync)
-      document.removeEventListener("visibilitychange", onVisible)
-    }
-  }, [hydrated])
+  // List sourced entirely from the server (Neon). The mapper rebuilds each deal
+  // (documents, stage, delivered flag and lifecycle) from the server record, so
+  // deals are identical on any device/browser. No localStorage involved.
+  const {
+    records: deals,
+    setRecords: setDeals,
+    hydrated,
+    refresh,
+  } = useServerRequestList<CommodityDeal>("commodity", { fromApproval: dealFromApproval })
 
   const { refresh: refreshLedger } = useLedger()
 
-  // Reconcile administrator decisions made cross-client (in the DB) back here.
-  // When a deal is newly approved, also advance it to the execution stage to
-  // match the in-app approveDeal() behaviour, and refresh the ledger so the
-  // funds reserved (held) for the deal show up on the client's balance at once.
-  useApprovalReconcile(
-    "commodity",
-    hydrated,
-    deals,
-    setDeals,
-    (approved) => {
-      const ids = new Set(approved.map((d) => d.id))
-      setDeals((prev) =>
-        prev.map((d) => (ids.has(d.id) ? { ...d, stage: "execution" as DealStage } : d)),
-      )
-      // Pull the server ledger so the newly-posted hold (reserved funds) is
-      // reflected in the balance overview without requiring a manual reload.
-      refreshLedger()
-    },
-  )
-
-  // Cross-client sync for APPROVED deals: pick up the administrator's "delivered"
-  // flag (which locks the deal from revocation) and any revocation performed on
-  // another device, merging both back into the local records. A ref keeps the
-  // polling timer stable so it doesn't re-subscribe on every deal edit; it only
-  // does work while at least one approved deal is still open (not delivered).
-  const dealsRef = useRef<CommodityDeal[]>(deals)
-  useEffect(() => {
-    dealsRef.current = deals
-  }, [deals])
-
+  // Whenever the server list changes (admin approval/delivery/revocation picked
+  // up on the next poll/focus), pull the ledger so reserved/released holds are
+  // reflected in the balance overview without a manual reload.
   useEffect(() => {
     if (!hydrated) return
-    let cancelled = false
+    refreshLedger()
+  }, [deals, hydrated, refreshLedger])
 
-    const sync = async () => {
-      const current = dealsRef.current
-      const hasOpen = current.some((d) => d.approvalId && d.status === "approved" && !d.delivered)
-      if (!hasOpen) return
-      // Read via the Route Handler (not a Server Action) so this background poll
-      // can never serialize behind / block in-app navigation. The endpoint
-      // returns the signed-in user's commodity approvals with their payload.
-      let items: {
-        id: string
-        status: string
-        payload?: { delivered?: boolean; deliveredAt?: string }
-      }[] = []
-      try {
-        const res = await fetch("/api/approvals?kind=commodity")
-        if (!res.ok) return
-        const data = (await res.json()) as { ok: boolean; items?: typeof items }
-        items = data.items ?? []
-      } catch {
-        return
-      }
-      if (cancelled || !items.length) return
-      const byId = new Map(items.map((s) => [s.id, s]))
-      let changed = false
-      const next = current.map((d) => {
-        if (!d.approvalId) return d
-        const s = byId.get(d.approvalId)
-        if (!s) return d
-        let merged = d
-        if (s.payload?.delivered === true && !d.delivered) {
-          merged = {
-            ...merged,
-            delivered: true,
-            deliveredAt: s.payload.deliveredAt ?? new Date().toISOString(),
-          }
-          changed = true
-        }
-        if (s.status === "cancelled" && d.status !== "cancelled") {
-          merged = { ...merged, status: "cancelled" as DealStatus }
-          changed = true
-        }
-        return merged
-      })
-      if (changed) {
-        setDeals(next)
-        // A revocation elsewhere released the hold — refresh so the balance reflects it.
-        refreshLedger()
-      }
+  /**
+   * Persist a client-managed change to a deal's server record (documents, stage)
+   * so it follows the user across devices and the admin sees the latest state.
+   */
+  const persistDeal = (deal: CommodityDeal | null) => {
+    if (deal?.approvalId) {
+      void updateMyApprovalRecord(deal.approvalId, { ...deal }).then(() => void refresh())
     }
-
-    void sync()
-    const id = setInterval(sync, 30000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [hydrated])
+  }
 
   const addDeal: CommodityDealsContextValue["addDeal"] = (deal) => {
     const { stage, ...rest } = deal
@@ -356,8 +261,9 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
       documents: [],
       submittedAt: new Date().toISOString(),
     }
-    setDeals((prev) => [full, ...prev])
-    // Mirror into the DB so the Administrator can review it cross-client.
+    setDeals([full, ...deals])
+    // Mirror into the DB so the Administrator can review it cross-client; persist
+    // the COMPLETE record under `payload.record` so the server rebuilds it anywhere.
     void mirrorSubmission({
       kind: "commodity",
       title: `${full.title} · ${full.commodity}`,
@@ -378,10 +284,9 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
               category: "Commodity Trade — Reserved Funds",
             }
           : null,
-      payload: { localId: full.id, uetr: full.uetr, category: full.category, commodity: full.commodity },
-    }).then((approvalId) => {
-      if (!approvalId) return
-      setDeals((prev) => prev.map((d) => (d.id === full.id ? { ...d, approvalId } : d)))
+      payload: { localId: full.id, uetr: full.uetr, category: full.category, commodity: full.commodity, record: full },
+    }).then(() => {
+      void refresh()
     })
     return full
   }
@@ -407,6 +312,7 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
         return d
       }),
     )
+    persistDeal(updated)
     return updated
   }
 
@@ -438,6 +344,7 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
         return updated
       }),
     )
+    persistDeal(updated)
     return updated
   }
 
@@ -454,6 +361,7 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
         return d
       }),
     )
+    persistDeal(updated)
     return updated
   }
 
@@ -471,6 +379,7 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
         return updated
       }),
     )
+    persistDeal(updated)
     return updated
   }
 
@@ -493,6 +402,7 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
         return updated
       }),
     )
+    persistDeal(updated)
     return updated
   }
 

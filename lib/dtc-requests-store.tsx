@@ -1,10 +1,9 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
+import { createContext, useContext } from "react"
 import { generateUetr } from "@/lib/swift-gpi"
-import { scopedKey } from "@/lib/user-scope"
 import { mirrorSubmission } from "@/lib/approval-sync"
-import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
+import { useServerRequestList } from "@/lib/use-server-request-list"
 
 export type DTCRequestStatus = "pending" | "approved" | "rejected"
 
@@ -70,9 +69,6 @@ export interface DTCRequest {
   settledEntryId?: string // ledger entry id created on approval (DVP cash leg)
 }
 
-const KEY_BASE = "mcc.dtc-requests.v1"
-const storageKey = () => scopedKey(KEY_BASE)
-
 interface DTCRequestsContextValue {
   requests: DTCRequest[]
   /** Create a new pending request (no settlement yet). Returns the stored record. */
@@ -97,61 +93,10 @@ function generateDtcId(): string {
 }
 
 export function DTCRequestsProvider({ children }: { children: React.ReactNode }) {
-  const [requests, setRequests] = useState<DTCRequest[]>([])
-  const [hydrated, setHydrated] = useState(false)
-
-  // Load persisted requests once on mount so submissions survive navigation,
-  // reloads, and logout/login.
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(storageKey())
-      setRequests(stored ? (JSON.parse(stored) as DTCRequest[]) : [])
-    } catch {
-      setRequests([])
-    }
-    setHydrated(true)
-  }, [])
-
-  // Persist on change, but only after hydration to avoid clobbering stored data.
-  useEffect(() => {
-    if (!hydrated) return
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(requests))
-    } catch {
-      // ignore quota/availability errors
-    }
-  }, [requests, hydrated])
-
-  // Keep state in sync across tabs/windows (e.g. the Administrator approves in
-  // one place while the client views in another) and on tab refocus.
-  useEffect(() => {
-    if (!hydrated) return
-    const resync = () => {
-      try {
-        const stored = window.localStorage.getItem(storageKey())
-        setRequests(stored ? (JSON.parse(stored) as DTCRequest[]) : [])
-      } catch {
-        // ignore parse/availability errors
-      }
-    }
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === storageKey()) resync()
-    }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") resync()
-    }
-    window.addEventListener("storage", onStorage)
-    window.addEventListener("focus", resync)
-    document.addEventListener("visibilitychange", onVisible)
-    return () => {
-      window.removeEventListener("storage", onStorage)
-      window.removeEventListener("focus", resync)
-      document.removeEventListener("visibilitychange", onVisible)
-    }
-  }, [hydrated])
-
-  // Reconcile administrator decisions made cross-client (in the DB) back here.
-  useApprovalReconcile("dtc", hydrated, requests, setRequests)
+  // List sourced entirely from the server (Neon), so submissions and admin
+  // decisions are visible on any device/browser. No localStorage involved.
+  const { records: requests, setRecords: setRequests, hydrated, refresh } =
+    useServerRequestList<DTCRequest>("dtc")
 
   const addRequest: DTCRequestsContextValue["addRequest"] = (request) => {
     const full: DTCRequest = {
@@ -161,26 +106,29 @@ export function DTCRequestsProvider({ children }: { children: React.ReactNode })
       status: "pending",
       submittedAt: new Date().toISOString(),
     }
-    setRequests((prev) => [full, ...prev])
-    // Mirror into the DB so the Administrator can review it cross-client.
+    setRequests([full, ...requests])
+    // Mirror into the DB so the Administrator can review it cross-client; persist
+    // the COMPLETE record under `payload.record` so the server rebuilds it anywhere.
     void mirrorSubmission({
       kind: "dtc",
       title: `${full.depository} ${full.direction === "deliver" ? "Deliver" : "Receive"} · ${full.securityName}`,
       summary: `${full.settlementBasis} ${full.direction} ${full.quantity.toLocaleString("en-US")} ${full.securityType} (${full.isin}) @ ${full.pricePercent}%${full.settlementBasis === "DVP" ? ` — cash ${full.currency} ${full.cashAmount.toLocaleString("en-US")}` : ""}`,
       amount: full.cashAmount || undefined,
       currency: full.currency,
-      payload: { localId: full.id, uetr: full.uetr, depository: full.depository, direction: full.direction, isin: full.isin },
-    }).then((approvalId) => {
-      if (!approvalId) return
-      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+      payload: { localId: full.id, uetr: full.uetr, depository: full.depository, direction: full.direction, isin: full.isin, record: full },
+    }).then(() => {
+      void refresh()
     })
     return full
   }
 
+  // Admin decisions flow through the DB and surface here via server hydration.
+  // These local mutators update the in-memory view immediately for interface
+  // compatibility; the next refresh reconciles against authoritative state.
   const approveRequest: DTCRequestsContextValue["approveRequest"] = (id, settledEntryId) => {
     let updated: DTCRequest | null = null
-    setRequests((prev) =>
-      prev.map((r) => {
+    setRequests(
+      requests.map((r) => {
         if (r.id === id && r.status === "pending") {
           updated = {
             ...r,
@@ -198,8 +146,8 @@ export function DTCRequestsProvider({ children }: { children: React.ReactNode })
 
   const rejectRequest: DTCRequestsContextValue["rejectRequest"] = (id, reason) => {
     let updated: DTCRequest | null = null
-    setRequests((prev) =>
-      prev.map((r) => {
+    setRequests(
+      requests.map((r) => {
         if (r.id === id && r.status === "pending") {
           updated = {
             ...r,

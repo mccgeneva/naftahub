@@ -1,25 +1,25 @@
 // ---------------------------------------------------------------------------
-// Demo / showcase data seeding.
+// Canonical demo / showcase dataset (pure, server-safe).
 //
-// The demo account (user u3) is pre-populated on first login with strong
-// simulated performance data across every section of the platform: large
-// multi-currency balances and transaction history, approved payments, active
-// bank instruments, yield/PPP investments, beneficiaries, Download-of-Funds and
-// DTC settlements, a commodity deal, and an active leverage line.
+// The demo account (user u3) is pre-populated with strong simulated performance
+// data across every section of the platform: large multi-currency balances and
+// transaction history, approved payments, active bank instruments, yield/PPP
+// investments, beneficiaries, Download-of-Funds and DTC settlements, a
+// commodity deal, an active leverage line and SKR receipts.
 //
-// Seeding is:
-//   • scoped to user u3 only (other users are never touched),
-//   • written to that user's namespaced localStorage keys (full isolation),
-//   • run exactly once (guarded by a marker key) so the demo can still create /
-//     reset data afterwards without it being re-seeded on every login.
+// This module contains ONLY pure data producers — no `window`, no localStorage,
+// no server-only imports — so it can be consumed by the server seeding action
+// (app/actions/demo-seed.ts) which writes the records into Neon, keyed by the
+// demo user's id, exactly like any other client-authored data. The records are
+// shaped to match each store's view-model so they round-trip through the
+// `approval_requests.payload.record` convention the migrated stores read from.
 // ---------------------------------------------------------------------------
 
-import { scopedKey, getActiveUserId } from "@/lib/user-scope"
-import { DEMO_USER_ID } from "@/lib/users"
 import { generateUetr } from "@/lib/swift-gpi"
 import { demoBeneficiaries } from "@/lib/demo-beneficiaries"
+import { DEMO_USER_ID } from "@/lib/users"
 
-const SEED_MARKER = "mcc.demo-seeded.v1"
+export { demoBeneficiaries }
 
 // ISO timestamp for `n` days before now.
 function daysAgo(n: number): string {
@@ -34,16 +34,8 @@ function dateAhead(n: number): string {
   return new Date(Date.now() + n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 }
 
-function write(baseKey: string, value: unknown) {
-  try {
-    window.localStorage.setItem(scopedKey(baseKey), JSON.stringify(value))
-  } catch {
-    // ignore quota / availability errors
-  }
-}
-
 // --- Ledger: large completed multi-currency balances + history -------------
-function ledgerEntries() {
+export function ledgerEntries() {
   return [
     { id: "PPY8842170", direction: "credit", amount: 250_000_000, currency: "USD", status: "completed", date: daysAgo(96), counterparty: "BlackRock Institutional Trust", account: "0048871220", bank: "JPMorgan Chase, New York", reference: "MT103/UBO-SETTLE-9920", comment: "Institutional capital settlement", category: "Capital Inflow" },
     { id: "PPY8839004", direction: "credit", amount: 180_000_000, currency: "USD", status: "completed", date: daysAgo(74), counterparty: "US Treasury Note Redemption", account: "TSY-2027-A", bank: "Federal Reserve Bank", reference: "DTC/BOND-RDM-4471", comment: "Treasury note redemption proceeds", category: "Securities" },
@@ -65,7 +57,7 @@ function ledgerEntries() {
 }
 
 // --- Payments: approved large transfers + one pending ----------------------
-function paymentRequests() {
+export function paymentRequests() {
   const mk = (amount: number, currency: string) => {
     const fee = Math.round(amount * 0.02)
     return { amount, fee, total: amount + fee, currency }
@@ -79,7 +71,7 @@ function paymentRequests() {
 }
 
 // --- Yield / PPP: active high-performing investments -----------------------
-function pppRequests() {
+export function pppRequests() {
   return [
     { id: "PPP-DEMO-0001", programId: "mcc-platinum-40", programName: "MCC Platinum Yield Programme", expectedReturn: "40% per annum", returnFrequency: "Monthly", duration: "12 months", currency: "USD", amount: 150_000_000, sourceOfFunds: "Institutional capital settlement", payoutAccount: "Master Account (USD)", status: "approved", submittedAt: daysAgo(80), decidedAt: daysAgo(78) },
     { id: "PPP-DEMO-0002", programId: "mcc-managed-buysell", programName: "Managed Buy/Sell Trade Programme", expectedReturn: "6.5% per month", returnFrequency: "Weekly", duration: "40 weeks", currency: "EUR", amount: 200_000_000, sourceOfFunds: "Mandate funding", payoutAccount: "Master Account (EUR)", status: "approved", submittedAt: daysAgo(60), decidedAt: daysAgo(58) },
@@ -88,7 +80,7 @@ function pppRequests() {
 }
 
 // --- Bank instruments: active, high face-value -----------------------------
-function instruments() {
+export function instruments() {
   return [
     { id: "INS-DEMO-0001", type: "SBLC", typeFull: "Standby Letter of Credit", issuer: "Barclays Bank PLC, London", faceValue: 500_000_000, currency: "USD", status: "active", issuedDate: dateAgo(120), expiryDate: dateAhead(245), daysRemaining: 245, rating: "AA / Aa2", purpose: "Trade finance collateral & monetization", assignable: true, monetizable: true, tradeType: "Leased", submittedAt: daysAgo(122), decidedAt: daysAgo(120) },
     { id: "INS-DEMO-0002", type: "BG", typeFull: "Bank Guarantee", issuer: "Deutsche Bank AG, Frankfurt", faceValue: 250_000_000, currency: "EUR", status: "active", issuedDate: dateAgo(90), expiryDate: dateAhead(275), daysRemaining: 275, rating: "A+ / A1", purpose: "Performance guarantee — commodity contract", assignable: true, monetizable: true, tradeType: "Owned", submittedAt: daysAgo(92), decidedAt: daysAgo(90) },
@@ -97,7 +89,7 @@ function instruments() {
 }
 
 // --- Download of Funds: approved institutional inflow ----------------------
-function dofRequests() {
+export function dofRequests() {
   return [
     { id: "DOF-DEMO0001", uetr: generateUetr(), amount: 250_000_000, currency: "USD", valueDate: dateAgo(96), purpose: "Institutional capital settlement — UBO funds", originatorName: "BlackRock Institutional Trust", originatorBank: "JPMorgan Chase Bank N.A.", originatorBankBic: "CHASUS33", originatorAccount: "US64SVBKUS6S3300958879048", originatorCountry: "United States", correspondentBank: "Citibank N.A.", correspondentBic: "CITIUS33", mt103Ref: "MT103-DEMO-9920", mt202Ref: "MT202-DEMO-9921", pofReference: "POF-DEMO-4471", bclReference: "BCL-DEMO-3320", settlementMethod: "SWIFT", isin: "", cusip: "", notes: "Funds credited to master account", status: "approved", submittedAt: daysAgo(98), decidedAt: daysAgo(96) },
     { id: "DOF-DEMO0002", uetr: generateUetr(), amount: 320_000_000, currency: "EUR", valueDate: dateAgo(88), purpose: "Discretionary mandate funding", originatorName: "Deutsche Bank Private Wealth", originatorBank: "Deutsche Bank AG", originatorBankBic: "DEUTDEFF", originatorAccount: "DE89370400440532013000", originatorCountry: "Germany", correspondentBank: "Commerzbank AG", correspondentBic: "COBADEFF", mt103Ref: "MT103-DEMO-2210", mt202Ref: "MT202-DEMO-2211", pofReference: "POF-DEMO-2299", bclReference: "BCL-DEMO-2288", settlementMethod: "SWIFT", isin: "", cusip: "", notes: "Mandate funding credited", status: "approved", submittedAt: daysAgo(90), decidedAt: daysAgo(88) },
@@ -105,7 +97,7 @@ function dofRequests() {
 }
 
 // --- DTC / Euroclear: approved securities settlements -----------------------
-function dtcRequests() {
+export function dtcRequests() {
   return [
     { id: "DTC-DEMO0001", uetr: generateUetr(), depository: "DTC", direction: "deliver", settlementBasis: "DVP", securityName: "US Treasury Note 4.25% 2027", securityType: "Treasury Note", isin: "US91282CEZ76", cusip: "91282CEZ7", quantity: 180_000_000, pricePercent: "100.000", cashAmount: 180_000_000, currency: "USD", participantNumber: "DTC-2207", agentBank: "BNY Mellon", agentBankBic: "IRVTUS3N", counterpartyName: "Goldman Sachs & Co", counterpartyParticipant: "DTC-0005", counterpartyBic: "GSCCUS33", tradeDate: dateAgo(76), valueDate: dateAgo(74), mt54xRef: "MT543-DEMO-4471", poaReference: "POA-DEMO-4470", notes: "Bond redemption settled DVP", status: "approved", submittedAt: daysAgo(77), decidedAt: daysAgo(74) },
     { id: "DTC-DEMO0002", uetr: generateUetr(), depository: "Euroclear", direction: "receive", settlementBasis: "DVP", securityName: "MCC Structured Note Series A", securityType: "MTN", isin: "XS2345678901", cusip: "", quantity: 140_000_000, pricePercent: "100.000", cashAmount: 140_000_000, currency: "EUR", participantNumber: "ECLR-90021", agentBank: "Euroclear Bank SA", agentBankBic: "MGTCBEBE", counterpartyName: "Deutsche Bank AG", counterpartyParticipant: "ECLR-11023", counterpartyBic: "DEUTDEFF", tradeDate: dateAgo(59), valueDate: dateAgo(57), mt54xRef: "MT541-DEMO-8841", poaReference: "POA-DEMO-8840", notes: "Securities received versus payment", status: "approved", submittedAt: daysAgo(60), decidedAt: daysAgo(57) },
@@ -113,7 +105,7 @@ function dtcRequests() {
 }
 
 // --- Commodity deal: approved / executed with verified documents -----------
-function commodityDeals() {
+export function commodityDeals() {
   const popVer = { version: 1, fileName: "SGS-Inspection-2025-0042.pdf", reference: "SGS-2025-0042", issuedBy: "SGS SA, Geneva", issueDate: dateAgo(40), notes: "Quality & quantity verified", uploadedAt: daysAgo(40) }
   const pofVer = { version: 1, fileName: "BCL-Barclays-3320.pdf", reference: "BCL-3320", issuedBy: "Barclays Bank PLC", issueDate: dateAgo(42), notes: "Bank Comfort Letter confirmed", uploadedAt: daysAgo(42) }
   return [
@@ -153,7 +145,7 @@ function commodityDeals() {
 }
 
 // --- Leverage: active high-equity line --------------------------------------
-function leverageRequests() {
+export function leverageRequests() {
   const equity = 200_000_000
   const ratio = 10
   return [
@@ -178,7 +170,7 @@ function leverageRequests() {
 }
 
 // --- SKR Trading: safe keeping receipts held under custody ------------------
-function skrRecords() {
+export function skrRecords() {
   return [
     {
       id: "SKR-480021",
@@ -243,48 +235,4 @@ function skrRecords() {
       updatedAt: daysAgo(30),
     },
   ]
-}
-
-/**
- * Seed the demo account's data exactly once. No-op for every non-demo user and
- * on subsequent logins (guarded by a per-user marker key). Safe to call on
- * every dashboard mount.
- */
-const SKR_SEED_MARKER = "mcc.demo-seeded-skr.v1"
-
-export function ensureDemoSeed() {
-  if (typeof window === "undefined") return
-  if (getActiveUserId() !== DEMO_USER_ID) return
-
-  // One-time SKR backfill: seed SKR records for demo accounts that were already
-  // seeded before the SKR module existed, without re-seeding everything else.
-  try {
-    if (!window.localStorage.getItem(scopedKey(SKR_SEED_MARKER))) {
-      if (!window.localStorage.getItem(scopedKey("mcc.skr-records.v1"))) {
-        write("mcc.skr-records.v1", skrRecords())
-      }
-      write(SKR_SEED_MARKER, { seededAt: new Date().toISOString(), version: 1 })
-    }
-  } catch {
-    // ignore availability errors
-  }
-
-  try {
-    if (window.localStorage.getItem(scopedKey(SEED_MARKER))) return
-  } catch {
-    return
-  }
-
-  write("mcc.ledger.v1", ledgerEntries())
-  write("mcc.payment-requests.v1", paymentRequests())
-  write("mcc.ppp-requests.v1", pppRequests())
-  write("mcc.instruments.v1", instruments())
-  write("mcc.beneficiaries.v1", demoBeneficiaries())
-  write("mcc.dof-requests.v1", dofRequests())
-  write("mcc.dtc-requests.v1", dtcRequests())
-  write("mcc.commodity-deals.v1", commodityDeals())
-  write("mcc.leverage-requests.v1", leverageRequests())
-  write("mcc.skr-records.v1", skrRecords())
-
-  write(SEED_MARKER, { seededAt: new Date().toISOString(), version: 1 })
 }

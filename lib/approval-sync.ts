@@ -51,6 +51,102 @@ export async function mirrorSubmission(input: MirrorInput): Promise<string | nul
   }
 }
 
+/**
+ * The shape of a single approval record as returned by `GET /api/approvals`.
+ * This is the full DB record (see `ApprovalRequest` in `lib/approvals-db.ts`):
+ * the complete view-model each store needs lives in `payload`, with the
+ * authoritative lifecycle in `status` / `decidedAt` / `decisionNote`.
+ */
+export interface ApprovalRecord {
+  id: string
+  kind: ApprovalKind
+  status: string
+  title: string
+  summary: string
+  amount: number | null
+  currency: string | null
+  payload: Record<string, unknown>
+  decisionNote: string | null
+  decidedAt: string | null
+  createdAt: string
+  requiresMasterApproval?: boolean
+  masterDecision?: string | null
+  adminDecision?: string | null
+}
+
+/**
+ * Hydrate a store's ENTIRE list from the server (the single source of truth).
+ * Fetches the signed-in user's approvals for `kind`, maps each DB record into
+ * the store's view-model via `fromApproval`, and returns them newest-first.
+ *
+ * This replaces per-browser `localStorage` hydration: because the list is
+ * rebuilt from Neon on every load, a user's requests follow them across any
+ * device or browser, and an admin decision / reset is always reflected.
+ * Never throws — returns `null` on failure so the caller can decide how to
+ * surface a transient fetch error (typically: keep showing nothing / retry).
+ */
+export async function hydrateListFromDb<T>(
+  kind: ApprovalKind,
+  fromApproval: (record: ApprovalRecord) => T | null,
+): Promise<T[] | null> {
+  try {
+    const res = await fetch(`/api/approvals?kind=${encodeURIComponent(kind)}`, { cache: "no-store" })
+    if (!res.ok) return null
+    const data = (await res.json()) as { ok: boolean; items?: ApprovalRecord[] }
+    if (!data.ok || !Array.isArray(data.items)) return null
+    const mapped: T[] = []
+    for (const rec of data.items) {
+      const vm = fromApproval(rec)
+      if (vm) mapped.push(vm)
+    }
+    return mapped
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Map a DB approval lifecycle status onto a store's own status vocabulary.
+ * `pending`/`approved`/`rejected`/`cancelled` cover every store; pass overrides
+ * for stores that rename them (e.g. instruments call approved "active").
+ */
+export function mapApprovalStatus(
+  dbStatus: string,
+  options?: { approvedStatus?: string; rejectedStatus?: string; pendingStatus?: string; cancelledStatus?: string },
+): string {
+  switch (dbStatus) {
+    case "approved":
+      return options?.approvedStatus ?? "approved"
+    case "rejected":
+      return options?.rejectedStatus ?? "rejected"
+    case "cancelled":
+      return options?.cancelledStatus ?? "cancelled"
+    default:
+      return options?.pendingStatus ?? "pending"
+  }
+}
+
+/**
+ * Rebuild a store's view-model from an approval record, given that the store
+ * wrote its COMPLETE record into `payload.record` on submit (the convention
+ * used across all migrated stores). The DB lifecycle fields always win, so an
+ * admin decision / cancellation is reflected no matter which device made it.
+ */
+export function recordFromApproval<T extends Reconcilable & { id: string }>(
+  rec: ApprovalRecord,
+  options?: { approvedStatus?: string; rejectedStatus?: string; pendingStatus?: string; cancelledStatus?: string },
+): T | null {
+  const base = rec.payload?.record as T | undefined
+  if (!base || typeof base !== "object") return null
+  return {
+    ...base,
+    approvalId: rec.id,
+    status: mapApprovalStatus(rec.status, options),
+    decidedAt: rec.decidedAt ?? base.decidedAt,
+    decisionNote: rec.decisionNote ?? base.decisionNote,
+  }
+}
+
 /** A local record that has been mirrored carries the DB approval id + status. */
 export interface Reconcilable {
   approvalId?: string

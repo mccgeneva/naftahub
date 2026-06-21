@@ -1,9 +1,8 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
-import { scopedKey } from "@/lib/user-scope"
+import { createContext, useContext } from "react"
 import { mirrorSubmission } from "@/lib/approval-sync"
-import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
+import { useServerRequestList } from "@/lib/use-server-request-list"
 
 export type PPPRequestStatus = "pending" | "approved" | "rejected"
 
@@ -26,9 +25,6 @@ export interface PPPRequest {
   decisionNote?: string // administrator note (e.g. rejection reason)
 }
 
-const KEY_BASE = "mcc.ppp-requests.v1"
-const storageKey = () => scopedKey(KEY_BASE)
-
 interface PPPRequestsContextValue {
   requests: PPPRequest[]
   /** Create a new pending PPP application awaiting Administrator approval. */
@@ -45,62 +41,10 @@ interface PPPRequestsContextValue {
 const PPPRequestsContext = createContext<PPPRequestsContextValue | null>(null)
 
 export function PPPRequestsProvider({ children }: { children: React.ReactNode }) {
-  const [requests, setRequests] = useState<PPPRequest[]>([])
-  const [hydrated, setHydrated] = useState(false)
-
-  // Load persisted requests once on mount so applications survive navigation,
-  // reloads, and logout/login.
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(storageKey())
-      setRequests(stored ? (JSON.parse(stored) as PPPRequest[]) : [])
-    } catch {
-      setRequests([])
-    }
-    setHydrated(true)
-  }, [])
-
-  // Persist on change, but only after hydration to avoid clobbering stored data.
-  useEffect(() => {
-    if (!hydrated) return
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(requests))
-    } catch {
-      // ignore quota/availability errors
-    }
-  }, [requests, hydrated])
-
-  // Keep state in sync when the data changes in another tab/window (e.g. the
-  // Administrator approves in one place while the client views in another) or
-  // when the user returns to a tab that was open in the background.
-  useEffect(() => {
-    if (!hydrated) return
-    const resync = () => {
-      try {
-        const stored = window.localStorage.getItem(storageKey())
-        setRequests(stored ? (JSON.parse(stored) as PPPRequest[]) : [])
-      } catch {
-        // ignore parse/availability errors
-      }
-    }
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === storageKey()) resync()
-    }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") resync()
-    }
-    window.addEventListener("storage", onStorage)
-    window.addEventListener("focus", resync)
-    document.addEventListener("visibilitychange", onVisible)
-    return () => {
-      window.removeEventListener("storage", onStorage)
-      window.removeEventListener("focus", resync)
-      document.removeEventListener("visibilitychange", onVisible)
-    }
-  }, [hydrated])
-
-  // Reconcile administrator decisions made cross-client (in the DB) back here.
-  useApprovalReconcile("ppp", hydrated, requests, setRequests)
+  // Source of truth is the server (Neon `approval_requests`); the list follows
+  // the user across devices and reflects admin decisions. No localStorage.
+  const { records: requests, setRecords: setRequests, hydrated, refresh } =
+    useServerRequestList<PPPRequest>("ppp")
 
   const addRequest: PPPRequestsContextValue["addRequest"] = (request) => {
     const full: PPPRequest = {
@@ -108,26 +52,24 @@ export function PPPRequestsProvider({ children }: { children: React.ReactNode })
       status: "pending",
       submittedAt: new Date().toISOString(),
     }
-    setRequests((prev) => [full, ...prev])
-    // Mirror into the DB so the Administrator can review it cross-client.
+    setRequests([full, ...requests])
+    // Mirror into the DB so the Administrator can review it cross-client. The
+    // complete record is stored under `payload.record` for cross-device rebuild.
     void mirrorSubmission({
       kind: "ppp",
       title: full.programName,
       summary: `${full.currency} ${full.amount.toLocaleString("en-US")} into ${full.programName} (${full.expectedReturn} ${full.returnFrequency})`,
       amount: full.amount,
       currency: full.currency,
-      payload: { localId: full.id, programId: full.programId, sourceOfFunds: full.sourceOfFunds },
-    }).then((approvalId) => {
-      if (!approvalId) return
-      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
-    })
+      payload: { localId: full.id, programId: full.programId, sourceOfFunds: full.sourceOfFunds, record: full },
+    }).then(() => void refresh())
     return full
   }
 
   const approveRequest: PPPRequestsContextValue["approveRequest"] = (id) => {
     let updated: PPPRequest | null = null
-    setRequests((prev) =>
-      prev.map((r) => {
+    setRequests(
+      requests.map((r) => {
         if (r.id === id && r.status === "pending") {
           updated = { ...r, status: "approved", decidedAt: new Date().toISOString() }
           return updated
@@ -140,8 +82,8 @@ export function PPPRequestsProvider({ children }: { children: React.ReactNode })
 
   const rejectRequest: PPPRequestsContextValue["rejectRequest"] = (id, reason) => {
     let updated: PPPRequest | null = null
-    setRequests((prev) =>
-      prev.map((r) => {
+    setRequests(
+      requests.map((r) => {
         if (r.id === id && r.status === "pending") {
           updated = {
             ...r,

@@ -28,16 +28,14 @@ export type ResetAccountResult =
   | { ok: false; error: string }
 
 /**
- * Per-account "reset epoch". The balance/transactions and most stores are ALSO
- * cached in each user's own browser localStorage. An admin reset runs on the
- * admin's device + the server, so it can never reach the user's localStorage —
- * which is why "I reset but the money is still there after the user logs in".
+ * Per-account "reset epoch": a server-side timestamp stamped on every reset.
  *
- * The fix: stamp a server-side timestamp here on every reset. The client (see
- * components/account-reset-gate.tsx) compares this epoch against a locally
- * stored one on load and, when the server's is newer, purges all local account
- * stores before the data providers hydrate. The server is thus the single
- * source of truth and a reset always "sticks", on any device.
+ * The stores now hydrate exclusively from Neon (no localStorage caching) and
+ * poll/refetch on an interval and on window focus, so a reset that wipes the
+ * server tables surfaces to the client on its own — no client-side purge gate is
+ * needed. This timestamp is retained as a lightweight, durable audit signal of
+ * when an account was last reset, exposed via getMyResetEpoch for any future
+ * "your account was reset" surfacing.
  */
 let resetMarksEnsured = false
 async function ensureResetMarksTable(): Promise<void> {

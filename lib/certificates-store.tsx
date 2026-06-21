@@ -1,7 +1,6 @@
 "use client"
 
 import { createContext, useContext, useEffect, useRef, useState } from "react"
-import { scopedKey } from "@/lib/user-scope"
 import {
   buildCertificateRequest,
   type CertificateRequest,
@@ -16,40 +15,17 @@ import { getMyCertificateRequests, syncMyCertificateRequests } from "@/app/actio
 // (Compliance desk) must APPROVE a request before the certificate can be
 // issued/downloaded.
 //
-// Persistence now mirrors the beneficiaries feature: the DURABLE source of
-// truth is Neon (lib/certificates-db.ts via app/actions/certificates.ts), so an
-// administrator can see and decide on a client's requests from ANY device — the
-// previous localStorage-only design meant requests made on the client's browser
-// were invisible to the admin panel running in a different browser/session. A
-// local cache still seeds the first paint and acts as a fallback when the
-// database is unavailable (e.g. local dev without DATABASE_URL).
+// Persistence is server-only: the single source of truth is Neon
+// (lib/certificates-db.ts via app/actions/certificates.ts), so an administrator
+// can see and decide on a client's requests from ANY device, and a client's
+// requests follow them across any device/browser. Nothing is read from or
+// written to localStorage — the list is fetched on mount, re-fetched on focus,
+// and polled so administrator decisions appear without a manual reload.
 // ---------------------------------------------------------------------------
 
 // Re-export the pure logic so existing imports from "@/lib/certificates-store"
 // keep working unchanged.
 export * from "@/lib/certificates-shared"
-
-const REQUESTS_KEY = "mcc.certificate-requests.v1"
-const requestsKey = () => scopedKey(REQUESTS_KEY)
-
-function readCache(): CertificateRequest[] {
-  if (typeof window === "undefined") return []
-  try {
-    const raw = window.localStorage.getItem(requestsKey())
-    return raw ? (JSON.parse(raw) as CertificateRequest[]) : []
-  } catch {
-    return []
-  }
-}
-
-function writeCache(requests: CertificateRequest[]) {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.setItem(requestsKey(), JSON.stringify(requests))
-  } catch {
-    // ignore quota/availability errors
-  }
-}
 
 interface CertificatesContextValue {
   requests: CertificateRequest[]
@@ -74,7 +50,7 @@ export function CertificateRequestsProvider({ children }: { children: React.Reac
   const loadFromServer = () => {
     getMyCertificateRequests()
       .then((res) => {
-        if (res.ok && res.requests.length) {
+        if (res.ok) {
           skipNextSync.current = true
           setRequests(res.requests)
         }
@@ -82,14 +58,11 @@ export function CertificateRequestsProvider({ children }: { children: React.Reac
       .catch(() => {})
   }
 
-  // Seed instantly from the local cache, then reconcile with the server.
+  // Hydrate from the server (single source of truth) on mount.
   useEffect(() => {
-    const cached = readCache()
-    if (cached.length) setRequests(cached)
-
     getMyCertificateRequests()
       .then((res) => {
-        if (res.ok && res.requests.length) {
+        if (res.ok) {
           skipNextSync.current = true
           setRequests(res.requests)
         }
@@ -99,11 +72,11 @@ export function CertificateRequestsProvider({ children }: { children: React.Reac
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Persist on change: write the local cache (instant) and mirror to the server
-  // (durable). The server merge preserves administrator-owned lifecycle fields.
+  // Persist on change: mirror to the server (durable). The server merge
+  // preserves administrator-owned lifecycle fields. The first write after a
+  // server-driven setRequests is skipped so we never echo fetched data back.
   useEffect(() => {
     if (!hydrated) return
-    writeCache(requests)
     if (skipNextSync.current) {
       skipNextSync.current = false
       return
@@ -113,8 +86,8 @@ export function CertificateRequestsProvider({ children }: { children: React.Reac
     ).catch(() => {})
   }, [requests, hydrated])
 
-  // Re-fetch from the server when the client returns to the tab, so a freshly
-  // approved/declined certificate appears without a manual reload.
+  // Re-fetch from the server when the client returns to the tab and on a 30s
+  // poll, so a freshly approved/declined certificate appears without a reload.
   useEffect(() => {
     if (!hydrated) return
     const onFocus = () => loadFromServer()
@@ -123,9 +96,11 @@ export function CertificateRequestsProvider({ children }: { children: React.Reac
     }
     window.addEventListener("focus", onFocus)
     document.addEventListener("visibilitychange", onVisible)
+    const id = setInterval(loadFromServer, 30000)
     return () => {
       window.removeEventListener("focus", onFocus)
       document.removeEventListener("visibilitychange", onVisible)
+      clearInterval(id)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated])
