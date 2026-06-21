@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { ArrowUpRight, ArrowDownRight, TrendingUp, Wallet, Building2, FileText, ChevronRight } from "lucide-react"
+import { ArrowUpRight, ArrowDownRight, TrendingUp, Wallet, Building2, FileText, ChevronRight, Lock } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import { useLedger, convertCurrency } from "@/lib/ledger-store"
@@ -40,7 +40,7 @@ function formatEur(amount: number): string {
 }
 
 export function PortfolioOverview() {
-  const { totalIn, balanceFor, entries, currencies } = useLedger()
+  const { totalIn, balanceFor, reservedFor, entries, currencies } = useLedger()
   const { instruments } = useInstrumentRequests()
   const { beneficiaries } = useBeneficiaries()
 
@@ -65,6 +65,8 @@ export function PortfolioOverview() {
     name: currencyNames[cur] || cur,
     balance: balanceFor(cur),
     formatted: formatMoney(balanceFor(cur), cur),
+    reserved: reservedFor(cur),
+    reservedFormatted: formatMoney(reservedFor(cur), cur),
   }))
 
   // Volume received over the trailing 30 days, aggregating every currency's
@@ -151,6 +153,12 @@ export function PortfolioOverview() {
                 <div className="mt-2 text-xl font-bold text-foreground break-all">
                   {cb.formatted}
                 </div>
+                {cb.reserved > 0 && (
+                  <div className="mt-1 flex items-center gap-1 text-[11px] font-medium text-amber-600">
+                    <Lock className="h-3 w-3" />
+                    {cb.reservedFormatted} reserved
+                  </div>
+                )}
               </Link>
             ))}
           </div>

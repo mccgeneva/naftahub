@@ -145,8 +145,12 @@ interface LedgerContextValue {
   addReceipt: (entry: Omit<LedgerEntry, "direction">) => LedgerEntry
   /** Record an outgoing payment (debit). Returns the stored entry. */
   addDebit: (entry: Omit<LedgerEntry, "direction">) => LedgerEntry
-  /** Net available balance for a currency: completed credits minus completed debits. */
+  /** Net available balance for a currency: completed credits minus completed
+   *  debits, minus any funds currently on hold (reserved). Reserved funds are
+   *  not spendable, so they are excluded from the available balance. */
   balanceFor: (currency: string) => number
+  /** Funds currently reserved/blocked (sum of held debits) for a currency. */
+  reservedFor: (currency: string) => number
   /** Aggregated balance of every currency converted into the target currency. */
   totalIn: (currency: string) => number
   /** All currencies that have at least one entry. */
@@ -235,10 +239,23 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
     return full
   }
 
-  const balanceFor = (currency: string) =>
+  // Funds currently reserved/blocked: held debits (e.g. an approved commodity
+  // deal earmarking funds to settle the supplier). Held credits are ignored —
+  // incoming pending money is not yet available either way.
+  const reservedFor = (currency: string) =>
     entries
+      .filter((e) => e.currency === currency && e.status === "hold" && e.direction === "debit")
+      .reduce((sum, e) => sum + e.amount, 0)
+
+  // Available (spendable) balance: settled credits minus settled debits, minus
+  // anything currently on hold. Reserved funds cannot be spent, so they reduce
+  // the available balance everywhere it is read (send, payments, exchange…).
+  const balanceFor = (currency: string) => {
+    const settled = entries
       .filter((e) => e.currency === currency && e.status === "completed")
       .reduce((sum, e) => sum + (e.direction === "credit" ? e.amount : -e.amount), 0)
+    return settled - reservedFor(currency)
+  }
 
   const currencies = useMemo(
     () => Array.from(new Set(entries.map((e) => e.currency))),
@@ -286,7 +303,7 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <LedgerContext.Provider
-      value={{ entries, setEntries, addReceipt, addDebit, balanceFor, totalIn, currencies, refresh, hydrated }}
+      value={{ entries, setEntries, addReceipt, addDebit, balanceFor, reservedFor, totalIn, currencies, refresh, hydrated }}
     >
       {children}
     </LedgerContext.Provider>
