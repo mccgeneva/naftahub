@@ -27,7 +27,7 @@ import {
   type LedgerEffect,
 } from "@/lib/approvals-db"
 import { KIND_LABELS, KIND_HREF, type ApprovalKind } from "@/lib/approval-kinds"
-import { recordGatewayDepositForApproval } from "@/app/actions/reconciliation"
+import { recordGatewayDepositForApproval, backfillGatewayDepositsForUser } from "@/app/actions/reconciliation"
 import { MASTER_CONSENT_KINDS } from "@/lib/account-hierarchy"
 
 // --- Auth helpers -----------------------------------------------------------
@@ -535,8 +535,15 @@ export async function reconcileMyApprovedCredits(): Promise<{ ok: boolean; appli
   const session = await resolveCurrentSession()
   if (!session) return { ok: false, applied: 0 }
   try {
-    const mine = await listApprovalsForUser(session.id)
-    const approved = mine.filter((r) => r.status === "approved")
+  // Collect-funds deposits RECEIVED from other parties: sweep any approved
+  // payment addressed to one of this user's gateway IBANs into a credit on
+  // their ledger, so collected funds reflect on the Master Account balance and
+  // the matching currency card from any screen — not only the gateway page.
+  // Idempotent (keyed on GWD-<approvalId>), so it never double-credits.
+  await backfillGatewayDepositsForUser(session.id).catch(() => {})
+
+  const mine = await listApprovalsForUser(session.id)
+  const approved = mine.filter((r) => r.status === "approved")
     let applied = 0
     for (const req of approved) {
       const entry = ledgerEntryForApproval(req)

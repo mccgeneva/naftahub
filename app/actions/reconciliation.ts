@@ -3,7 +3,7 @@
 import { query } from "@/lib/db"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { type UserProfile } from "@/lib/users"
-import { resolveAccountProfileById, resolveCurrentSession } from "@/lib/session-user"
+import { resolveAccountProfileById, resolveCurrentSession, resolveDataOwnerIdFor } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import type { GatewayAccount, FundingEvent } from "@/lib/gateway-store"
 import type { LedgerEntry } from "@/lib/ledger-store"
@@ -324,6 +324,11 @@ export async function recordGatewayDepositForApproval(
       comment: `Inbound transfer from ${sender.fullName} (approved payment ${approval.id}, reference ${reference}) auto-matched by IBAN to gateway account ${account.id} and credited to the Master Account.${fxNote}`,
     }
 
+    // Post to the gateway owner's DATA-OWNER ledger (a Sub-account's Master
+    // holds the shared balance) so the Master Account balance and the matching
+    // currency card on the dashboard overview both reflect the collected funds.
+    const ledgerOwnerId = await resolveDataOwnerIdFor(account.userId)
+
     await query(
       `INSERT INTO ledger_entries
          (user_id, entry_id, direction, amount, currency, status, entry_date,
@@ -331,7 +336,7 @@ export async function recordGatewayDepositForApproval(
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        ON CONFLICT (user_id, entry_id) DO NOTHING`,
       [
-        account.userId,
+        ledgerOwnerId,
         entry.id,
         entry.direction,
         entry.amount,
