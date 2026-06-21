@@ -31,7 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Check, X, Loader2, ClipboardList, Filter, RefreshCw, User, Wallet, PackageCheck } from "lucide-react"
+import { Check, X, Loader2, ClipboardList, Filter, RefreshCw, User, Wallet, PackageCheck, Ban } from "lucide-react"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
 import {
@@ -39,6 +39,7 @@ import {
   adminDecideApproval,
   adminBulkDecide,
   adminMarkCommodityDelivered,
+  adminRevokeCommodityDeal,
 } from "@/app/actions/approvals"
 import {
   getClientFinancialSnapshotAdmin,
@@ -77,7 +78,11 @@ const statusVariant: Record<ApprovalStatus, "default" | "secondary" | "destructi
 }
 
 export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }) {
-  const [statusFilter, setStatusFilter] = useState<ApprovalStatus | "all">("pending")
+  // For commodity, default to showing every status so the administrator can act
+  // on already-approved deals (revoke / mark delivered), not just pending ones.
+  const [statusFilter, setStatusFilter] = useState<ApprovalStatus | "all">(
+    initialKind === "commodity" ? "all" : "pending",
+  )
   const [kindFilter, setKindFilter] = useState<ApprovalKind | "all">(initialKind ?? "all")
 
   // When the admin deep-links from a command-center tile, focus that type.
@@ -93,6 +98,10 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
   // Reject-with-reason dialog state. `bulk` true → applies to selection.
   const [rejectTarget, setRejectTarget] = useState<{ id?: string; bulk: boolean } | null>(null)
   const [rejectReason, setRejectReason] = useState("")
+
+  // Revoke-approved-deal dialog state (commodity). Releases the reserved funds.
+  const [revokeTarget, setRevokeTarget] = useState<{ id: string; label: string } | null>(null)
+  const [revokeReason, setRevokeReason] = useState("")
 
   // Client financial-snapshot dialog (due-diligence before approving).
   const [clientView, setClientView] = useState<{
@@ -213,6 +222,21 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
       return
     }
     toast.success("Deal flagged delivered. It is now locked from client revocation.")
+    mutate()
+  }
+
+  const confirmRevoke = async () => {
+    if (!revokeTarget) return
+    setActing(true)
+    const res = await adminRevokeCommodityDeal(ADMIN_PASSCODE, revokeTarget.id, revokeReason)
+    setActing(false)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    toast.success("Deal revoked. The reserved funds have been released back to the client's balance.")
+    setRevokeTarget(null)
+    setRevokeReason("")
     mutate()
   }
 
@@ -501,6 +525,16 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                       >
                         <PackageCheck className="h-3.5 w-3.5" /> Mark delivered
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 gap-1 text-destructive"
+                        disabled={acting}
+                        onClick={() => setRevokeTarget({ id: req.id, label: `${req.title}` })}
+                        title="Revoke this approved deal and release the reserved funds back to the client."
+                      >
+                        <Ban className="h-3.5 w-3.5" /> Revoke
+                      </Button>
                     </div>
                   )}
                 </li>
@@ -535,6 +569,43 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
             <Button variant="destructive" onClick={confirmReject} disabled={acting || !rejectReason.trim()}>
               {acting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <X className="mr-1 h-4 w-4" />}
               Confirm rejection
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Revoke approved commodity deal dialog */}
+      <Dialog open={revokeTarget !== null} onOpenChange={(o) => !o && !acting && setRevokeTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Ban className="h-4 w-4 text-destructive" />
+              Revoke approved deal
+            </DialogTitle>
+            <DialogDescription className="text-pretty">
+              {revokeTarget ? (
+                <>
+                  This cancels the approved deal{" "}
+                  <span className="font-medium text-foreground">{revokeTarget.label}</span> and releases the
+                  reserved funds back to the client&apos;s available balance. The client will be notified. This
+                  cannot be undone.
+                </>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={revokeReason}
+            onChange={(e) => setRevokeReason(e.target.value)}
+            placeholder="Optional note for the client and audit trail…"
+            className="min-h-24 text-base md:text-sm"
+          />
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setRevokeTarget(null)} disabled={acting}>
+              Keep deal
+            </Button>
+            <Button variant="destructive" onClick={confirmRevoke} disabled={acting}>
+              {acting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Ban className="mr-1 h-4 w-4" />}
+              Revoke &amp; release funds
             </Button>
           </DialogFooter>
         </DialogContent>

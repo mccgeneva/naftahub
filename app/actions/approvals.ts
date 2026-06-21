@@ -18,6 +18,7 @@ import {
   recordMasterDecision,
   cancelApproval,
   revokeApprovedApproval,
+  adminRevokeApprovedApproval,
   markApprovalDelivered,
   getApprovalById,
   type ApprovalRequest,
@@ -615,6 +616,84 @@ export async function adminMarkCommodityDelivered(
   } catch (err) {
     console.log("[v0] adminMarkCommodityDelivered failed:", (err as Error).message)
     return { ok: false, error: "The deal could not be marked delivered. Please try again." }
+  }
+}
+
+/**
+ * Administrator REVOKES an approved commodity deal (before delivery) and REFUNDS
+ * the reserved funds. Refuses a delivered deal (it is finalized). Releases only
+ * the reservation hold (`APPR-<id>`), unfreezing the blocked money back to the
+ * owner's available balance; any FX conversion legs executed to fund the deal
+ * are intentionally left in place, mirroring the client-revoke policy.
+ */
+export async function adminRevokeCommodityDeal(
+  passcode: string,
+  id: string,
+  note?: string,
+): Promise<DecideResult> {
+  if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
+  try {
+    const existing = await getApprovalById(id)
+    if (!existing) return { ok: false, error: "Deal not found." }
+    if (existing.kind !== "commodity") {
+      return { ok: false, error: "Only commodity deals can be revoked here." }
+    }
+    if (existing.status !== "approved") {
+      return { ok: false, error: "Only an approved deal can be revoked." }
+    }
+    if (existing.payload?.delivered === true) {
+      return { ok: false, error: "This deal has been delivered and can no longer be revoked." }
+    }
+
+    const revoked = await adminRevokeApprovedApproval(id, note)
+    if (!revoked) return { ok: false, error: "This deal can no longer be revoked." }
+
+    // Release the reservation hold → unfreeze the blocked funds for the owner.
+    const ownerId = await resolveDataOwnerIdFor(existing.userId)
+    try {
+      await deleteLedgerEntry(ownerId, `APPR-${id}`)
+    } catch (err) {
+      console.log("[v0] admin hold release failed:", (err as Error).message)
+    }
+
+    try {
+      await insertNotification({
+        userId: existing.userId,
+        tone: "info",
+        title: "Commodity deal revoked",
+        body: `Your commodity deal "${existing.title}" was revoked by MCC Capital${note?.trim() ? ` — ${note.trim()}` : ""}. The reserved funds have been released back to your available balance.`,
+        href: KIND_HREF.commodity ?? "/dashboard/commodity",
+      })
+    } catch (err) {
+      console.log("[v0] admin revoke notification failed:", (err as Error).message)
+    }
+
+    try {
+      const target = await resolveAccountProfileById(existing.userId)
+      await logActivity({
+        action: `Administrator revoked commodity deal "${existing.title}" for ${target.fullName} and released reserved funds`,
+        category: "Administration / Approvals",
+        user: "Administrator",
+        details: {
+          referenceId: existing.id,
+          targetAccount: `${target.fullName} — ${target.email}`,
+          summary: existing.summary || existing.title,
+          amount:
+            existing.amount != null
+              ? `${existing.currency ?? ""} ${existing.amount.toLocaleString("en-US")}`
+              : "(n/a)",
+          decision: "Revoked",
+          reason: note?.trim() || "(none)",
+        },
+      })
+    } catch (err) {
+      console.log("[v0] admin revoke activity log failed:", (err as Error).message)
+    }
+
+    return { ok: true, request: revoked }
+  } catch (err) {
+    console.log("[v0] adminRevokeCommodityDeal failed:", (err as Error).message)
+    return { ok: false, error: "The deal could not be revoked. Please try again." }
   }
 }
 
