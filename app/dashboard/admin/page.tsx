@@ -36,7 +36,7 @@ import {
   CreditCard,
   Send,
 } from "lucide-react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -4076,13 +4076,23 @@ export default function AdminPage() {
       {/* Commodity Deals section */}
       {activeView === "commodity" && (
       <div className="space-y-6">
-      {/* Pending Commodity Deals (POP / POF review + execution authorization) */}
+      {/* Cross-client approval queue (DB-backed): every commodity deal a client
+          registers — including one-click quotation requests — appears here for
+          approval/rejection regardless of which device it was submitted from. */}
+      <PendingApprovals initialKind="commodity" />
+
+      {/* Pending Commodity Deals (POP / POF review + execution authorization) —
+          rich document review for deals present in this session's local store. */}
       <Card id="section-commodity" className="bg-card border-border">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg font-semibold">
             <Ship className="h-5 w-5 text-primary" />
-            Pending Commodity Deals
+            POP / POF Document Review &amp; Execution
           </CardTitle>
+          <CardDescription className="text-pretty">
+            Detailed Proof of Product / Proof of Funds review for deals available on this device.
+            Use the approval queue above to approve or reject the registered deal itself.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {pendingDeals.length === 0 ? (

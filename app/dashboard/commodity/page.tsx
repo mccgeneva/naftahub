@@ -632,16 +632,18 @@ export default function CommodityTradingPage() {
                 />
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+                  <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-primary" />
                   Submitting creates a pending deal. The Administrator must authorize execution.
                 </p>
-                <div className="flex gap-2">
-                  <Button variant="outline" onClick={resetForm}>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button variant="outline" className="w-full sm:w-auto" onClick={resetForm}>
                     Clear
                   </Button>
-                  <Button onClick={handleSubmitDeal}>Submit for Authorization</Button>
+                  <Button className="w-full sm:w-auto" onClick={handleSubmitDeal}>
+                    Submit for Authorization
+                  </Button>
                 </div>
               </div>
             </CardContent>
