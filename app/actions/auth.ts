@@ -30,11 +30,14 @@ export type LoginState = { error?: string }
  */
 async function clearAllSessionCookies() {
   const cookieStore = await cookies()
+  // Overwrite each cookie with an empty, already-expired value using the SAME
+  // attributes it was set with. Do NOT also call `cookieStore.delete(name)`
+  // here: `delete` emits a second, attribute-less `Set-Cookie` for the same
+  // name that WINS over this one, and an attribute-less clear cannot remove a
+  // `SameSite=None; Secure` cookie — which would leave the session alive and
+  // make logout appear to do nothing (the proxy re-authenticates on redirect).
   for (const name of [SESSION_COOKIE, SESSION_META_COOKIE, USER_COOKIE, FRESH_LOGIN_COOKIE]) {
     cookieStore.set(name, "", expiredCookieOptions)
-    // Belt-and-braces: also issue the attribute-less delete in case a cookie was
-    // ever set with different attributes in an older build.
-    cookieStore.delete(name)
   }
 }
 
