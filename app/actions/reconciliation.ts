@@ -15,7 +15,7 @@ import {
   type ReconciliationStatus,
 } from "@/lib/reconciliation"
 import { parseSwiftMessage, toReconciliationInput } from "@/lib/swift-mt"
-import { getApprovalById } from "@/lib/approvals-db"
+import { getApprovalById, listApprovalsForUser } from "@/lib/approvals-db"
 
 /** Strip a IBAN/account string down to comparable A–Z0–9 (uppercase). */
 function normalizeIban(raw: string | undefined | null): string {
@@ -342,6 +342,26 @@ export async function recordGatewayDepositForApproval(
   } catch (err) {
     console.log("[v0] recordGatewayDepositForApproval failed:", (err as Error).message)
     return { matched: false }
+  }
+}
+
+/**
+ * Back-fill sweep: ensure every APPROVED outgoing payment owned by `userId`
+ * that is addressed to one of their active gateway IBANs has been recorded as a
+ * received deposit. Safe to call on every Collect-funds page load — it is
+ * idempotent (each match keys on `GWD-<approvalId>`), so it only ever records a
+ * deposit that is genuinely missing. This catches payments approved through any
+ * path (including before the on-approval hook existed).
+ */
+export async function backfillGatewayDepositsForUser(userId: string): Promise<void> {
+  try {
+    const payments = await listApprovalsForUser(userId, "payment")
+    const approved = payments.filter((p) => p.status === "approved")
+    for (const p of approved) {
+      await recordGatewayDepositForApproval(p.id)
+    }
+  } catch (err) {
+    console.log("[v0] backfillGatewayDepositsForUser failed:", (err as Error).message)
   }
 }
 
