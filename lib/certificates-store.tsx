@@ -6,7 +6,24 @@ import {
   type CertificateRequest,
   type NewCertificateInput,
 } from "@/lib/certificates-shared"
-import { getMyCertificateRequests, syncMyCertificateRequests } from "@/app/actions/certificates"
+import { syncMyCertificateRequests } from "@/app/actions/certificates"
+
+// Read through the GET Route Handler (`/api/certificates`), NOT the
+// `getMyCertificateRequests` Server Action: Server Actions are serialized with
+// client navigations and would freeze the dashboard's first navigation when ~20
+// providers all read on login. A route-handler fetch stays off that queue. The
+// write path (`syncMyCertificateRequests`) stays a Server Action — it only fires
+// on a deliberate user change, never during the login mount storm.
+async function fetchCertificateRequests(): Promise<CertificateRequest[] | null> {
+  try {
+    const res = await fetch("/api/certificates", { cache: "no-store" })
+    if (!res.ok) return null
+    const json = (await res.json()) as { ok: boolean; requests?: CertificateRequest[] }
+    return json.ok && Array.isArray(json.requests) ? json.requests : null
+  } catch {
+    return null
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Official bank certificates store (client provider).
@@ -48,26 +65,23 @@ export function CertificateRequestsProvider({ children }: { children: React.Reac
   const skipNextSync = useRef(true)
 
   const loadFromServer = () => {
-    getMyCertificateRequests()
-      .then((res) => {
-        if (res.ok) {
-          skipNextSync.current = true
-          setRequests(res.requests)
-        }
-      })
-      .catch(() => {})
+    void fetchCertificateRequests().then((requests) => {
+      if (requests) {
+        skipNextSync.current = true
+        setRequests(requests)
+      }
+    })
   }
 
   // Hydrate from the server (single source of truth) on mount.
   useEffect(() => {
-    getMyCertificateRequests()
-      .then((res) => {
-        if (res.ok) {
+    fetchCertificateRequests()
+      .then((requests) => {
+        if (requests) {
           skipNextSync.current = true
-          setRequests(res.requests)
+          setRequests(requests)
         }
       })
-      .catch(() => {})
       .finally(() => setHydrated(true))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

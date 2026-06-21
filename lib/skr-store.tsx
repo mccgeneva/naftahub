@@ -1,11 +1,7 @@
 "use client"
 
 import { createContext, useContext, useCallback, useEffect, useRef, useState } from "react"
-import {
-  getMySkrRecords,
-  getMySkrRequests,
-  syncMySkrRequests,
-} from "@/app/actions/skr"
+import { syncMySkrRequests } from "@/app/actions/skr"
 
 // ---------------------------------------------------------------------------
 // SKR (Safe Keeping Receipt) Trading Platform store.
@@ -149,19 +145,33 @@ export function SkrProvider({ children }: { children: React.ReactNode }) {
   // read-only for the client (administrator-owned); requests are mirrored back
   // on change. We guard the next request-mirror so applying server data doesn't
   // bounce straight back.
-  const reconcile = useCallback(() => {
-    return Promise.all([getMySkrRecords(), getMySkrRequests()])
-      .then(([rec, req]) => {
-        if (rec.ok) {
-          skipNextSync.current = true
-          setRecords(rec.items.map((r) => r.data as unknown as SkrRecord))
-        }
-        if (req.ok) {
-          skipNextSync.current = true
-          setRequests(req.items.map((r) => r.data as unknown as SkrRequest))
-        }
-      })
-      .catch(() => {})
+  // Read through the GET Route Handler (`/api/skr`), NOT the `getMySkr*` Server
+  // Actions: Server Actions are serialized with client navigations and would
+  // freeze the dashboard's first navigation when ~20 providers all read on
+  // login. A route-handler fetch stays off that queue. The write path
+  // (`syncMySkrRequests`) stays a Server Action — it only fires on a deliberate
+  // user action, never during the login mount storm.
+  const reconcile = useCallback(async () => {
+    try {
+      const res = await fetch("/api/skr", { cache: "no-store" })
+      if (!res.ok) return
+      const json = (await res.json()) as {
+        ok: boolean
+        records?: { data: unknown }[]
+        requests?: { data: unknown }[]
+      }
+      if (!json.ok) return
+      if (Array.isArray(json.records)) {
+        skipNextSync.current = true
+        setRecords(json.records.map((r) => r.data as unknown as SkrRecord))
+      }
+      if (Array.isArray(json.requests)) {
+        skipNextSync.current = true
+        setRequests(json.requests.map((r) => r.data as unknown as SkrRequest))
+      }
+    } catch {
+      // keep whatever we already have on a transient failure
+    }
   }, [])
 
   // Load once on mount from Neon (durable, cross-device, admin-managed), then

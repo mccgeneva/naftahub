@@ -17,7 +17,6 @@
 // ---------------------------------------------------------------------------
 
 import { createContext, useContext, useEffect, useState, useCallback } from "react"
-import { getMyTreasury } from "@/app/actions/treasury"
 
 // --- Account profiles & their required security deposits --------------------
 
@@ -249,10 +248,16 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   const [account, setAccount] = useState<TreasuryAccount>(() => emptyTreasuryAccount())
   const [hydrated, setHydrated] = useState(false)
 
+  // Read through the GET Route Handler (`/api/treasury`), NOT the `getMyTreasury`
+  // Server Action: Server Actions are serialized with client navigations and
+  // would freeze the dashboard's first navigation when ~20 providers all read on
+  // login. A route-handler fetch stays off that queue.
   const refresh = useCallback(async () => {
     try {
-      const next = await getMyTreasury()
-      setAccount(next)
+      const res = await fetch("/api/treasury", { cache: "no-store" })
+      if (!res.ok) return
+      const json = (await res.json()) as { ok: boolean; account?: TreasuryAccount }
+      if (json.ok && json.account) setAccount(json.account)
     } catch {
       // keep whatever we already have on a transient failure
     }
