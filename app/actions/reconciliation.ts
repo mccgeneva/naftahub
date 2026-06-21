@@ -247,13 +247,20 @@ export async function recordGatewayDepositForApproval(
     if (!Number.isFinite(amount) || amount <= 0) return { matched: false }
 
     const currency = (approval.currency ?? "").toUpperCase()
+    if (!currency) return { matched: false }
 
     const accounts = await readActiveAccounts()
     const matches = accounts.filter(
       (a) =>
+        // SECURITY: a payment may only fund the SENDER's own collect-funds
+        // account. Without this scope a payment could credit a different user's
+        // gateway that happens to share the same IBAN.
+        a.userId === approval.userId &&
         a.coordinates?.scheme === "iban" &&
         normalizeIban(a.coordinates?.iban) === beneficiaryIban &&
-        (!currency || a.currency.toUpperCase() === currency),
+        // Exact currency match only — never silently fund a GBP account from an
+        // EUR transfer (or vice-versa); that would mix currencies on one balance.
+        a.currency.toUpperCase() === currency,
     )
     // Require an unambiguous single match before moving money.
     if (matches.length !== 1) return { matched: false }
