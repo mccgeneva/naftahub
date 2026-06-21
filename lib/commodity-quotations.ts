@@ -165,6 +165,20 @@ export interface Quote {
 
 const dayKey = (d: Date) => `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`
 
+/**
+ * Competitive market discount applied to every live quotation to keep the desk
+ * attractive vs. the wider market: -5% for barrel-priced (bbl) products and
+ * -10% for metric-ton-priced (MT) products. Applied uniformly to FOB and CIF.
+ */
+export const MARKET_DISCOUNT: Record<"bbl" | "MT", number> = {
+  bbl: 0.05,
+  MT: 0.1,
+}
+
+function discountFactor(product: PetroleumProduct): number {
+  return 1 - (MARKET_DISCOUNT[product.unit] ?? 0)
+}
+
 /** Daily anchor price for a product (stable for the whole calendar day). */
 function dailyBase(product: PetroleumProduct, d: Date): number {
   const today = signedFactor(`${product.id}|${dayKey(d)}`)
@@ -192,14 +206,17 @@ export function getQuote(
   const hour = now.getUTCHours()
   const wobble = signedFactor(`${product.id}|${port.id}|${dayKey(now)}|${hour}`) * product.volatility * 0.25
 
-  // FOB = daily base × port differential × intraday wobble.
-  const fob = base * (1 + port.fobDiff) * (1 + wobble)
+  // Competitive market discount (-5%/bbl, -10%/MT) applied to all quotations.
+  const discount = discountFactor(product)
+
+  // FOB = daily base × port differential × intraday wobble × market discount.
+  const fob = base * (1 + port.fobDiff) * (1 + wobble) * discount
 
   // CIF premium over FOB scales with freight tier and product volatility.
   const cifPremium = (0.012 + port.freightTier * 0.009 + product.volatility * 0.4)
   const price = basis === "CIF" ? fob * (1 + cifPremium) : fob
 
-  const prevFob = prevBase * (1 + port.fobDiff)
+  const prevFob = prevBase * (1 + port.fobDiff) * discount
   const prevPrice = basis === "CIF" ? prevFob * (1 + cifPremium) : prevFob
   const changePct = (price - prevPrice) / prevPrice
 
