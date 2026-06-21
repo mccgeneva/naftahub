@@ -39,7 +39,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { cn } from "@/lib/utils"
 import { useActivityLog } from "@/components/activity-tracker"
-import { useLedger, creditUserLedger } from "@/lib/ledger-store"
+import { useLedger } from "@/lib/ledger-store"
 import { usePaymentRequests } from "@/lib/payment-requests-store"
 import { useCurrentUser } from "@/lib/use-current-user"
 import type { TransferDirectoryEntry } from "@/lib/users"
@@ -53,6 +53,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { resolveTransferRecipient } from "@/app/actions/transfers"
+import { sendInstantTransfer } from "@/app/actions/ledger"
 import { toast } from "sonner"
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "JPY", "AUD", "CAD", "SGD"]
@@ -115,7 +116,7 @@ type HistoryRow = {
 
 export default function SendMoneyPage() {
   const logActivity = useActivityLog()
-  const { entries, balanceFor, addDebit, hydrated } = useLedger()
+  const { entries, balanceFor, refresh, hydrated } = useLedger()
   const { show } = usePdfViewer()
   const { requests, addRequest } = usePaymentRequests()
 
@@ -149,6 +150,7 @@ export default function SendMoneyPage() {
     undefined,
   )
   const [resolvingRecipient, setResolvingRecipient] = useState(false)
+  const [sending, setSending] = useState(false)
 
   useEffect(() => {
     const email = recipientEmail.trim()
@@ -281,58 +283,27 @@ export default function SendMoneyPage() {
       return
     }
 
-    const ref = reference.trim() || `ITR-${new Date().getTime().toString().slice(-8)}`
-    const nowIso = new Date().toISOString()
-    const senderLabel = `${self.fullName || self.company} (${self.email})`
-    const recipientLabel = `${recipient.displayName} (${recipient.email})`
-
-    const credited = creditUserLedger(recipient.id, {
-      id: ref,
+    // Settle the transfer SERVER-SIDE so both parties see it on any device or
+    // browser. (Posting to the browser's localStorage only made the money appear
+    // on the same browser, never cross-device.) The server validates the
+    // recipient and the sender's available balance, then posts both ledger legs.
+    setSending(true)
+    const result = await sendInstantTransfer({
+      recipientEmail: recipient.email,
       amount: amountValue,
       currency,
-      status: "completed",
-      date: nowIso,
-      counterparty: senderLabel,
-      account: self.email,
-      bank: "MCC Capital — Internal Transfer",
-      reference: ref,
-      comment: note.trim() || `Internal transfer received from ${senderLabel}.`,
-      category: INSTANT_CATEGORY,
+      note: note.trim(),
+      reference: reference.trim(),
     })
+    setSending(false)
 
-    if (!credited) {
-      setFormError("The transfer could not be completed. Please try again.")
+    if (!result.ok) {
+      setFormError(result.error)
       return
     }
 
-    addDebit({
-      id: ref,
-      amount: amountValue,
-      currency,
-      status: "completed",
-      date: nowIso,
-      counterparty: recipientLabel,
-      account: recipient.email,
-      bank: "MCC Capital — Internal Transfer",
-      reference: ref,
-      comment: note.trim() || `Internal transfer sent to ${recipientLabel}.`,
-      category: INSTANT_CATEGORY,
-    })
-
-    logActivity({
-      action: `Sent an instant internal transfer of ${formatCurrency(amountValue, currency)} to ${recipient.email}`,
-      category: "Payments",
-      details: {
-        summary: `Client sent an instant internal P2P transfer of ${formatCurrency(amountValue, currency)} to ${recipient.displayName} (${recipient.email}). Funds were debited from this account and credited to the recipient in real time. Reference: ${ref}.`,
-        referenceId: ref,
-        recipientEmail: recipient.email,
-        recipientName: recipient.displayName,
-        amount: formatCurrency(amountValue, currency),
-        currency,
-        note: note.trim() || "(none)",
-        settlement: "Instant / Internal",
-      },
-    })
+    // Pull the authoritative server ledger so the sender's debit shows instantly.
+    refresh()
 
     toast.success("Transfer sent instantly", {
       description: `${formatCurrency(amountValue, currency)} delivered to ${recipient.displayName} (${recipient.email}).`,
@@ -701,10 +672,10 @@ export default function SendMoneyPage() {
               <Button
                 className="w-full"
                 onClick={handleInstantSend}
-                disabled={!resolvedRecipient || recipientIsSelf}
+                disabled={!resolvedRecipient || recipientIsSelf || sending}
               >
                 <Zap className="mr-2 h-4 w-4" />
-                Send Instantly
+                {sending ? "Sending…" : "Send Instantly"}
               </Button>
             ) : (
               <Button className="w-full" onClick={handleApprovalSend}>

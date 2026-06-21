@@ -3,7 +3,8 @@
 import { query, isDatabaseConfigured } from "@/lib/db"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { type UserProfile } from "@/lib/users"
-import { resolveAccountProfileById, resolveCurrentSession } from "@/lib/session-user"
+import { resolveAccountProfileById, resolveCurrentSession, resolveDataOwnerIdFor } from "@/lib/session-user"
+import { getDynamicUserByEmail } from "@/lib/admin-users-db"
 import { logActivity } from "@/app/actions/log-activity"
 import type { LedgerEntry } from "@/lib/ledger-store"
 
@@ -175,6 +176,141 @@ export async function removeMyLedgerEntry(entryId: string): Promise<{ ok: boolea
   } catch (err) {
     console.log("[v0] removeMyLedgerEntry failed:", (err as Error).message)
     return { ok: false }
+  }
+}
+
+/**
+ * Net available balance for a currency from a server-side ledger: settled
+ * credits − settled debits − held debits. Mirrors the client `balanceFor` so
+ * the server enforces the same spendable amount.
+ */
+function availableBalanceFor(entries: LedgerEntry[], currency: string): number {
+  let settled = 0
+  let held = 0
+  for (const e of entries) {
+    if (e.currency !== currency) continue
+    if (e.status === "completed") {
+      settled += e.direction === "credit" ? e.amount : -e.amount
+    } else if (e.status === "hold" && e.direction === "debit") {
+      held += e.amount
+    }
+  }
+  return settled - held
+}
+
+export type InstantTransferResult =
+  | { ok: true; reference: string; entries: LedgerEntry[] }
+  | { ok: false; error: string }
+
+/**
+ * Execute an instant internal P2P transfer SERVER-SIDE so it is durable and
+ * visible to both parties on any device/browser. Previously the credit was
+ * written only to the sender's browser localStorage, so the recipient saw the
+ * money on the same browser (shared localStorage) but not when logging in
+ * elsewhere. This posts BOTH legs to the Neon ledger: a debit on the sender's
+ * (data-owner) ledger and a credit on the recipient's (data-owner) ledger.
+ */
+export async function sendInstantTransfer(input: {
+  recipientEmail: string
+  amount: number
+  currency: string
+  note?: string
+  reference?: string
+}): Promise<InstantTransferResult> {
+  const session = await resolveCurrentSession()
+  if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
+
+  if (!isDatabaseConfigured) return { ok: false, error: DB_NOT_CONFIGURED_MSG }
+
+  const amount = Number(input.amount)
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, error: "Enter a valid amount greater than 0." }
+  }
+  const currency = (input.currency || "EUR").toUpperCase()
+  const email = (input.recipientEmail || "").trim().toLowerCase()
+  if (!email) return { ok: false, error: "Enter the recipient's registered email address." }
+
+  // Resolve recipient against the durable account directory.
+  const recipient = await getDynamicUserByEmail(email)
+  if (!recipient || recipient.status !== "active") {
+    return { ok: false, error: "No active platform account is registered to that email address." }
+  }
+
+  const senderOwnerId = session.dataOwnerId
+  const recipientOwnerId = await resolveDataOwnerIdFor(recipient.id)
+  if (senderOwnerId === recipientOwnerId) {
+    return { ok: false, error: "You cannot send an instant transfer to your own account." }
+  }
+
+  try {
+    // Server-side balance enforcement: never allow an overdraft.
+    const senderEntries = await readLedger(senderOwnerId)
+    const available = availableBalanceFor(senderEntries, currency)
+    if (amount > available) {
+      return {
+        ok: false,
+        error: `Insufficient funds. This transfer needs ${currency} ${amount.toLocaleString("en-US")} but only ${currency} ${available.toLocaleString("en-US")} is available.`,
+      }
+    }
+
+    const ref = (input.reference || "").trim() || `ITR-${Date.now().toString().slice(-8)}`
+    const nowIso = new Date().toISOString()
+    const senderProfile = session.profile
+    const senderLabel = `${senderProfile.fullName || senderProfile.company} (${senderProfile.email})`
+    const recipientLabel = `${recipient.profile.fullName || recipient.profile.company || recipient.email} (${recipient.email})`
+    const note = (input.note || "").trim()
+
+    // Credit the recipient (shared owner ledger). Distinct entry id so it never
+    // collides with the sender's debit under the same (user_id, entry_id) key.
+    await upsertEntry(recipientOwnerId, {
+      id: `${ref}-IN`,
+      direction: "credit",
+      amount,
+      currency,
+      status: "completed",
+      date: nowIso,
+      counterparty: senderLabel,
+      account: senderProfile.email,
+      bank: "MCC Capital — Internal Transfer",
+      reference: ref,
+      comment: note || `Internal transfer received from ${senderLabel}.`,
+      category: "Internal Transfer",
+    })
+
+    // Debit the sender (shared owner ledger).
+    await upsertEntry(senderOwnerId, {
+      id: `${ref}-OUT`,
+      direction: "debit",
+      amount,
+      currency,
+      status: "completed",
+      date: nowIso,
+      counterparty: recipientLabel,
+      account: recipient.email,
+      bank: "MCC Capital — Internal Transfer",
+      reference: ref,
+      comment: note || `Internal transfer sent to ${recipientLabel}.`,
+      category: "Internal Transfer",
+    })
+
+    await logActivity({
+      action: `Sent an instant internal transfer of ${currency} ${amount.toLocaleString("en-US")} to ${recipient.email}`,
+      category: "Payments",
+      details: {
+        summary: `Instant internal P2P transfer of ${currency} ${amount.toLocaleString("en-US")} from ${senderLabel} to ${recipientLabel}. Settled in real time on the server ledger. Reference: ${ref}.`,
+        referenceId: ref,
+        recipientEmail: recipient.email,
+        amount: `${currency} ${amount.toLocaleString("en-US")}`,
+        currency,
+        note: note || "(none)",
+        settlement: "Instant / Internal",
+      },
+    })
+
+    return { ok: true, reference: ref, entries: await readLedger(senderOwnerId) }
+  } catch (err) {
+    console.log("[v0] sendInstantTransfer failed:", (err as Error).message)
+    return { ok: false, error: "The transfer could not be completed. Please try again." }
   }
 }
 
