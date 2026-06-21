@@ -12,12 +12,23 @@ import {
   MapPin,
   Droplet,
   Info,
+  ShoppingCart,
+  Loader2,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Select,
   SelectContent,
@@ -34,7 +45,13 @@ import {
   formatQuotePrice,
   type PriceBasis,
   type ProductCategory,
+  type PetroleumProduct,
+  type Port,
 } from "@/lib/commodity-quotations"
+import { useCommodityDeals } from "@/lib/commodity-deals-store"
+import { useCurrentUser } from "@/lib/use-current-user"
+import { useActivityLog } from "@/components/activity-tracker"
+import { toast } from "sonner"
 
 type CompareMode = "port" | "product"
 type ViewMode = "cards" | "table"
@@ -69,6 +86,13 @@ export function CommodityQuotations() {
   const [category, setCategory] = useState<ProductCategory | "All">("All")
   const [search, setSearch] = useState("")
   const [tick, setTick] = useState(0)
+
+  // One-click product request: holds the quotation context to pre-fill the form.
+  const [requestSeed, setRequestSeed] = useState<{
+    product: PetroleumProduct
+    port: Port
+    basis: PriceBasis
+  } | null>(null)
 
   // Re-tick every 60s so the "last updated" stamp stays fresh and the board
   // re-evaluates on each hour boundary.
@@ -352,6 +376,7 @@ export function CommodityQuotations() {
                     {showFob && <th className="px-4 py-3 text-right font-medium">FOB</th>}
                     {showCif && <th className="px-4 py-3 text-right font-medium">CIF</th>}
                     <th className="px-4 py-3 text-right font-medium">24h</th>
+                    <th className="px-4 py-3 text-right font-medium">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -385,6 +410,23 @@ export function CommodityQuotations() {
                       )}
                       <td className="px-4 py-3 text-right">
                         <ChangeIndicator pct={(showCif ? row.cif : row.fob).changePct} />
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8"
+                          onClick={() =>
+                            setRequestSeed({
+                              product: row.product,
+                              port: row.port,
+                              basis: showCif ? "CIF" : "FOB",
+                            })
+                          }
+                        >
+                          <ShoppingCart className="h-3.5 w-3.5" />
+                          <span className="ml-1.5 hidden sm:inline">Request</span>
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -429,11 +471,29 @@ export function CommodityQuotations() {
                     </div>
                   )}
                 </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() =>
+                    setRequestSeed({
+                      product: row.product,
+                      port: row.port,
+                      basis: showCif ? "CIF" : "FOB",
+                    })
+                  }
+                >
+                  <ShoppingCart className="mr-1.5 h-3.5 w-3.5" />
+                  Request product
+                </Button>
               </CardContent>
             </Card>
           ))}
         </div>
       )}
+
+      {/* One-click purchase request form, pre-filled from the chosen quotation. */}
+      <RequestProductDialog seed={requestSeed} onClose={() => setRequestSeed(null)} />
     </div>
   )
 }
@@ -453,5 +513,232 @@ function SelectGroupBlock({ category }: { category: ProductCategory }) {
         </SelectItem>
       ))}
     </>
+  )
+}
+
+// Streamlined one-click purchase request, pre-filled from a selected quotation.
+// On submit it creates a pending commodity deal that mirrors into the shared
+// approval engine — identical workflow to the full Deal Workflow tab.
+function RequestProductDialog({
+  seed,
+  onClose,
+}: {
+  seed: { product: PetroleumProduct; port: Port; basis: PriceBasis } | null
+  onClose: () => void
+}) {
+  const { addDeal } = useCommodityDeals()
+  const user = useCurrentUser()
+  const log = useActivityLog()
+
+  const [basis, setBasis] = useState<PriceBasis>("CIF")
+  const [portId, setPortId] = useState<string>(PORTS[0].id)
+  const [quantity, setQuantity] = useState("")
+  const [notes, setNotes] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+
+  // Re-seed the form whenever a new quotation is selected from the board.
+  useEffect(() => {
+    if (!seed) return
+    setBasis(seed.basis)
+    setPortId(seed.port.id)
+    setQuantity("")
+    setNotes("")
+    setSubmitting(false)
+  }, [seed])
+
+  const product = seed?.product ?? null
+  const port = PORTS.find((p) => p.id === portId) ?? seed?.port ?? PORTS[0]
+
+  const quote = useMemo(
+    () => (product ? getQuote(product, port, basis, new Date()) : null),
+    [product, port, basis],
+  )
+
+  const qtyNum = Number.parseFloat(quantity.replace(/,/g, ""))
+  const qtyValid = Number.isFinite(qtyNum) && qtyNum > 0
+  const estValue = quote && qtyValid ? quote.price * qtyNum : 0
+
+  const handleSubmit = () => {
+    if (!product || !quote || !qtyValid) {
+      toast.error("Enter a valid quantity")
+      return
+    }
+    setSubmitting(true)
+    const unitLabel = product.unit
+    const buyer = user.company?.trim() || user.fullName?.trim() || "Client account"
+    const deal = addDeal({
+      title: `${product.name} — ${basis} Purchase Request`,
+      category: "Commodity Trade",
+      tradeStructure: basis,
+      commodity: product.name,
+      quantity: `${qtyNum.toLocaleString("en-US")} ${unitLabel}`,
+      approxValue: estValue,
+      currency: "USD",
+      buyerName: buyer,
+      sellerName: "MCC Global Commodity Desk",
+      sendingBank: "",
+      sendingBankBic: "",
+      receivingBank: "",
+      receivingBankBic: "",
+      instrumentType: "Cash",
+      originCountry: port.country,
+      destinationCountry: "",
+      mt103Ref: "",
+      mt202Ref: "",
+      mt799Ref: "",
+      notes:
+        `Quotation request from board: ${product.name} (${product.category}) @ ` +
+        `${formatQuotePrice(quote.price, unitLabel)} ${basis}, ${port.name}, ${port.country}. ` +
+        (notes.trim() ? `Client notes: ${notes.trim()}` : "No additional notes."),
+    })
+    toast.success("Purchase request submitted", {
+      description: `${deal.id} created for ${product.name}. Pending Administrator approval.`,
+    })
+    log({
+      action: `Client requested ${product.name} (${basis}) from quotations board`,
+      category: "Commodity Trading",
+      details: {
+        summary: `Client submitted a one-click purchase request ${deal.id} for ${qtyNum.toLocaleString("en-US")} ${unitLabel} of ${product.name} on ${basis} basis at ${port.name}, ${port.country} (~$${estValue.toLocaleString("en-US", { maximumFractionDigits: 0 })}). Pending review.`,
+        referenceId: deal.id,
+        uetr: deal.uetr,
+        commodity: product.name,
+        basis,
+        port: `${port.name}, ${port.country}`,
+      },
+    })
+    onClose()
+  }
+
+  return (
+    <Dialog open={!!seed} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-[520px]">
+        {product && quote && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <ShoppingCart className="h-4 w-4 text-primary" />
+                Request {product.name}
+              </DialogTitle>
+              <DialogDescription>
+                Pre-filled from the live quotations board. Submit to create a pending purchase
+                request for Administrator approval — nothing executes automatically.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 py-1">
+              {/* Pre-filled product summary */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg bg-secondary/30 p-2.5">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Product</p>
+                  <p className="text-sm font-medium text-foreground">{product.name}</p>
+                  <p className="text-xs text-muted-foreground">{product.category}</p>
+                </div>
+                <div className="rounded-lg bg-primary/10 p-2.5">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Indicative {basis}
+                  </p>
+                  <p className="text-sm font-semibold tabular-nums text-foreground">
+                    {formatQuotePrice(quote.price, product.unit)}
+                  </p>
+                  <ChangeIndicator pct={quote.changePct} />
+                </div>
+              </div>
+
+              {/* Basis + port */}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Delivery terms</Label>
+                  <Select value={basis} onValueChange={(v) => setBasis(v as PriceBasis)}>
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="CIF">CIF (Cost, Insurance &amp; Freight)</SelectItem>
+                      <SelectItem value="FOB">FOB (Free On Board)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Port / terminal</Label>
+                  <Select value={portId} onValueChange={setPortId}>
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PORTS.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name} — {p.country}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Quantity */}
+              <div className="space-y-1.5">
+                <Label className="text-xs">Quantity required ({product.unit})</Label>
+                <div className="relative">
+                  <Input
+                    inputMode="decimal"
+                    value={quantity}
+                    onChange={(e) => setQuantity(e.target.value)}
+                    placeholder={product.unit === "bbl" ? "e.g. 1,000,000" : "e.g. 50,000"}
+                    className="h-9 pr-12"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                    {product.unit}
+                  </span>
+                </div>
+              </div>
+
+              {/* Estimated value */}
+              <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/20 px-3 py-2.5">
+                <span className="text-xs text-muted-foreground">Estimated contract value</span>
+                <span className="text-base font-bold tabular-nums text-foreground">
+                  {qtyValid
+                    ? `$${estValue.toLocaleString("en-US", { maximumFractionDigits: 0 })}`
+                    : "—"}
+                </span>
+              </div>
+
+              {/* Notes */}
+              <div className="space-y-1.5">
+                <Label className="text-xs">Additional requirements / notes</Label>
+                <Textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  rows={3}
+                  placeholder="Inspection (SGS), target delivery window, destination port, payment instrument preference, etc."
+                />
+              </div>
+
+              <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                <p className="text-pretty text-xs text-muted-foreground">
+                  Indicative pricing only. The desk confirms firm pricing and allocation after review.
+                  Your request joins the Pending Approvals queue and follows the standard SKR / POP /
+                  POF workflow.
+                </p>
+              </div>
+            </div>
+
+            <DialogFooter className="flex-col gap-2 sm:flex-row">
+              <Button variant="outline" onClick={onClose} disabled={submitting}>
+                Cancel
+              </Button>
+              <Button onClick={handleSubmit} disabled={!qtyValid || submitting}>
+                {submitting ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <ShoppingCart className="mr-2 h-4 w-4" />
+                )}
+                Submit request
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
