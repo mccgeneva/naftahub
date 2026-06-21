@@ -37,6 +37,9 @@ export interface UserProfile {
   shortName: string // header line 1
   fullName: string // full legal/representative name
   initials: string // avatar fallback
+  /** Optional uploaded profile picture (public Blob URL). When set, it is shown
+   *  in place of the initials avatar everywhere the user is represented. */
+  avatarUrl?: string
   company: string // entity name
   role: string // job title / role
   headerTag: string // small tag under the short name in the header

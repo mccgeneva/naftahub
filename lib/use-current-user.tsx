@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react"
 import { getUserById, UNKNOWN_USER_ID, type UserProfile } from "@/lib/users"
 import { hydrateProfile } from "@/lib/profile-types"
 import { getMyIdentity, type MyIdentity } from "@/app/actions/admin-users"
@@ -29,6 +29,19 @@ import { SESSION_IDLE_MAX_AGE } from "@/lib/auth"
  */
 
 const CurrentUserContext = createContext<UserProfile | null>(null)
+
+/** Imperative actions that let UI update the shared identity in place. Kept in a
+ *  separate context so the many read-only `useCurrentUser()` consumers don't
+ *  need to change. */
+interface CurrentUserActions {
+  /** Reflect a newly uploaded / removed avatar immediately, before the next
+   *  server re-confirm. Pass `null` to clear it. */
+  setAvatarUrl: (url: string | null) => void
+  /** Re-fetch the authoritative identity from the server. */
+  refreshIdentity: () => void
+}
+
+const CurrentUserActionsContext = createContext<CurrentUserActions | null>(null)
 
 function resolveNeutral(): UserProfile {
   return getUserById(UNKNOWN_USER_ID)
@@ -80,6 +93,22 @@ export function CurrentUserProvider({
 
   const initialId = initialIdentity?.id
 
+  const refreshIdentity = useCallback(() => {
+    getMyIdentity()
+      .then((identity) => {
+        const profile = identityToProfile(identity)
+        reconcileUserCookie(profile.id !== UNKNOWN_USER_ID ? profile.id : undefined)
+        setUser(profile)
+      })
+      .catch(() => {
+        // ignore — keep the current identity on a transient failure.
+      })
+  }, [])
+
+  const setAvatarUrl = useCallback((url: string | null) => {
+    setUser((prev) => ({ ...prev, avatarUrl: url ?? undefined }))
+  }, [])
+
   useEffect(() => {
     // Re-confirm against the server after mount. The layout already provides the
     // correct identity per request, but this keeps a long-lived client session
@@ -103,7 +132,16 @@ export function CurrentUserProvider({
     }
   }, [initialId])
 
-  return <CurrentUserContext.Provider value={user}>{children}</CurrentUserContext.Provider>
+  const actions = useMemo<CurrentUserActions>(
+    () => ({ setAvatarUrl, refreshIdentity }),
+    [setAvatarUrl, refreshIdentity],
+  )
+
+  return (
+    <CurrentUserContext.Provider value={user}>
+      <CurrentUserActionsContext.Provider value={actions}>{children}</CurrentUserActionsContext.Provider>
+    </CurrentUserContext.Provider>
+  )
 }
 
 /**
@@ -116,4 +154,13 @@ export function CurrentUserProvider({
 export function useCurrentUser(): UserProfile {
   const ctx = useContext(CurrentUserContext)
   return ctx ?? resolveNeutral()
+}
+
+/**
+ * Imperative helpers to update the shared identity in place (e.g. after the
+ * user changes their profile picture). No-ops when used outside a provider.
+ */
+export function useCurrentUserActions(): CurrentUserActions {
+  const ctx = useContext(CurrentUserActionsContext)
+  return ctx ?? { setAvatarUrl: () => {}, refreshIdentity: () => {} }
 }

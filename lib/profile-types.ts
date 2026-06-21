@@ -63,6 +63,8 @@ export interface SerializableUserProfile {
   shortName: string
   fullName: string
   initials: string
+  /** Optional uploaded profile picture (public Blob URL). */
+  avatarUrl?: string
   company: string
   role: string
   headerTag: string
