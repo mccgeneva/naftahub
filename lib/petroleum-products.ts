@@ -19,7 +19,17 @@ export interface CatalogProduct {
   unit: CommodityUnit
   /** True when the grade is commonly quoted in EITHER bbl or MT. */
   dualUnit?: boolean
+  /**
+   * Barrels per metric tonne for this grade. There is NO universal bbl↔MT
+   * conversion — it depends on density (API gravity) — so each grade carries
+   * its own factor (e.g. Brent ≈ 7.33, EN590 ≈ 7.45, Jet A-1 ≈ 7.9,
+   * FO 380 ≈ 6.35, LPG ≈ 11.6). Used by the deal ticket's bbl↔MT converter.
+   */
+  bblPerMt?: number
 }
+
+/** Fallback factor for a generic light/medium petroleum stream (~7.5 bbl/MT). */
+export const DEFAULT_BBL_PER_MT = 7.5
 
 export type CommodityCategory =
   | "Crude Oil"
@@ -51,17 +61,17 @@ export const CUSTOM_COMMODITY_ID = "__custom__"
 export const PETROLEUM_PRODUCTS: CatalogProduct[] = [
   // --- Crude oil — barrels (bbl) ---
   { id: "brent", name: "Brent Crude", category: "Crude Oil", unit: "bbl" },
-  { id: "wti", name: "WTI Crude", category: "Crude Oil", unit: "bbl" },
+  { id: "wti", name: "WTI Crude", category: "Crude Oil", unit: "bbl", bblPerMt: 7.57 },
   { id: "dubai", name: "Dubai Crude", category: "Crude Oil", unit: "bbl" },
   { id: "oman", name: "Oman Crude", category: "Crude Oil", unit: "bbl" },
   { id: "bonny-light", name: "Bonny Light", category: "Crude Oil", unit: "bbl" },
   { id: "arab-light", name: "Arab Light", category: "Crude Oil", unit: "bbl" },
-  { id: "arab-heavy", name: "Arab Heavy", category: "Crude Oil", unit: "bbl" },
+  { id: "arab-heavy", name: "Arab Heavy", category: "Crude Oil", unit: "bbl", bblPerMt: 6.98 },
   { id: "urals", name: "Urals Crude", category: "Crude Oil", unit: "bbl" },
   { id: "basrah-light", name: "Basrah Light", category: "Crude Oil", unit: "bbl" },
   { id: "espo", name: "ESPO Crude", category: "Crude Oil", unit: "bbl" },
-  { id: "murban", name: "Murban Crude", category: "Crude Oil", unit: "bbl" },
-  { id: "maya", name: "Maya Crude", category: "Crude Oil", unit: "bbl" },
+  { id: "murban", name: "Murban Crude", category: "Crude Oil", unit: "bbl", bblPerMt: 7.62 },
+  { id: "maya", name: "Maya Crude", category: "Crude Oil", unit: "bbl", bblPerMt: 6.86 },
 
   // --- Gasoline — metric tonnes (MT) ---
   { id: "gasoline-87", name: "Gasoline 87 RON", category: "Gasoline", unit: "MT" },
@@ -144,4 +154,46 @@ export function getCatalogProduct(id: string): CatalogProduct | undefined {
 /** Human-readable label for a unit. */
 export function unitLabel(unit: CommodityUnit): string {
   return unit === "bbl" ? "Barrels (bbl)" : "Metric Tonnes (MT)"
+}
+
+// Typical barrels-per-tonne by product family (density driven). Used when a
+// specific grade does not carry its own `bblPerMt`. Heavier products yield
+// fewer barrels per tonne; lighter products (LPG) yield more.
+const CATEGORY_BBL_PER_MT: Record<CommodityCategory, number> = {
+  "Crude Oil": 7.33,
+  Gasoline: 8.5,
+  "Diesel & Gasoil": 7.45,
+  "Jet Fuel & Kerosene": 7.9,
+  "Fuel Oils": 6.35,
+  "LPG & LNG": 11.6,
+  "Petrochemical Feedstocks": 8.9,
+  "Base Oils & Lubricants": 7.0,
+  "Asphalt & Residues": 6.06,
+}
+
+/**
+ * Resolve the barrels-per-tonne factor for a grade: the product's own
+ * `bblPerMt` if defined, otherwise its category default, otherwise a generic
+ * light/medium stream. Conversion is approximate and density dependent.
+ */
+export function bblPerMtFor(product?: CatalogProduct): number {
+  if (product?.bblPerMt) return product.bblPerMt
+  if (product) return CATEGORY_BBL_PER_MT[product.category] ?? DEFAULT_BBL_PER_MT
+  return DEFAULT_BBL_PER_MT
+}
+
+/**
+ * Convert a quantity between bbl and MT using the grade's density factor.
+ * Returns the converted amount (not rounded); the caller formats for display.
+ * `MT × bblPerMt = bbl`, so `bbl ÷ bblPerMt = MT`.
+ */
+export function convertQuantity(
+  amount: number,
+  from: CommodityUnit,
+  to: CommodityUnit,
+  product?: CatalogProduct,
+): number {
+  if (from === to) return amount
+  const factor = bblPerMtFor(product)
+  return from === "MT" ? amount * factor : amount / factor
 }

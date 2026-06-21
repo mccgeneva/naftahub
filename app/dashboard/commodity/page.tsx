@@ -10,6 +10,7 @@ import {
   FileText,
   ShieldCheck,
   ArrowRight,
+  ArrowLeftRight,
   Info,
   Package,
   Banknote,
@@ -74,6 +75,8 @@ import {
   COMMODITY_CATEGORIES,
   CUSTOM_COMMODITY_ID,
   getCatalogProduct,
+  convertQuantity,
+  bblPerMtFor,
   type CommodityUnit,
 } from "@/lib/petroleum-products"
 
@@ -271,6 +274,29 @@ export default function CommodityTradingPage() {
       commodityId: id,
       commodity: product.name,
       quantityUnit: product.unit,
+    }))
+  }
+
+  // Parsed numeric quantity (commas/spaces stripped) and the live bbl↔MT
+  // converter. Conversion is density-driven, so the factor comes from the
+  // selected grade (or its category default for custom commodities).
+  const parsedQty = Number.parseFloat(form.quantityAmount.replace(/[, ]/g, ""))
+  const hasQty = Number.isFinite(parsedQty) && parsedQty > 0
+  const otherUnit: CommodityUnit = form.quantityUnit === "MT" ? "bbl" : "MT"
+  const conversionFactor = bblPerMtFor(selectedCatalog)
+  const convertedPreview = hasQty
+    ? convertQuantity(parsedQty, form.quantityUnit, otherUnit, selectedCatalog)
+    : 0
+
+  const handleConvertUnit = () => {
+    if (!hasQty) return
+    const converted = convertQuantity(parsedQty, form.quantityUnit, otherUnit, selectedCatalog)
+    // Round to a sensible precision: whole barrels, 3 decimals for tonnes.
+    const rounded = otherUnit === "bbl" ? Math.round(converted) : Math.round(converted * 1000) / 1000
+    setForm((prev) => ({
+      ...prev,
+      quantityAmount: rounded.toLocaleString("en-US"),
+      quantityUnit: otherUnit,
     }))
   }
 
@@ -609,6 +635,29 @@ export default function CommodityTradingPage() {
                       </span>
                     )}
                   </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleConvertUnit}
+                      disabled={!hasQty}
+                      className="h-8 gap-1.5"
+                    >
+                      <ArrowLeftRight className="h-3.5 w-3.5" />
+                      Convert to {otherUnit}
+                    </Button>
+                    {hasQty && (
+                      <span className="text-xs text-muted-foreground">
+                        ≈ {convertedPreview.toLocaleString("en-US", { maximumFractionDigits: otherUnit === "bbl" ? 0 : 3 })} {otherUnit}
+                        <span className="ml-1 opacity-70">({conversionFactor} bbl/MT)</span>
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    bbl↔MT is approximate and density (API gravity) dependent; the factor shown is
+                    typical for this grade.
+                  </p>
                 </div>
 
                 <div className="space-y-2">
