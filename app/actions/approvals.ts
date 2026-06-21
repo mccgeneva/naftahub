@@ -375,6 +375,47 @@ function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
       category: KIND_LABELS[req.kind],
     }
   }
+  // Leverage: on approval the BORROWED funds (equity × (ratio − 1)) are credited
+  // to the client's balance, multiplying their buying power. The amount stored
+  // on the approval itself is the *equity*, not the borrowed sum, so we read the
+  // borrowed amount (and currency) from the full record in `payload.record`.
+  //
+  // We credit the INITIAL borrowed amount — i.e. the value at activation. If an
+  // admin later modifies the ratio, that delta is settled by its own balancing
+  // ledger entry (`adjustmentEntryId`), so this base credit must NOT track the
+  // current borrowed amount or the idempotent reconcile would double-count the
+  // modification. The initial value is recoverable from the first modification's
+  // `fromBorrowed`, mirroring the interest-accrual logic.
+  if (req.kind === "leverage") {
+    const record = (req.payload?.record ?? {}) as {
+      borrowedAmount?: number
+      currency?: string
+      modifications?: { fromBorrowed?: number }[]
+      accountLabel?: string
+      status?: string
+    }
+    // A switched-off / closed line has had its borrowed principal repaid, so it
+    // must no longer credit the balance (and reconcile must not re-credit it).
+    if (record.status === "closed") return null
+    const mods = record.modifications
+    const initialBorrowed =
+      Array.isArray(mods) && mods.length > 0 && Number.isFinite(Number(mods[0]?.fromBorrowed))
+        ? Number(mods[0].fromBorrowed)
+        : Number(record.borrowedAmount)
+    if (!Number.isFinite(initialBorrowed) || initialBorrowed <= 0) return null
+    return {
+      id: `APPR-${req.id}`,
+      direction: "credit",
+      amount: initialBorrowed,
+      currency: record.currency || req.currency || "USD",
+      status: "completed",
+      date: new Date().toISOString(),
+      counterparty: record.accountLabel || req.title,
+      reference: req.id,
+      comment: `Borrowed funds credited — approved ${KIND_LABELS[req.kind]} (${req.title})`,
+      category: "Leverage — Borrowed Funds",
+    }
+  }
   // Fallback: reserve (hold) the stored amount for known reserving kinds (e.g. a
   // commodity deal approved before ledger effects were attached) so the funds
   // are blocked on the client's balance to settle the supplier.
