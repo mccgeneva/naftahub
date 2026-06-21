@@ -5,6 +5,7 @@ import { scopedKey, scopedKeyForUser, getActiveUserId } from "@/lib/user-scope"
 import { getMyLedger } from "@/app/actions/ledger"
 import { reconcileMyApprovedCredits } from "@/app/actions/approvals"
 import { DEMO_USER_ID } from "@/lib/users"
+import { convertCurrency } from "@/lib/fx"
 
 export type LedgerDirection = "credit" | "debit"
 export type LedgerStatus = "completed" | "hold"
@@ -118,25 +119,10 @@ export function creditUserLedger(userId: string, entry: Omit<LedgerEntry, "direc
   }
 }
 
-// USD value of 1 unit of each currency, used to convert balances between
-// currencies so the dashboard can show a single aggregated total.
-const usdPerUnit: Record<string, number> = {
-  USD: 1,
-  EUR: 1.0892,
-  GBP: 1.2645,
-  CHF: 1.1303,
-  JPY: 0.006688,
-  AUD: 0.6542,
-  CAD: 0.7416,
-  SGD: 0.7407,
-}
-
-// Convert an amount from one currency into another using the USD-based rates.
-export function convertCurrency(amount: number, from: string, to: string): number {
-  const fromUsd = usdPerUnit[from] ?? 1
-  const toUsd = usdPerUnit[to] ?? 1
-  return (amount * fromUsd) / toUsd
-}
+// Re-exported (imported at top) from the shared, server-safe FX module so
+// existing imports from "@/lib/ledger-store" keep working while server actions
+// can use the same rates.
+export { convertCurrency }
 
 interface LedgerContextValue {
   entries: LedgerEntry[]

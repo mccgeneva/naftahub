@@ -3,7 +3,8 @@
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { resolveCurrentSession, resolveAccountProfileById, resolveDataOwnerIdFor } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
-import { upsertLedgerEntry } from "@/lib/ledger-db"
+import { upsertLedgerEntry, readLedgerEntries, availableByCurrency } from "@/lib/ledger-db"
+import { convertCurrency } from "@/lib/fx"
 import type { LedgerEntry } from "@/lib/ledger-store"
 import { insertNotification } from "@/lib/notifications-db"
 import {
@@ -257,6 +258,41 @@ async function applyLedgerEffect(req: ApprovalRequest): Promise<void> {
   const entry = ledgerEntryForApproval(req)
   if (!entry) return
   const ownerId = await resolveDataOwnerIdFor(req.userId)
+
+  // A reserve/hold must land on money the client actually holds. A commodity
+  // deal is priced in the deal currency (often USD), but the client may settle
+  // from EUR (or another) account. If they hold no balance in the hold currency,
+  // re-denominate the hold into the currency where they hold the most funds and
+  // convert the amount, so the reservation visibly reduces their real available
+  // balance instead of creating a phantom negative balance in an unheld currency.
+  if (entry.status === "hold" && entry.direction === "debit") {
+    try {
+      const existing = await readLedgerEntries(ownerId)
+      const available = availableByCurrency(existing)
+      const holdCur = entry.currency
+      const heldInHoldCur = available[holdCur] ?? 0
+      if (heldInHoldCur < entry.amount) {
+        // Pick the currency with the largest positive available balance.
+        const best = Object.entries(available)
+          .filter(([, bal]) => bal > 0)
+          .sort((a, b) => convertCurrency(b[1], b[0], "USD") - convertCurrency(a[1], a[0], "USD"))[0]
+        if (best && best[0] !== holdCur) {
+          const fundingCur = best[0]
+          const converted = convertCurrency(entry.amount, holdCur, fundingCur)
+          entry.comment =
+            `${entry.comment ? entry.comment + " · " : ""}Reserved ${fundingCur} ` +
+            `${converted.toLocaleString("en-US", { maximumFractionDigits: 2 })} ` +
+            `(deal value ${holdCur} ${entry.amount.toLocaleString("en-US", { maximumFractionDigits: 2 })})`
+          entry.amount = converted
+          entry.currency = fundingCur
+        }
+      }
+    } catch (err) {
+      // Best-effort re-denomination; fall back to the original hold currency.
+      console.log("[v0] hold re-denomination failed:", (err as Error).message)
+    }
+  }
+
   await upsertLedgerEntry(ownerId, entry)
 }
 

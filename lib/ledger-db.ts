@@ -35,6 +35,50 @@ async function ensureLedgerTable(): Promise<void> {
   ensured = true
 }
 
+/** Read every ledger entry for a user (most recent first). */
+export async function readLedgerEntries(userId: string): Promise<LedgerEntry[]> {
+  await ensureLedgerTable()
+  const { rows } = await query(
+    `SELECT entry_id, direction, amount, currency, status, entry_date,
+            counterparty, account, bank, reference, comment, category
+       FROM ledger_entries WHERE user_id = $1 ORDER BY entry_date DESC`,
+    [userId],
+  )
+  return rows.map((r: Record<string, unknown>) => ({
+    id: String(r.entry_id),
+    direction: r.direction as LedgerEntry["direction"],
+    amount: Number(r.amount),
+    currency: String(r.currency),
+    status: r.status as LedgerEntry["status"],
+    date: new Date(r.entry_date as string).toISOString(),
+    counterparty: String(r.counterparty ?? ""),
+    account: (r.account as string) ?? undefined,
+    bank: (r.bank as string) ?? undefined,
+    reference: (r.reference as string) ?? undefined,
+    comment: (r.comment as string) ?? undefined,
+    category: (r.category as string) ?? undefined,
+  }))
+}
+
+/**
+ * Available (spendable) balance per currency from a set of ledger entries:
+ * settled credits − settled debits − held debits. Mirrors the client store's
+ * `balanceFor`, so server-side reservation decisions match what the client sees.
+ */
+export function availableByCurrency(entries: LedgerEntry[]): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const e of entries) {
+    const cur = e.currency || "USD"
+    if (out[cur] === undefined) out[cur] = 0
+    if (e.status === "hold") {
+      if (e.direction === "debit") out[cur] -= e.amount
+    } else {
+      out[cur] += e.direction === "credit" ? e.amount : -e.amount
+    }
+  }
+  return out
+}
+
 /** Insert or update a single ledger entry for a user. */
 export async function upsertLedgerEntry(userId: string, entry: LedgerEntry): Promise<void> {
   await ensureLedgerTable()
