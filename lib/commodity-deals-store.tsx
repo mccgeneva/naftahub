@@ -274,6 +274,20 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
       summary: `${full.tradeStructure} ${full.commodity} ${full.quantity} — ${full.currency} ${full.approxValue.toLocaleString("en-US")} (${full.buyerName} ⇄ ${full.sellerName})`,
       amount: full.approxValue,
       currency: full.currency,
+      // On approval, reserve (place a hold on) the deal value on the client's
+      // balance — funds earmarked to settle the petroleum / supplier payment.
+      ledgerEffect:
+        full.approxValue > 0
+          ? {
+              direction: "debit",
+              amount: full.approxValue,
+              currency: full.currency,
+              status: "hold",
+              counterparty: full.sellerName || "Commodity supplier",
+              reference: full.uetr || full.id,
+              category: "Commodity Trade — Reserved Funds",
+            }
+          : null,
       payload: { localId: full.id, uetr: full.uetr, category: full.category, commodity: full.commodity },
     }).then((approvalId) => {
       if (!approvalId) return
