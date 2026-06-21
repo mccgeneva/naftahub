@@ -44,6 +44,7 @@ import {
   PRODUCT_CATEGORIES,
   getQuote,
   formatQuotePrice,
+  formatUnit,
   convertQuantity,
   bblPerMtFor,
   type PriceBasis,
@@ -348,7 +349,7 @@ export function CommodityQuotations() {
               <span>
                 Showing <span className="font-medium text-foreground">{selectedProduct.name}</span> across{" "}
                 <span className="font-medium text-foreground">{rows.length}</span> ports · priced per{" "}
-                {selectedProduct.unit}
+                {formatUnit(selectedProduct.unit)}
               </span>
             )}
           </div>
@@ -394,7 +395,7 @@ export function CommodityQuotations() {
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {mode === "port"
-                            ? `per ${row.product.unit}`
+                            ? `per ${formatUnit(row.product.unit)}`
                             : row.port.country}
                         </p>
                       </td>
@@ -590,7 +591,7 @@ function RequestProductDialog({
       return
     }
     setSubmitting(true)
-    const unitLabel = qtyUnit
+    const unitLabel = formatUnit(qtyUnit)
     const buyer = user.company?.trim() || user.fullName?.trim() || "Client account"
     const deal = addDeal({
       title: `${product.name} — ${basis} Purchase Request`,
@@ -703,17 +704,17 @@ function RequestProductDialog({
 
               {/* Quantity */}
               <div className="space-y-1.5">
-                <Label className="text-xs">Quantity required ({qtyUnit})</Label>
+                <Label className="text-xs">Quantity required ({formatUnit(qtyUnit)})</Label>
                 <div className="relative">
                   <Input
                     inputMode="decimal"
                     value={quantity}
                     onChange={(e) => setQuantity(e.target.value)}
                     placeholder={qtyUnit === "bbl" ? "e.g. 1,000,000" : "e.g. 50,000"}
-                    className="h-9 pr-12"
+                    className="h-9 pr-14"
                   />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-                    {qtyUnit}
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground">
+                    {formatUnit(qtyUnit)}
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -726,7 +727,7 @@ function RequestProductDialog({
                     className="h-8 gap-1.5"
                   >
                     <ArrowLeftRight className="h-3.5 w-3.5" />
-                    Convert to {otherUnit}
+                    Convert to {formatUnit(otherUnit)}
                   </Button>
                   {qtyValid && (
                     <span className="text-xs text-muted-foreground">
@@ -734,14 +735,14 @@ function RequestProductDialog({
                       {convertedPreview.toLocaleString("en-US", {
                         maximumFractionDigits: otherUnit === "bbl" ? 0 : 3,
                       })}{" "}
-                      {otherUnit}
-                      <span className="ml-1 opacity-70">({conversionFactor} bbl/MT)</span>
+                      {formatUnit(otherUnit)}
+                      <span className="ml-1 opacity-70">({conversionFactor} BBL/MT)</span>
                     </span>
                   )}
                 </div>
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  bbl↔MT is approximate and density (API gravity) dependent. Contract value is
-                  always computed from the {product.unit} price.
+                  BBL↔MT is approximate and density (API gravity) dependent. Contract value is
+                  always computed from the {formatUnit(product.unit)} price.
                 </p>
               </div>
 

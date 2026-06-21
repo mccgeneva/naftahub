@@ -338,7 +338,7 @@ export default function CommodityTradingPage() {
     // from the selected commodity (e.g. "100,000 MT", "2,000,000 bbl").
     const commodityName = form.commodity.trim()
     const qtyAmount = form.quantityAmount.trim()
-    const quantityStr = qtyAmount ? `${qtyAmount} ${form.quantityUnit}` : ""
+    const quantityStr = qtyAmount ? `${qtyAmount} ${form.quantityUnit.toUpperCase()}` : ""
 
     const deal = addDeal({
       title: form.title.trim(),
@@ -573,7 +573,7 @@ export default function CommodityTradingPage() {
                           </SelectLabel>
                           {PETROLEUM_PRODUCTS.filter((p) => p.category === cat).map((p) => (
                             <SelectItem key={p.id} value={p.id}>
-                              {p.name} · {p.unit === "bbl" ? "bbl" : "MT"}
+                              {p.name} · {p.unit.toUpperCase()}
                             </SelectItem>
                           ))}
                         </SelectGroup>
@@ -598,7 +598,7 @@ export default function CommodityTradingPage() {
                     <p className="text-xs text-muted-foreground">
                       Priced in{" "}
                       <span className="font-medium text-foreground">
-                        {selectedCatalog.unit === "bbl" ? "barrels (bbl)" : "metric tonnes (MT)"}
+                        {selectedCatalog.unit === "bbl" ? "barrels (BBL)" : "metric tonnes (MT)"}
                       </span>
                       {selectedCatalog.dualUnit ? " — may also trade in the alternate unit." : "."}
                     </p>
@@ -626,12 +626,12 @@ export default function CommodityTradingPage() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="MT">MT</SelectItem>
-                          <SelectItem value="bbl">bbl</SelectItem>
+                          <SelectItem value="bbl">BBL</SelectItem>
                         </SelectContent>
                       </Select>
                     ) : (
                       <span className="flex w-28 shrink-0 items-center justify-center rounded-md border border-input bg-muted text-sm font-medium text-muted-foreground">
-                        {form.quantityUnit === "bbl" ? "bbl" : "MT"}
+                        {form.quantityUnit.toUpperCase()}
                       </span>
                     )}
                   </div>
@@ -645,17 +645,17 @@ export default function CommodityTradingPage() {
                       className="h-8 gap-1.5"
                     >
                       <ArrowLeftRight className="h-3.5 w-3.5" />
-                      Convert to {otherUnit}
+                      Convert to {otherUnit.toUpperCase()}
                     </Button>
                     {hasQty && (
                       <span className="text-xs text-muted-foreground">
-                        ≈ {convertedPreview.toLocaleString("en-US", { maximumFractionDigits: otherUnit === "bbl" ? 0 : 3 })} {otherUnit}
-                        <span className="ml-1 opacity-70">({conversionFactor} bbl/MT)</span>
+                        ≈ {convertedPreview.toLocaleString("en-US", { maximumFractionDigits: otherUnit === "bbl" ? 0 : 3 })} {otherUnit.toUpperCase()}
+                        <span className="ml-1 opacity-70">({conversionFactor} BBL/MT)</span>
                       </span>
                     )}
                   </div>
                   <p className="text-[11px] leading-relaxed text-muted-foreground">
-                    bbl↔MT is approximate and density (API gravity) dependent; the factor shown is
+                    BBL↔MT is approximate and density (API gravity) dependent; the factor shown is
                     typical for this grade.
                   </p>
                 </div>
