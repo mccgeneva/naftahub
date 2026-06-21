@@ -259,37 +259,72 @@ async function applyLedgerEffect(req: ApprovalRequest): Promise<void> {
   if (!entry) return
   const ownerId = await resolveDataOwnerIdFor(req.userId)
 
-  // A reserve/hold must land on money the client actually holds. A commodity
-  // deal is priced in the deal currency (often USD), but the client may settle
-  // from EUR (or another) account. If they hold no balance in the hold currency,
-  // re-denominate the hold into the currency where they hold the most funds and
-  // convert the amount, so the reservation visibly reduces their real available
-  // balance instead of creating a phantom negative balance in an unheld currency.
+  // Commodity reserve with cross-currency funding: a deal is priced in the deal
+  // currency (e.g. USD) but the client funds from a master account in another
+  // currency (e.g. EUR). When the client lacks enough of the deal currency, we
+  // execute a REAL FX conversion at approval time — selling the funding currency
+  // to buy the USD needed — then place the hold on the bought USD. The two FX
+  // legs are SETTLED (permanent): if the deal is later cancelled, only the hold
+  // (`APPR-<id>`) is released, so the converted USD stays available in the USD
+  // account rather than being converted back.
   if (entry.status === "hold" && entry.direction === "debit") {
     try {
       const existing = await readLedgerEntries(ownerId)
       const available = availableByCurrency(existing)
       const holdCur = entry.currency
-      const heldInHoldCur = available[holdCur] ?? 0
-      if (heldInHoldCur < entry.amount) {
-        // Pick the currency with the largest positive available balance.
+      const needed = entry.amount
+      const availableInHoldCur = Math.max(available[holdCur] ?? 0, 0)
+      const shortfall = needed - availableInHoldCur
+
+      if (shortfall > 0) {
+        // Fund from the currency with the largest available balance (≠ holdCur).
         const best = Object.entries(available)
-          .filter(([, bal]) => bal > 0)
+          .filter(([cur, bal]) => cur !== holdCur && bal > 0)
           .sort((a, b) => convertCurrency(b[1], b[0], "USD") - convertCurrency(a[1], a[0], "USD"))[0]
-        if (best && best[0] !== holdCur) {
+
+        if (best) {
           const fundingCur = best[0]
-          const converted = convertCurrency(entry.amount, holdCur, fundingCur)
+          const costInFunding = convertCurrency(shortfall, holdCur, fundingCur)
+          const rateLabel = `1 ${holdCur} = ${convertCurrency(1, holdCur, fundingCur).toFixed(4)} ${fundingCur}`
+          const ref = entry.reference || req.id
+
+          // Leg 1 — sell funding currency (settled, permanent debit).
+          await upsertLedgerEntry(ownerId, {
+            id: `APPR-${req.id}-fx-sell`,
+            direction: "debit",
+            amount: costInFunding,
+            currency: fundingCur,
+            status: "completed",
+            date: new Date().toISOString(),
+            counterparty: "FX Treasury",
+            reference: ref,
+            category: "FX Conversion — Commodity Funding",
+            comment: `Sold ${fundingCur} to buy ${holdCur} ${shortfall.toLocaleString("en-US", { maximumFractionDigits: 2 })} for commodity settlement (${rateLabel})`,
+          })
+
+          // Leg 2 — buy deal currency (settled, permanent credit).
+          await upsertLedgerEntry(ownerId, {
+            id: `APPR-${req.id}-fx-buy`,
+            direction: "credit",
+            amount: shortfall,
+            currency: holdCur,
+            status: "completed",
+            date: new Date().toISOString(),
+            counterparty: "FX Treasury",
+            reference: ref,
+            category: "FX Conversion — Commodity Funding",
+            comment: `Bought ${holdCur} from ${fundingCur} ${costInFunding.toLocaleString("en-US", { maximumFractionDigits: 2 })} for commodity settlement (${rateLabel})`,
+          })
+
           entry.comment =
-            `${entry.comment ? entry.comment + " · " : ""}Reserved ${fundingCur} ` +
-            `${converted.toLocaleString("en-US", { maximumFractionDigits: 2 })} ` +
-            `(deal value ${holdCur} ${entry.amount.toLocaleString("en-US", { maximumFractionDigits: 2 })})`
-          entry.amount = converted
-          entry.currency = fundingCur
+            `${entry.comment ? entry.comment + " · " : ""}Reserved ${holdCur} ` +
+            `${needed.toLocaleString("en-US", { maximumFractionDigits: 2 })} ` +
+            `(funded via FX from ${fundingCur})`
         }
       }
     } catch (err) {
-      // Best-effort re-denomination; fall back to the original hold currency.
-      console.log("[v0] hold re-denomination failed:", (err as Error).message)
+      // Best-effort FX funding; fall back to placing the hold as-is.
+      console.log("[v0] commodity FX funding failed:", (err as Error).message)
     }
   }
 
