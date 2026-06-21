@@ -5,6 +5,7 @@ import { generateUetr } from "@/lib/swift-gpi"
 import { scopedKey } from "@/lib/user-scope"
 import { mirrorSubmission } from "@/lib/approval-sync"
 import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
+import { useLedger } from "@/lib/ledger-store"
 
 export type DealStatus = "pending" | "approved" | "rejected"
 
@@ -239,9 +240,12 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
     }
   }, [hydrated])
 
+  const { refresh: refreshLedger } = useLedger()
+
   // Reconcile administrator decisions made cross-client (in the DB) back here.
   // When a deal is newly approved, also advance it to the execution stage to
-  // match the in-app approveDeal() behaviour.
+  // match the in-app approveDeal() behaviour, and refresh the ledger so the
+  // funds reserved (held) for the deal show up on the client's balance at once.
   useApprovalReconcile(
     "commodity",
     hydrated,
@@ -252,6 +256,9 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
       setDeals((prev) =>
         prev.map((d) => (ids.has(d.id) ? { ...d, stage: "execution" as DealStage } : d)),
       )
+      // Pull the server ledger so the newly-posted hold (reserved funds) is
+      // reflected in the balance overview without requiring a manual reload.
+      refreshLedger()
     },
   )
 

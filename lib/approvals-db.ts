@@ -122,8 +122,11 @@ async function ensureTable(): Promise<void> {
        created_at    timestamptz NOT NULL DEFAULT now()
      )`,
   )
-  // Dual-gate (Sub-account) consent columns. Added via IF NOT EXISTS so the
-  // table migrates forward in place without dropping existing requests.
+  // Columns added after the table first shipped. Added via IF NOT EXISTS so the
+  // table migrates forward in place without dropping existing requests. The
+  // ledger_effect column is essential for reserve/hold-on-approval to work on
+  // deployments whose approval_requests table predates that feature.
+  await query(`ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS ledger_effect jsonb`)
   await query(`ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS requires_master_approval boolean NOT NULL DEFAULT false`)
   await query(`ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS master_id text`)
   await query(`ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS master_decision text NOT NULL DEFAULT 'pending'`)
