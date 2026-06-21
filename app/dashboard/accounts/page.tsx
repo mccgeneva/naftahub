@@ -436,10 +436,10 @@ export default function BankAccountsPage() {
                     {data.count} accounts
                   </Badge>
                 </div>
-                <p className="text-lg font-bold text-foreground">
+                <p className="text-sm sm:text-base lg:text-lg font-bold text-foreground tabular-nums leading-tight break-words [overflow-wrap:anywhere]">
                   {formatCurrency(data.total, currency)}
                 </p>
-                <p className="text-xs text-emerald-400 mt-1">
+                <p className="text-xs text-emerald-400 mt-1 tabular-nums break-words [overflow-wrap:anywhere]">
                   {formatCurrency(data.available, currency)} available
                 </p>
               </CardContent>
@@ -536,22 +536,22 @@ export default function BankAccountsPage() {
               </div>
 
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Balance</span>
-                  <span className="text-sm font-semibold text-foreground">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground shrink-0">Balance</span>
+                  <span className="text-sm font-semibold text-foreground tabular-nums text-right min-w-0 [overflow-wrap:anywhere]">
                     {formatCurrency(account.balance, account.currency)}
                   </span>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Available</span>
-                  <span className="text-sm text-emerald-400">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground shrink-0">Available</span>
+                  <span className="text-sm text-emerald-400 tabular-nums text-right min-w-0 [overflow-wrap:anywhere]">
                     {formatCurrency(account.availableBalance, account.currency)}
                   </span>
                 </div>
                 {account.reservedBalance > 0 && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Reserved</span>
-                    <span className="text-sm text-amber-400">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-muted-foreground shrink-0">Reserved</span>
+                    <span className="text-sm text-amber-400 tabular-nums text-right min-w-0 [overflow-wrap:anywhere]">
                       {formatCurrency(account.reservedBalance, account.currency)}
                     </span>
                   </div>
