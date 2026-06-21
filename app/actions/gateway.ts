@@ -5,6 +5,7 @@ import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { type UserProfile } from "@/lib/users"
 import { resolveAccountProfileById, resolveCurrentSession } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
+import { backfillGatewayDepositsForUser } from "@/app/actions/reconciliation"
 import type {
   GatewayAccount,
   AccountCoordinates,
@@ -111,6 +112,10 @@ export async function getMyGatewayAccounts(): Promise<GatewayAccount[]> {
   const user = await getSessionUser()
   if (!user) return []
   try {
+    // Back-fill any approved outgoing payment addressed to one of this user's
+    // gateway IBANs into a received deposit before reading, so funds auto-matched
+    // by IBAN always surface here (idempotent — never double-credits).
+    await backfillGatewayDepositsForUser(user.id)
     return await readAccounts(user.id)
   } catch (err) {
     console.log("[v0] getMyGatewayAccounts query failed:", (err as Error).message)
