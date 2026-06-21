@@ -15,7 +15,7 @@ import {
   type ReconciliationStatus,
 } from "@/lib/reconciliation"
 import { parseSwiftMessage, toReconciliationInput } from "@/lib/swift-mt"
-import { getApprovalById, listApprovalsForUser } from "@/lib/approvals-db"
+import { getApprovalById } from "@/lib/approvals-db"
 import { convertCurrency } from "@/lib/fx"
 
 /**
@@ -265,16 +265,17 @@ export async function recordGatewayDepositForApproval(
     const accounts = await readActiveAccounts()
     const matches = accounts.filter(
       (a) =>
-        // SECURITY: a payment may only fund the SENDER's own collect-funds
-        // account. Without this scope a payment could credit a different user's
-        // gateway that happens to share the same IBAN.
-        a.userId === approval.userId &&
+        // Match purely by beneficiary IBAN. "Collect funds" exists to RECEIVE
+        // money from other parties, so the payer is normally NOT the gateway
+        // owner — the funds are credited to whoever owns the matched IBAN. IBANs
+        // are globally unique and we require a single unambiguous match below,
+        // so this cannot leak funds to an unrelated account.
         a.coordinates?.scheme === "iban" &&
         normalizeIban(a.coordinates?.iban) === beneficiaryIban,
     )
-    // Require an unambiguous single match before moving money. Note: we match on
-    // IBAN + owner ONLY. A currency mismatch is NOT a reason to reject — it is
-    // handled by automatic FX conversion below.
+    // Require an unambiguous single match before moving money. A currency
+    // mismatch is NOT a reason to reject — it is handled by automatic FX
+    // conversion below.
     if (matches.length !== 1) return { matched: false }
     const account = matches[0]
     const accountCurrency = account.currency.toUpperCase()
@@ -401,19 +402,40 @@ export async function recordGatewayDepositForApproval(
 }
 
 /**
- * Back-fill sweep: ensure every APPROVED outgoing payment owned by `userId`
- * that is addressed to one of their active gateway IBANs has been recorded as a
- * received deposit. Safe to call on every Collect-funds page load — it is
- * idempotent (each match keys on `GWD-<approvalId>`), so it only ever records a
- * deposit that is genuinely missing. This catches payments approved through any
- * path (including before the on-approval hook existed).
+ * Back-fill sweep for a gateway OWNER: ensure every APPROVED payment addressed
+ * to one of this owner's active gateway IBANs — sent by ANY user — has been
+ * recorded as a received deposit. "Collect funds" receives money from other
+ * parties, so we sweep by destination IBAN, not by who sent the payment.
+ *
+ * Safe to call on every Collect-funds page load: idempotent (each match keys on
+ * `GWD-<approvalId>`), so it only records deposits that are genuinely missing.
+ * Catches payments approved through any path, including before the on-approval
+ * hook existed or while an older (stricter) matcher was deployed.
  */
-export async function backfillGatewayDepositsForUser(userId: string): Promise<void> {
+export async function backfillGatewayDepositsForUser(ownerUserId: string): Promise<void> {
   try {
-    const payments = await listApprovalsForUser(userId, "payment")
-    const approved = payments.filter((p) => p.status === "approved")
-    for (const p of approved) {
-      await recordGatewayDepositForApproval(p.id)
+    // The owner's active IBAN gateway destinations.
+    const ownerIbans = new Set(
+      (await readActiveAccounts())
+        .filter((a) => a.userId === ownerUserId && a.coordinates?.scheme === "iban")
+        .map((a) => normalizeIban(a.coordinates?.iban))
+        .filter(Boolean),
+    )
+    if (ownerIbans.size === 0) return
+
+    // All approved payments, regardless of sender; match by destination IBAN.
+    const { rows } = await query<{ id: string; iban: string | null; rec_iban: string | null }>(
+      `SELECT id,
+              payload->>'iban' AS iban,
+              payload->'record'->>'iban' AS rec_iban
+         FROM approval_requests
+        WHERE kind = 'payment' AND status = 'approved'`,
+    )
+    for (const row of rows) {
+      const dest = normalizeIban(row.iban ?? row.rec_iban)
+      if (dest && ownerIbans.has(dest)) {
+        await recordGatewayDepositForApproval(row.id)
+      }
     }
   } catch (err) {
     console.log("[v0] backfillGatewayDepositsForUser failed:", (err as Error).message)
