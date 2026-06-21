@@ -201,7 +201,7 @@ export function CardDetailPanel({ card }: { card: ClientCard }) {
               <p className="font-mono text-sm text-foreground">{`4929 8841 0073 ${card.last4}`}</p>
             </div>
             <Detail mono label="Expires" value={card.expiry} />
-            <Detail mono label="CVV" value="•••" />
+            <Detail mono label="CVV" value={card.cvv} />
             <Detail mono label="Network" value={card.network} />
           </div>
         )}
