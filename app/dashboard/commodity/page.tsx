@@ -1019,12 +1019,18 @@ export default function CommodityTradingPage() {
                               <SwiftGpiTracker
                                 payment={{
                                   uetr: deal.uetr,
+                                  // Funds are only credited/delivered once the
+                                  // deal is marked delivered. An approved-but-
+                                  // not-delivered deal shows funds blocked on
+                                  // behalf of the beneficiary, not credited.
                                   status:
-                                    deal.status === "approved"
-                                      ? "completed"
-                                      : deal.status === "rejected"
-                                        ? "failed"
-                                        : "pending",
+                                    deal.status === "rejected"
+                                      ? "failed"
+                                      : deal.status !== "approved"
+                                        ? "pending"
+                                        : deal.delivered
+                                          ? "completed"
+                                          : "blocked",
                                   currency: deal.currency,
                                   beneficiaryBic: deal.receivingBankBic || undefined,
                                   beneficiaryName: deal.receivingBank || deal.sellerName,

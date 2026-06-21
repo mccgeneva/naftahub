@@ -94,7 +94,12 @@ function addMinutes(iso: string, minutes: number): string {
   return new Date(d.getTime() + minutes * 60_000).toISOString()
 }
 
-export type GpiPaymentStatus = "completed" | "processing" | "pending" | "failed"
+// "blocked" = funds are reserved/held on behalf of the beneficiary (e.g. an
+// approved commodity deal whose goods have NOT yet been delivered). The credit
+// transfer is prepared but funds are NOT released to the beneficiary until the
+// underlying deal is confirmed delivered, at which point the status becomes
+// "completed" (ACSC).
+export type GpiPaymentStatus = "completed" | "processing" | "pending" | "failed" | "blocked"
 
 export interface GpiPaymentInput {
   uetr: string
@@ -240,6 +245,50 @@ export function buildGpiTracking(payment: GpiPaymentInput): GpiTrackingInfo {
           description: "The payment was not authorized and no funds were sent.",
           state: "failed",
           timestamp: addMinutes(base, 5),
+        },
+      ],
+    }
+  }
+
+  // blocked -> funds reserved/held on behalf of the beneficiary, NOT released.
+  // Used while an approved deal has not yet been confirmed delivered. The credit
+  // transfer is prepared but stops at a hold; it only completes (ACSC) once the
+  // deal is marked delivered.
+  if (payment.status === "blocked") {
+    return {
+      uetr: payment.uetr,
+      statusCode: "ACSP",
+      statusLabel: "Funds blocked — awaiting delivery",
+      stages: [
+        initiated,
+        {
+          key: "blocked",
+          title: "Funds blocked on behalf of beneficiary",
+          institution: ORDERING_INSTITUTION.name,
+          bic: ORDERING_INSTITUTION.bic,
+          location: ORDERING_INSTITUTION.location,
+          description:
+            "Funds are reserved and blocked at MCC Capital on behalf of the beneficiary. They are NOT released until the deal is confirmed delivered.",
+          state: "done",
+          timestamp: addMinutes(base, 15),
+        },
+        {
+          key: "beneficiary-bank",
+          title: "Received by beneficiary's bank",
+          institution: payment.beneficiaryName,
+          bic: beneficiaryBankBic,
+          location: payment.beneficiaryCountry || "—",
+          description: "Funds will be released to the beneficiary's bank upon delivery confirmation.",
+          state: "pending",
+        },
+        {
+          key: "credited",
+          title: "Funds credited to beneficiary",
+          institution: payment.beneficiaryName,
+          bic: beneficiaryBankBic,
+          location: payment.beneficiaryCountry || "—",
+          description: "Settlement (ACSC) completes once the deal is marked delivered.",
+          state: "pending",
         },
       ],
     }
