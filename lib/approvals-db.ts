@@ -419,3 +419,52 @@ export async function cancelApproval(id: string, userId: string): Promise<Approv
   )
   return rows.length ? rowToRequest(rows[0]) : null
 }
+
+/**
+ * Client-side REVOCATION of their own already-APPROVED request (e.g. a
+ * commodity deal that was authorized but has not yet been delivered). Race-safe:
+ * the WHERE clause only acts while the request is still `approved` AND has NOT
+ * been flagged delivered in its payload — so a deal the administrator marked
+ * delivered can never be revoked. The caller is responsible for releasing any
+ * ledger hold. Returns the updated record, or null if it can no longer be
+ * revoked (already settled/delivered/decided otherwise).
+ */
+export async function revokeApprovedApproval(
+  id: string,
+  userId: string,
+  note?: string,
+): Promise<ApprovalRequest | null> {
+  await ensureTable()
+  const { rows } = await query(
+    `UPDATE approval_requests
+        SET status = 'cancelled',
+            decided_at = now(),
+            decision_note = $3,
+            payload = payload || '{"revokedByClient": true}'::jsonb
+      WHERE id = $1 AND user_id = $2 AND status = 'approved'
+        AND COALESCE(payload->>'delivered', 'false') <> 'true'
+      RETURNING *`,
+    [id, userId, note?.trim() || "Revoked by client before delivery."],
+  )
+  return rows.length ? rowToRequest(rows[0]) : null
+}
+
+/**
+ * Administrator flags an approved deal as DELIVERED (commodity received /
+ * settled). Once delivered the deal is locked: the client can no longer revoke
+ * it. Stamps `delivered` + `deliveredAt` into the payload so the state is
+ * visible cross-client. Only acts on a still-approved request. Returns the
+ * updated record, or null if it is not in an approved state.
+ */
+export async function markApprovalDelivered(id: string): Promise<ApprovalRequest | null> {
+  await ensureTable()
+  const deliveredAt = new Date().toISOString()
+  const { rows } = await query(
+    `UPDATE approval_requests
+        SET payload = payload || jsonb_build_object('delivered', true, 'deliveredAt', $2::text)
+      WHERE id = $1 AND status = 'approved'
+      RETURNING *`,
+    [id, deliveredAt],
+  )
+  return rows.length ? rowToRequest(rows[0]) : null
+}

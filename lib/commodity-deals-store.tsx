@@ -1,13 +1,14 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
+import { createContext, useContext, useEffect, useRef, useState } from "react"
 import { generateUetr } from "@/lib/swift-gpi"
 import { scopedKey } from "@/lib/user-scope"
 import { mirrorSubmission } from "@/lib/approval-sync"
 import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
 import { useLedger } from "@/lib/ledger-store"
+import { revokeMyCommodityDeal } from "@/app/actions/approvals"
 
-export type DealStatus = "pending" | "approved" | "rejected"
+export type DealStatus = "pending" | "approved" | "rejected" | "cancelled"
 
 // Standard professional commodity-trading sequence. The client advances through
 // the pre-execution stages as the deal progresses; only the Administrator can
@@ -111,6 +112,10 @@ export interface CommodityDeal {
   decisionNote?: string
   // Ledger entry created when the deal is authorized for execution (proceeds credited).
   settledEntryId?: string
+  // Set by the administrator once the commodity is received/settled. A delivered
+  // deal is finalized and can no longer be revoked by the client.
+  delivered?: boolean
+  deliveredAt?: string
 }
 
 const KEY_BASE = "mcc.commodity-deals.v1"
@@ -173,6 +178,13 @@ interface CommodityDealsContextValue {
   approveDeal: (dealId: string, note?: string, settledEntryId?: string) => CommodityDeal | null
   /** Admin: reject the deal with an optional reason. Nothing executes. */
   rejectDeal: (dealId: string, reason?: string) => CommodityDeal | null
+  /**
+   * Client: revoke an approved (not-yet-delivered) deal. Releases the reserved
+   * funds back to the available balance server-side, marks the local deal
+   * cancelled, and refreshes the ledger. Rejected by the server once the deal
+   * has been flagged delivered by the administrator.
+   */
+  revokeDeal: (dealId: string) => Promise<{ ok: boolean; error?: string }>
   hydrated: boolean
 }
 
@@ -261,6 +273,77 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
       refreshLedger()
     },
   )
+
+  // Cross-client sync for APPROVED deals: pick up the administrator's "delivered"
+  // flag (which locks the deal from revocation) and any revocation performed on
+  // another device, merging both back into the local records. A ref keeps the
+  // polling timer stable so it doesn't re-subscribe on every deal edit; it only
+  // does work while at least one approved deal is still open (not delivered).
+  const dealsRef = useRef<CommodityDeal[]>(deals)
+  useEffect(() => {
+    dealsRef.current = deals
+  }, [deals])
+
+  useEffect(() => {
+    if (!hydrated) return
+    let cancelled = false
+
+    const sync = async () => {
+      const current = dealsRef.current
+      const hasOpen = current.some((d) => d.approvalId && d.status === "approved" && !d.delivered)
+      if (!hasOpen) return
+      // Read via the Route Handler (not a Server Action) so this background poll
+      // can never serialize behind / block in-app navigation. The endpoint
+      // returns the signed-in user's commodity approvals with their payload.
+      let items: {
+        id: string
+        status: string
+        payload?: { delivered?: boolean; deliveredAt?: string }
+      }[] = []
+      try {
+        const res = await fetch("/api/approvals?kind=commodity")
+        if (!res.ok) return
+        const data = (await res.json()) as { ok: boolean; items?: typeof items }
+        items = data.items ?? []
+      } catch {
+        return
+      }
+      if (cancelled || !items.length) return
+      const byId = new Map(items.map((s) => [s.id, s]))
+      let changed = false
+      const next = current.map((d) => {
+        if (!d.approvalId) return d
+        const s = byId.get(d.approvalId)
+        if (!s) return d
+        let merged = d
+        if (s.payload?.delivered === true && !d.delivered) {
+          merged = {
+            ...merged,
+            delivered: true,
+            deliveredAt: s.payload.deliveredAt ?? new Date().toISOString(),
+          }
+          changed = true
+        }
+        if (s.status === "cancelled" && d.status !== "cancelled") {
+          merged = { ...merged, status: "cancelled" as DealStatus }
+          changed = true
+        }
+        return merged
+      })
+      if (changed) {
+        setDeals(next)
+        // A revocation elsewhere released the hold — refresh so the balance reflects it.
+        refreshLedger()
+      }
+    }
+
+    void sync()
+    const id = setInterval(sync, 30000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [hydrated])
 
   const addDeal: CommodityDealsContextValue["addDeal"] = (deal) => {
     const { stage, ...rest } = deal
@@ -453,6 +536,33 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
     return updated
   }
 
+  const revokeDeal: CommodityDealsContextValue["revokeDeal"] = async (dealId) => {
+    const target = deals.find((d) => d.id === dealId)
+    if (!target) return { ok: false, error: "Deal not found." }
+    if (target.status !== "approved") return { ok: false, error: "Only an approved deal can be revoked." }
+    if (target.delivered) {
+      return { ok: false, error: "This deal has been delivered and can no longer be revoked." }
+    }
+    if (!target.approvalId) {
+      return { ok: false, error: "This deal cannot be revoked yet. Please try again shortly." }
+    }
+
+    const res = await revokeMyCommodityDeal(target.approvalId)
+    if (!res.ok) return res
+
+    // Mark the local deal cancelled and pull the server ledger so the released
+    // (unfrozen) funds reappear in the available balance right away.
+    setDeals((prev) =>
+      prev.map((d) =>
+        d.id === dealId
+          ? { ...d, status: "cancelled" as DealStatus, decidedAt: new Date().toISOString() }
+          : d,
+      ),
+    )
+    refreshLedger()
+    return { ok: true }
+  }
+
   return (
     <CommodityDealsContext.Provider
       value={{
@@ -465,6 +575,7 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
         rejectDocument,
         approveDeal,
         rejectDeal,
+        revokeDeal,
         hydrated,
       }}
     >

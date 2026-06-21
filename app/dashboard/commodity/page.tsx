@@ -17,6 +17,9 @@ import {
   Layers,
   History,
   Plus,
+  Ban,
+  PackageCheck,
+  Loader2,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -38,6 +41,14 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { useActivityLog } from "@/components/activity-tracker"
@@ -130,6 +141,14 @@ function StatusBadge({ status }: { status: CommodityDeal["status"] }) {
       </Badge>
     )
   }
+  if (status === "cancelled") {
+    return (
+      <Badge variant="outline" className="border-muted-foreground/30 bg-muted text-muted-foreground text-[10px]">
+        <Ban className="mr-1 h-3 w-3" />
+        Revoked
+      </Badge>
+    )
+  }
   return (
     <Badge variant="outline" className="border-yellow-500/20 bg-yellow-500/10 text-yellow-500 text-[10px]">
       <Clock className="mr-1 h-3 w-3" />
@@ -200,6 +219,7 @@ export default function CommodityTradingPage() {
     addDocument,
     addDocumentVersion,
     setStage,
+    revokeDeal,
     hydrated,
   } = useCommodityDeals()
 
@@ -207,6 +227,9 @@ export default function CommodityTradingPage() {
   const [form, setForm] = useState({ ...emptyDeal })
   const [sendingBicValid, setSendingBicValid] = useState(false)
   const [receivingBicValid, setReceivingBicValid] = useState(false)
+  // Revoke-confirmation dialog state.
+  const [revokeTarget, setRevokeTarget] = useState<CommodityDeal | null>(null)
+  const [revoking, setRevoking] = useState(false)
 
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -303,6 +326,33 @@ export default function CommodityTradingPage() {
         uetr: deal.uetr,
       },
     })
+  }
+
+  const handleConfirmRevoke = async () => {
+    const deal = revokeTarget
+    if (!deal) return
+    setRevoking(true)
+    const res = await revokeDeal(deal.id)
+    setRevoking(false)
+    if (!res.ok) {
+      toast.error(res.error ?? "The deal could not be revoked.")
+      setRevokeTarget(null)
+      return
+    }
+    toast.success("Deal revoked", {
+      description: `${deal.id} was revoked and the reserved ${formatCurrency(deal.approxValue, deal.currency)} has been released back to your available balance.`,
+    })
+    logActivity({
+      action: `Client revoked commodity deal ${deal.id} and released reserved funds`,
+      category: "Commodity Trading",
+      details: {
+        summary: `Client revoked approved deal ${deal.id} "${deal.title}". Reserved funds (${formatCurrency(deal.approxValue, deal.currency)}) released back to the available balance.`,
+        referenceId: deal.id,
+        uetr: deal.uetr,
+        decision: "Revoked",
+      },
+    })
+    setRevokeTarget(null)
   }
 
   return (
@@ -677,6 +727,15 @@ export default function CommodityTradingPage() {
                       <div className="flex flex-col gap-3">
                         <div className="flex flex-wrap items-center gap-2">
                           <StatusBadge status={deal.status} />
+                          {deal.delivered && (
+                            <Badge
+                              variant="outline"
+                              className="border-green-500/30 bg-green-500/10 text-green-500 text-[10px]"
+                            >
+                              <PackageCheck className="mr-1 h-3 w-3" />
+                              Delivered
+                            </Badge>
+                          )}
                           <Badge variant="outline" className="text-[10px]">
                             {deal.category}
                           </Badge>
@@ -743,9 +802,42 @@ export default function CommodityTradingPage() {
                         )}
                         {deal.status === "approved" && (
                           <p className="rounded-md border border-green-500/20 bg-green-500/5 p-2 text-xs text-green-500">
-                            Authorized for execution{deal.decisionNote ? ` — ${deal.decisionNote}` : ""}. Cash
-                            settlement proceeds via the Institutional Desk / Payments rails.
+                            Authorized for execution{deal.decisionNote ? ` — ${deal.decisionNote}` : ""}. The deal
+                            value is reserved (blocked) on your balance to settle the supplier. Cash settlement
+                            proceeds via the Institutional Desk / Payments rails.
                           </p>
+                        )}
+                        {deal.status === "cancelled" && (
+                          <p className="rounded-md border border-muted-foreground/20 bg-muted/40 p-2 text-xs text-muted-foreground">
+                            This deal was revoked. The reserved funds were released back to your available balance.
+                          </p>
+                        )}
+
+                        {deal.status === "approved" && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            {deal.delivered ? (
+                              <div className="flex items-center gap-2 rounded-md border border-green-500/20 bg-green-500/5 p-2 text-xs text-green-500">
+                                <PackageCheck className="h-3.5 w-3.5" />
+                                Delivered &amp; finalized — this deal is locked and can no longer be revoked.
+                              </div>
+                            ) : (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="text-destructive"
+                                  onClick={() => setRevokeTarget(deal)}
+                                >
+                                  <Ban className="mr-1 h-3.5 w-3.5" />
+                                  Cancel / Revoke deal
+                                </Button>
+                                <span className="text-xs text-muted-foreground">
+                                  Releases the reserved funds back to your available balance. Available until the
+                                  deal is flagged delivered.
+                                </span>
+                              </>
+                            )}
+                          </div>
                         )}
 
                         {canAdvance && (
@@ -831,6 +923,40 @@ export default function CommodityTradingPage() {
           />
         </TabsContent>
       </Tabs>
+
+      {/* Revoke confirmation */}
+      <Dialog open={revokeTarget !== null} onOpenChange={(o) => !o && !revoking && setRevokeTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Ban className="h-4 w-4 text-destructive" />
+              Revoke commodity deal
+            </DialogTitle>
+            <DialogDescription className="text-pretty">
+              {revokeTarget ? (
+                <>
+                  This will cancel deal <span className="font-medium text-foreground">{revokeTarget.id}</span> (
+                  {revokeTarget.title}) and release the reserved{" "}
+                  <span className="font-medium text-foreground">
+                    {formatCurrency(revokeTarget.approxValue, revokeTarget.currency)}
+                  </span>{" "}
+                  back to your available balance. This cannot be undone — you would need to submit a new deal to
+                  proceed again.
+                </>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setRevokeTarget(null)} disabled={revoking}>
+              Keep deal
+            </Button>
+            <Button variant="destructive" onClick={handleConfirmRevoke} disabled={revoking}>
+              {revoking ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Ban className="mr-1 h-4 w-4" />}
+              Revoke &amp; release funds
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
