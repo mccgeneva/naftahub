@@ -1,9 +1,8 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
-import { scopedKey } from "@/lib/user-scope"
+import { createContext, useContext } from "react"
 import { mirrorSubmission } from "@/lib/approval-sync"
-import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
+import { useServerRequestList } from "@/lib/use-server-request-list"
 
 export type FiduciaryRequestStatus = "pending" | "approved" | "rejected"
 
@@ -43,9 +42,6 @@ export interface FiduciaryRequest {
   decidedAt?: string // ISO timestamp of approval/rejection
   decisionNote?: string // administrator note (e.g. rejection reason)
 }
-
-const KEY_BASE = "mcc.fiduciary-requests.v1"
-const storageKey = () => scopedKey(KEY_BASE)
 
 interface FiduciaryRequestsContextValue {
   requests: FiduciaryRequest[]

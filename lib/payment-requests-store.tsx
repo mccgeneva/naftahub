@@ -1,10 +1,9 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
+import { createContext, useContext } from "react"
 import { generateUetr } from "@/lib/swift-gpi"
-import { scopedKey } from "@/lib/user-scope"
 import { mirrorSubmission } from "@/lib/approval-sync"
-import { useApprovalReconcile } from "@/lib/use-approval-reconcile"
+import { useServerRequestList } from "@/lib/use-server-request-list"
 
 export type PaymentRequestStatus = "pending" | "approved" | "rejected"
 
@@ -41,9 +40,6 @@ export interface PaymentRouting {
   routedBankBic: string
 }
 
-const KEY_BASE = "mcc.payment-requests.v1"
-const storageKey = () => scopedKey(KEY_BASE)
-
 interface PaymentRequestsContextValue {
   requests: PaymentRequest[]
   /** Create a new pending request (no funds move yet). Returns the stored record. */
@@ -63,59 +59,11 @@ interface PaymentRequestsContextValue {
 const PaymentRequestsContext = createContext<PaymentRequestsContextValue | null>(null)
 
 export function PaymentRequestsProvider({ children }: { children: React.ReactNode }) {
-  const [requests, setRequests] = useState<PaymentRequest[]>([])
-  const [hydrated, setHydrated] = useState(false)
-
-  // Load persisted requests once on mount so submitted payments survive
-  // navigation, reloads, and logout/login.
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(storageKey())
-      setRequests(stored ? (JSON.parse(stored) as PaymentRequest[]) : [])
-    } catch {
-      setRequests([])
-    }
-    setHydrated(true)
-  }, [])
-
-  // Persist on change, but only after hydration to avoid clobbering stored data.
-  useEffect(() => {
-    if (!hydrated) return
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(requests))
-    } catch {
-      // ignore quota/availability errors
-    }
-  }, [requests, hydrated])
-
-  // Keep state in sync when the data changes in another tab/window (e.g. the
-  // Administrator approves in one place while the client views in another) or
-  // when the user returns to a tab that was open in the background.
-  useEffect(() => {
-    if (!hydrated) return
-    const resync = () => {
-      try {
-        const stored = window.localStorage.getItem(storageKey())
-        setRequests(stored ? (JSON.parse(stored) as PaymentRequest[]) : [])
-      } catch {
-        // ignore parse/availability errors
-      }
-    }
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === storageKey()) resync()
-    }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") resync()
-    }
-    window.addEventListener("storage", onStorage)
-    window.addEventListener("focus", resync)
-    document.addEventListener("visibilitychange", onVisible)
-    return () => {
-      window.removeEventListener("storage", onStorage)
-      window.removeEventListener("focus", resync)
-      document.removeEventListener("visibilitychange", onVisible)
-    }
-  }, [hydrated])
+  // The list is sourced entirely from the server (Neon `approval_requests`),
+  // so a client's payments follow them across any device/browser and reflect
+  // administrator decisions made elsewhere. No localStorage is involved.
+  const { records: requests, setRecords: setRequests, hydrated, refresh } =
+    useServerRequestList<PaymentRequest>("payment")
 
   const addRequest: PaymentRequestsContextValue["addRequest"] = (request) => {
     const full: PaymentRequest = {
@@ -124,22 +72,20 @@ export function PaymentRequestsProvider({ children }: { children: React.ReactNod
       status: "pending",
       submittedAt: new Date().toISOString(),
     }
-    setRequests((prev) => [full, ...prev])
-    // Mirror into the DB-backed approvals backbone so the Administrator can see
-    // and decide this payment cross-client. We attach a server-side ledger
-    // effect (a debit for the full amount incl. the 2% fee) so that when the
-    // admin approves — in a DIFFERENT browser/session — the debit is posted to
-    // the OWNER's server ledger. The client's LedgerProvider pulls that via
-    // getMyLedger() on hydrate/refresh, so the approved payment shows up in the
-    // transactions list. The local store only tracks the request status; it
-    // never posts to the ledger itself, so there is no double counting.
+    // Optimistically show the request, then mirror it to the DB. We persist the
+    // COMPLETE record under `payload.record` so the server can fully rebuild the
+    // view on any device. A server-side ledger effect (debit incl. the 2% fee)
+    // posts to the OWNER's ledger when the admin approves — in any session — and
+    // the LedgerProvider pulls it via getMyLedger(); the list store never posts
+    // to the ledger itself, so there is no double counting.
+    setRequests([full, ...requests])
     void mirrorSubmission({
       kind: "payment",
       title: `Payment to ${full.beneficiary}`,
       summary: `${full.currency} ${full.amount.toLocaleString("en-US")} to ${full.beneficiary}${full.reference ? ` · ${full.reference}` : ""}`,
       amount: full.total,
       currency: full.currency,
-      payload: { localId: full.id, uetr: full.uetr, iban: full.iban, swiftCode: full.swiftCode },
+      payload: { localId: full.id, uetr: full.uetr, iban: full.iban, swiftCode: full.swiftCode, record: full },
       ledgerEffect: {
         direction: "debit",
         amount: full.total,
@@ -150,21 +96,21 @@ export function PaymentRequestsProvider({ children }: { children: React.ReactNod
         reference: full.reference || full.uetr,
         category: "Outgoing Payment",
       },
-    }).then((approvalId) => {
-      if (!approvalId) return
-      setRequests((prev) => prev.map((r) => (r.id === full.id ? { ...r, approvalId } : r)))
+    }).then(() => {
+      // Re-pull from the server so the record carries its server id + status.
+      void refresh()
     })
     return full
   }
 
-  // Reconcile administrator decisions made cross-client (in the DB) back into
-  // the local records, so the client sees approve/reject outcomes here too.
-  useApprovalReconcile("payment", hydrated, requests, setRequests)
-
+  // Admin decisions are made through the DB approvals queue and surface here via
+  // the server hydration above. These local mutators are retained for interface
+  // compatibility and update the in-memory view immediately; the next refresh
+  // reconciles against the authoritative server state.
   const approveRequest: PaymentRequestsContextValue["approveRequest"] = (id, routing) => {
     let updated: PaymentRequest | null = null
-    setRequests((prev) =>
-      prev.map((r) => {
+    setRequests(
+      requests.map((r) => {
         if (r.id === id && r.status === "pending") {
           updated = {
             ...r,
@@ -188,8 +134,8 @@ export function PaymentRequestsProvider({ children }: { children: React.ReactNod
 
   const rejectRequest: PaymentRequestsContextValue["rejectRequest"] = (id, reason) => {
     let updated: PaymentRequest | null = null
-    setRequests((prev) =>
-      prev.map((r) => {
+    setRequests(
+      requests.map((r) => {
         if (r.id === id && r.status === "pending") {
           updated = {
             ...r,
