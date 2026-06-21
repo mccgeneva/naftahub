@@ -60,6 +60,12 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
   // Skip the very first server-sync that the hydration setState would trigger,
   // so we never echo freshly-loaded data straight back to the server.
   const skipNextSync = useRef(true)
+  // True while a local change is being mirrored to the server. The background
+  // refetch (focus / visibility / 30s poll) must NOT apply server data while a
+  // write is in flight, otherwise it can clobber a just-added beneficiary with a
+  // stale server snapshot before the write lands — making the new record
+  // "disappear" right after the user adds it.
+  const pendingSync = useRef(false)
   // Guards the demo beneficiary-book backfill so it runs at most once per mount.
   const demoBackfillDone = useRef(false)
 
@@ -78,11 +84,16 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
     // queue. The write path (`syncMyBeneficiaries`) stays a Server Action — it
     // only fires on a deliberate user change, never during the login mount storm.
     const load = async () => {
+      // Don't overwrite local state while a local write is mirroring to the
+      // server — a stale snapshot here would drop the in-flight change.
+      if (pendingSync.current) return
       try {
         const res = await fetch("/api/beneficiaries", { cache: "no-store" })
         if (!active || !res.ok) return
+        // Re-check after the await: a local edit may have started mid-flight.
+        if (pendingSync.current) return
         const json = (await res.json()) as { ok: boolean; beneficiaries?: { data: unknown }[] }
-        if (!active) return
+        if (!active || pendingSync.current) return
         if (json.ok && Array.isArray(json.beneficiaries)) {
           skipNextSync.current = true
           setBeneficiaries(json.beneficiaries.map((b) => b.data as unknown as Beneficiary))
@@ -121,9 +132,16 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
       skipNextSync.current = false
       return
     }
+    // Mark a write in flight so the background refetch can't clobber it, then
+    // clear the flag once the server has the latest set.
+    pendingSync.current = true
     void syncMyBeneficiaries(
       beneficiaries.map((b) => ({ id: b.id, data: b as unknown as Record<string, unknown>, status: b.status })),
-    ).catch(() => {})
+    )
+      .catch(() => {})
+      .finally(() => {
+        pendingSync.current = false
+      })
   }, [beneficiaries, hydrated])
 
   // One-time demo backfill + reconcile: after hydration, (1) merge any missing

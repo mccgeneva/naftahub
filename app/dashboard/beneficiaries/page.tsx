@@ -281,7 +281,11 @@ export default function BeneficiariesPage() {
     }
 
     const newBeneficiary: Beneficiary = {
-      id: `BEN-${String(beneficiaries.length + 1).padStart(3, "0")}`,
+      // Must be globally unique. A length-based id (e.g. BEN-003) collides with
+      // an existing id after any deletion, and the server upsert
+      // (ON CONFLICT (id) DO UPDATE) would then silently OVERWRITE that record
+      // instead of inserting — so the "new" beneficiary appears to vanish.
+      id: `BEN-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`.toUpperCase(),
       type: newBeneficiaryType,
       name: form.name.trim(),
       alias: form.alias.trim() || undefined,
