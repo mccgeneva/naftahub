@@ -129,6 +129,54 @@ export const PRODUCT_CATEGORIES: ProductCategory[] = [
   "Specialities",
 ]
 
+// --- bbl <-> MT conversion ---------------------------------------------------
+
+/**
+ * Typical barrels per metric tonne by product family. There is NO universal
+ * bbl<->MT conversion — it is density (API gravity) driven — so each family
+ * carries a representative factor (lighter products yield more barrels/tonne).
+ */
+const BBL_PER_MT_BY_CATEGORY: Record<ProductCategory, number> = {
+  "Crude Oil": 7.33,
+  "LPG & Gas": 11.6,
+  "Light Distillates": 8.5, // naphtha / gasoline
+  "Middle Distillates": 7.75, // jet / diesel / gasoil (Jet A-1 ~7.9, EN590 ~7.45)
+  "Fuel Oils & Residuals": 6.35,
+  Specialities: 6.5, // bitumen / base oils / petcoke
+}
+
+/** Per-grade overrides where the grade deviates from its family default. */
+const BBL_PER_MT_BY_PRODUCT: Record<string, number> = {
+  wti: 7.57,
+  maya: 6.86,
+  "jet-a1": 7.9,
+  en590: 7.45,
+  ulsd: 7.46,
+  "gasoil-50": 7.45,
+  bitumen: 6.06,
+  petcoke: 5.5,
+}
+
+/** Resolve the barrels-per-tonne factor for a product (override → family). */
+export function bblPerMtFor(product: PetroleumProduct): number {
+  return BBL_PER_MT_BY_PRODUCT[product.id] ?? BBL_PER_MT_BY_CATEGORY[product.category] ?? 7.5
+}
+
+/**
+ * Convert an amount between bbl and MT for a given product. Density driven, so
+ * the factor comes from the product. `MT × factor = bbl`, `bbl ÷ factor = MT`.
+ */
+export function convertQuantity(
+  amount: number,
+  from: "bbl" | "MT",
+  to: "bbl" | "MT",
+  product: PetroleumProduct,
+): number {
+  if (from === to) return amount
+  const factor = bblPerMtFor(product)
+  return from === "MT" ? amount * factor : amount / factor
+}
+
 // --- Deterministic pricing ---------------------------------------------------
 
 /** Deterministic string hash → 32-bit unsigned int. */

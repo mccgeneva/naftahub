@@ -14,6 +14,7 @@ import {
   Info,
   ShoppingCart,
   Loader2,
+  ArrowLeftRight,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -43,6 +44,8 @@ import {
   PRODUCT_CATEGORIES,
   getQuote,
   formatQuotePrice,
+  convertQuantity,
+  bblPerMtFor,
   type PriceBasis,
   type ProductCategory,
   type PetroleumProduct,
@@ -533,6 +536,9 @@ function RequestProductDialog({
   const [basis, setBasis] = useState<PriceBasis>("CIF")
   const [portId, setPortId] = useState<string>(PORTS[0].id)
   const [quantity, setQuantity] = useState("")
+  // The unit the client enters the quantity in. Defaults to the product's
+  // canonical pricing unit but can be switched (bbl<->MT) for dual-quoted grades.
+  const [qtyUnit, setQtyUnit] = useState<"bbl" | "MT">("MT")
   const [notes, setNotes] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
@@ -542,6 +548,7 @@ function RequestProductDialog({
     setBasis(seed.basis)
     setPortId(seed.port.id)
     setQuantity("")
+    setQtyUnit(seed.product.unit)
     setNotes("")
     setSubmitting(false)
   }, [seed])
@@ -556,7 +563,26 @@ function RequestProductDialog({
 
   const qtyNum = Number.parseFloat(quantity.replace(/,/g, ""))
   const qtyValid = Number.isFinite(qtyNum) && qtyNum > 0
-  const estValue = quote && qtyValid ? quote.price * qtyNum : 0
+  // The quote price is per the product's canonical unit, so convert the entered
+  // quantity into that unit before valuing it (handles bbl<->MT correctly).
+  const canonicalQty =
+    product && qtyValid ? convertQuantity(qtyNum, qtyUnit, product.unit, product) : 0
+  const estValue = quote && qtyValid ? quote.price * canonicalQty : 0
+
+  // Live converted preview into the other unit, plus the toggle handler.
+  const otherUnit: "bbl" | "MT" = qtyUnit === "MT" ? "bbl" : "MT"
+  const conversionFactor = product ? bblPerMtFor(product) : 0
+  const convertedPreview =
+    product && qtyValid ? convertQuantity(qtyNum, qtyUnit, otherUnit, product) : 0
+
+  const handleConvertUnit = () => {
+    if (!product || !qtyValid) return
+    const converted = convertQuantity(qtyNum, qtyUnit, otherUnit, product)
+    const rounded =
+      otherUnit === "bbl" ? Math.round(converted) : Math.round(converted * 1000) / 1000
+    setQuantity(rounded.toLocaleString("en-US"))
+    setQtyUnit(otherUnit)
+  }
 
   const handleSubmit = () => {
     if (!product || !quote || !qtyValid) {
@@ -564,7 +590,7 @@ function RequestProductDialog({
       return
     }
     setSubmitting(true)
-    const unitLabel = product.unit
+    const unitLabel = qtyUnit
     const buyer = user.company?.trim() || user.fullName?.trim() || "Client account"
     const deal = addDeal({
       title: `${product.name} — ${basis} Purchase Request`,
@@ -588,7 +614,7 @@ function RequestProductDialog({
       mt799Ref: "",
       notes:
         `Quotation request from board: ${product.name} (${product.category}) @ ` +
-        `${formatQuotePrice(quote.price, unitLabel)} ${basis}, ${port.name}, ${port.country}. ` +
+        `${formatQuotePrice(quote.price, product.unit)} ${basis}, ${port.name}, ${port.country}. ` +
         (notes.trim() ? `Client notes: ${notes.trim()}` : "No additional notes."),
     })
     toast.success("Purchase request submitted", {
@@ -677,19 +703,46 @@ function RequestProductDialog({
 
               {/* Quantity */}
               <div className="space-y-1.5">
-                <Label className="text-xs">Quantity required ({product.unit})</Label>
+                <Label className="text-xs">Quantity required ({qtyUnit})</Label>
                 <div className="relative">
                   <Input
                     inputMode="decimal"
                     value={quantity}
                     onChange={(e) => setQuantity(e.target.value)}
-                    placeholder={product.unit === "bbl" ? "e.g. 1,000,000" : "e.g. 50,000"}
+                    placeholder={qtyUnit === "bbl" ? "e.g. 1,000,000" : "e.g. 50,000"}
                     className="h-9 pr-12"
                   />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-                    {product.unit}
+                    {qtyUnit}
                   </span>
                 </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleConvertUnit}
+                    disabled={!qtyValid}
+                    className="h-8 gap-1.5"
+                  >
+                    <ArrowLeftRight className="h-3.5 w-3.5" />
+                    Convert to {otherUnit}
+                  </Button>
+                  {qtyValid && (
+                    <span className="text-xs text-muted-foreground">
+                      ≈{" "}
+                      {convertedPreview.toLocaleString("en-US", {
+                        maximumFractionDigits: otherUnit === "bbl" ? 0 : 3,
+                      })}{" "}
+                      {otherUnit}
+                      <span className="ml-1 opacity-70">({conversionFactor} bbl/MT)</span>
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  bbl↔MT is approximate and density (API gravity) dependent. Contract value is
+                  always computed from the {product.unit} price.
+                </p>
               </div>
 
               {/* Estimated value */}
