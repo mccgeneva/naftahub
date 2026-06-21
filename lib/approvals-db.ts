@@ -227,6 +227,47 @@ export async function insertApproval(req: NewApprovalRequest): Promise<ApprovalR
   return rowToRequest(rows[0])
 }
 
+/**
+ * Idempotently seed a request at a FINAL lifecycle state (used by the demo
+ * account seeder). Unlike `insertApproval` — which always lands a row at
+ * `pending` and runs the live mirror/ledger workflow — this inserts a row whose
+ * `status` is given up front (e.g. an already-`approved` payment or an
+ * `active`/approved instrument) together with its decision timestamp, and uses
+ * `ON CONFLICT (id) DO NOTHING` so re-running the seeder (or a re-login) never
+ * duplicates or clobbers a record the user has since acted on. It deliberately
+ * does NOT carry a ledger effect: the demo's balances are seeded directly into
+ * `ledger_entries`, so applying effects here would double-count.
+ */
+export async function seedApproval(
+  req: NewApprovalRequest & { status?: ApprovalStatus; decidedAt?: string | null; createdAt?: string | null },
+): Promise<void> {
+  await ensureTable()
+  const status = req.status ?? "pending"
+  const adminDecision: GateDecision =
+    status === "approved" ? "approved" : status === "rejected" ? "rejected" : "pending"
+  await query(
+    `INSERT INTO approval_requests
+       (id, user_id, kind, status, title, summary, amount, currency, payload,
+        admin_decision, decided_at, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,COALESCE($12::timestamptz, now()))
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      req.id ?? genId(req.kind),
+      req.userId,
+      req.kind,
+      status,
+      req.title,
+      req.summary,
+      req.amount ?? null,
+      req.currency ?? null,
+      JSON.stringify(req.payload ?? {}),
+      adminDecision,
+      req.decidedAt ?? null,
+      req.createdAt ?? null,
+    ],
+  )
+}
+
 /** A single request by id (used to validate decisions). */
 export async function getApprovalById(id: string): Promise<ApprovalRequest | null> {
   await ensureTable()
