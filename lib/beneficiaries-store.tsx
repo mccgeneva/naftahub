@@ -126,22 +126,61 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
   // Persist on change: mirror to the server (durable), keeping the admin-visible
   // copy in sync. The first write after a server-driven setBeneficiaries is
   // skipped so we never echo freshly-fetched data straight back.
+  //
+  // CRITICAL: `syncMyBeneficiaries` RETURNS `{ ok: false }` on failure instead
+  // of throwing, so a naive `.catch().finally(clear)` would treat a FAILED write
+  // as done — clearing `pendingSync` and letting the next background `load()`
+  // overwrite local state with a server set that never received the change. The
+  // just-added beneficiary would then silently disappear. To prevent that we
+  // keep `pendingSync` asserted (which blocks destructive refetches) until a
+  // sync actually succeeds, retrying with backoff on failure.
   useEffect(() => {
     if (!hydrated) return
     if (skipNextSync.current) {
       skipNextSync.current = false
       return
     }
-    // Mark a write in flight so the background refetch can't clobber it, then
-    // clear the flag once the server has the latest set.
+
+    let cancelled = false
+    let retry: ReturnType<typeof setTimeout> | undefined
     pendingSync.current = true
-    void syncMyBeneficiaries(
-      beneficiaries.map((b) => ({ id: b.id, data: b as unknown as Record<string, unknown>, status: b.status })),
-    )
-      .catch(() => {})
-      .finally(() => {
+
+    const payload = beneficiaries.map((b) => ({
+      id: b.id,
+      data: b as unknown as Record<string, unknown>,
+      status: b.status,
+    }))
+
+    const attempt = async (tries: number) => {
+      let ok = false
+      try {
+        const res = await syncMyBeneficiaries(payload)
+        ok = res.ok
+      } catch {
+        ok = false
+      }
+      if (cancelled) return
+      if (ok) {
+        // Server now holds this exact set — safe to let refetches resume.
         pendingSync.current = false
-      })
+        return
+      }
+      // Failed: keep pendingSync asserted so a refetch can't drop unsynced
+      // local data, and retry with a capped backoff. If it never succeeds the
+      // local copy is preserved (degraded but not lost).
+      if (tries < 6) {
+        retry = setTimeout(() => void attempt(tries + 1), Math.min(1000 * 2 ** tries, 15000))
+      }
+    }
+
+    void attempt(0)
+
+    // If beneficiaries change again mid-flight, cancel this attempt; the new
+    // effect run will sync the latest set.
+    return () => {
+      cancelled = true
+      if (retry) clearTimeout(retry)
+    }
   }, [beneficiaries, hydrated])
 
   // One-time demo backfill + reconcile: after hydration, (1) merge any missing

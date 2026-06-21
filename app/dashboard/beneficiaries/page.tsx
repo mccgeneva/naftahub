@@ -69,6 +69,7 @@ import {
   type BeneficiaryType,
   type BeneficiaryStatus,
 } from "@/lib/beneficiaries-store"
+import { upsertMyBeneficiary } from "@/app/actions/beneficiaries"
 import { exportToCsv, importCsvFile } from "@/lib/export-utils"
 import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
 import { usePdfViewer } from "@/lib/pdf-viewer"
@@ -159,6 +160,7 @@ export default function BeneficiariesPage() {
   const { beneficiaries, setBeneficiaries } = useBeneficiaries()
   const [form, setForm] = useState(emptyForm)
   const [formError, setFormError] = useState<string | null>(null)
+  const [savingBeneficiary, setSavingBeneficiary] = useState(false)
   const logActivity = useActivityLog()
   const { show } = usePdfViewer()
   const router = useRouter()
@@ -242,7 +244,8 @@ export default function BeneficiariesPage() {
   const updateForm = (field: keyof typeof emptyForm, value: string) =>
     setForm((prev) => ({ ...prev, [field]: value }))
 
-  const handleAddBeneficiary = () => {
+  const handleAddBeneficiary = async () => {
+    if (savingBeneficiary) return
     const required: [keyof typeof emptyForm, string][] = [
       ["name", newBeneficiaryType === "individual" ? "Full Name" : "Company Name"],
       ["beneficiaryAddress", "Address"],
@@ -318,6 +321,23 @@ export default function BeneficiariesPage() {
       notes: form.notes.trim() || undefined,
     }
 
+    // Commit to the server FIRST and wait for confirmation, so we never tell the
+    // user it was added while it silently failed to persist. Only on success do
+    // we update local state (which the store also mirrors) and close the dialog.
+    setSavingBeneficiary(true)
+    setFormError(null)
+    const saved = await upsertMyBeneficiary(
+      newBeneficiary.id,
+      newBeneficiary as unknown as Record<string, unknown>,
+      newBeneficiary.status,
+    )
+    setSavingBeneficiary(false)
+    if (!saved.ok) {
+      setFormError(saved.error || "Could not save the beneficiary. Please try again.")
+      toast.error("Beneficiary not saved", { description: saved.error })
+      return
+    }
+
     setBeneficiaries((prev) => [newBeneficiary, ...prev])
     logActivity({
       action: `Added ${newBeneficiary.type} beneficiary: ${newBeneficiary.name}`,
@@ -338,6 +358,9 @@ export default function BeneficiariesPage() {
         intermediaryBank: newBeneficiary.intermediaryBank ?? "(none)",
         status: "Pending KYC verification",
       },
+    })
+    toast.success("Beneficiary added", {
+      description: `${newBeneficiary.name} was saved and is pending KYC verification.`,
     })
     setForm(emptyForm)
     setFormError(null)
@@ -777,11 +800,15 @@ export default function BeneficiariesPage() {
                 {formError && (
                   <p className="text-sm text-red-400 sm:mr-auto sm:text-left">{formError}</p>
                 )}
-                <Button variant="outline" onClick={() => { setIsAddDialogOpen(false); setFormError(null) }}>
+                <Button
+                  variant="outline"
+                  disabled={savingBeneficiary}
+                  onClick={() => { setIsAddDialogOpen(false); setFormError(null) }}
+                >
                   Cancel
                 </Button>
-                <Button onClick={handleAddBeneficiary}>
-                  Add Beneficiary
+                <Button onClick={handleAddBeneficiary} disabled={savingBeneficiary}>
+                  {savingBeneficiary ? "Saving…" : "Add Beneficiary"}
                 </Button>
               </DialogFooter>
             </DialogContent>
