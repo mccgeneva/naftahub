@@ -362,3 +362,93 @@ export async function reverseLedgerEntryForUserAdmin(
     return { ok: false, error: "The entry could not be reversed. Please try again." }
   }
 }
+
+// --- Client financial snapshot (for approval due-diligence) ------------------
+
+/** A single currency line in a client's financial snapshot. */
+export interface CurrencyBalance {
+  currency: string
+  /** Net settled balance (completed credits − completed debits). */
+  available: number
+  /** Amount currently on hold (not yet settled). */
+  onHold: number
+}
+
+export interface ClientFinancialSnapshot {
+  userId: string
+  fullName: string
+  company: string
+  email: string
+  accountBadge: string
+  relationship?: string
+  country?: string
+  /** Per-currency balances, richest first. */
+  balances: CurrencyBalance[]
+  totalEntries: number
+  lastActivity?: string
+}
+
+export type ClientSnapshotResult =
+  | { ok: true; snapshot: ClientFinancialSnapshot }
+  | { ok: false; error: string }
+
+/**
+ * Admin: assemble a financial-capability snapshot for a client. Returns the
+ * client's profile basics plus per-currency settled balances and on-hold totals
+ * computed from the durable ledger, so an administrator reviewing a deal can
+ * judge whether the client can actually fund it. Passcode-gated.
+ */
+export async function getClientFinancialSnapshotAdmin(
+  passcode: string,
+  userId: string,
+): Promise<ClientSnapshotResult> {
+  try {
+    await requireAdmin(passcode)
+    const [entries, profile] = await Promise.all([
+      readLedger(userId),
+      resolveAccountProfileById(userId),
+    ])
+
+    const byCurrency = new Map<string, CurrencyBalance>()
+    for (const e of entries) {
+      const cur = e.currency || "USD"
+      const line = byCurrency.get(cur) ?? { currency: cur, available: 0, onHold: 0 }
+      const signed = e.direction === "credit" ? e.amount : -e.amount
+      if (e.status === "hold") {
+        line.onHold += e.amount
+      } else {
+        line.available += signed
+      }
+      byCurrency.set(cur, line)
+    }
+
+    const balances = Array.from(byCurrency.values()).sort(
+      (a, b) => Math.abs(b.available) - Math.abs(a.available),
+    )
+
+    const lastActivity = entries.length
+      ? entries.reduce((latest, e) => (e.date > latest ? e.date : latest), entries[0].date)
+      : undefined
+
+    const country =
+      profile.companyInfo?.find((i) => /country|nationality/i.test(i.label))?.value || undefined
+
+    return {
+      ok: true,
+      snapshot: {
+        userId,
+        fullName: profile.fullName,
+        company: profile.company,
+        email: profile.email,
+        accountBadge: profile.accountBadge,
+        relationship: profile.relationship,
+        country,
+        balances,
+        totalEntries: entries.length,
+        lastActivity,
+      },
+    }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+}
