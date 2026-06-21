@@ -611,10 +611,10 @@ function RequestProductDialog({
 
   return (
     <Dialog open={!!seed} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-[520px]">
+      <DialogContent className="flex max-h-[90dvh] flex-col gap-0 sm:max-w-[520px]">
         {product && quote && (
           <>
-            <DialogHeader>
+            <DialogHeader className="shrink-0 pb-2">
               <DialogTitle className="flex items-center gap-2">
                 <ShoppingCart className="h-4 w-4 text-primary" />
                 Request {product.name}
@@ -625,7 +625,7 @@ function RequestProductDialog({
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4 py-1">
+            <div className="-mr-2 flex-1 space-y-4 overflow-y-auto py-1 pr-2">
               {/* Pre-filled product summary */}
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-lg bg-secondary/30 p-2.5">
@@ -723,7 +723,7 @@ function RequestProductDialog({
               </div>
             </div>
 
-            <DialogFooter className="flex-col gap-2 sm:flex-row">
+            <DialogFooter className="mt-2 shrink-0 flex-col gap-2 border-t border-border pt-4 sm:flex-row">
               <Button variant="outline" onClick={onClose} disabled={submitting}>
                 Cancel
               </Button>
