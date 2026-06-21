@@ -43,6 +43,8 @@ export interface ClientCard {
   format: CardFormat
   last4: string
   expiry: string
+  /** 3-digit card security code (CVV/CVC), generated at issuance. */
+  cvv: string
   currency: string
   monthlyLimit: number
   monthlySpent: number
@@ -98,6 +100,11 @@ export function genLast4(): string {
   return String(Math.floor(1000 + Math.random() * 9000))
 }
 
+/** Random 3-digit security code (CVV/CVC) for demo issuance. */
+export function genCvv(): string {
+  return String(Math.floor(100 + Math.random() * 900))
+}
+
 /** Expiry four years out, formatted MM/YY. */
 export function genExpiry(): string {
   const d = new Date()
@@ -121,6 +128,7 @@ function hydrateCard(raw: Partial<ClientCard> & { id: string }): ClientCard {
     format: (raw.format as CardFormat) ?? "physical",
     last4: raw.last4 ?? genLast4(),
     expiry: raw.expiry ?? genExpiry(),
+    cvv: raw.cvv ?? genCvv(),
     currency: raw.currency ?? "EUR",
     monthlyLimit: Number(raw.monthlyLimit ?? 0),
     monthlySpent: Number(raw.monthlySpent ?? 0),
