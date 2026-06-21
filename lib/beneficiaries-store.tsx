@@ -1,7 +1,7 @@
 "use client"
 
 import { createContext, useContext, useEffect, useRef, useState } from "react"
-import { scopedKey, getActiveUserId } from "@/lib/user-scope"
+import { getActiveUserId } from "@/lib/user-scope"
 import { getMyBeneficiaries, syncMyBeneficiaries } from "@/app/actions/beneficiaries"
 import { DEMO_USER_ID } from "@/lib/users"
 import { demoBeneficiaries } from "@/lib/demo-beneficiaries"
@@ -45,16 +45,6 @@ export interface Beneficiary {
   intermediaryBank?: string
   intermediarySwift?: string
 }
-
-const KEY_BASE = "mcc.beneficiaries.v1"
-const storageKey = () => scopedKey(KEY_BASE)
-
-// One-time marker (per user) for the demo beneficiary-book backfill/reconcile.
-// Bumped to v2 to roll out a one-time repair of invalid IBAN check digits that
-// were persisted by the v1 backfill. Bumping the version lets the reconcile run
-// exactly once more for users who already received v1, then never again — so a
-// demo user who later removes entries doesn't see them re-appear.
-const DEMO_BACKFILL_MARKER = "mcc.demo-beneficiaries-backfill.v2"
 
 interface BeneficiariesContextValue {
   beneficiaries: Beneficiary[]
@@ -132,16 +122,13 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
   // (the v1 backfill stored some with bad check digits). Runs against the
   // already-hydrated state (the durable server copy), then the persist effect
   // mirrors corrections back to Neon. Scoped to the demo user and guarded by a
-  // per-user marker so it runs at most once and never re-adds removed rows.
+  // per-session ref. It is idempotent — it only adds canonical rows missing from
+  // the server copy — so re-running across reloads is a no-op and it never
+  // re-adds rows the user has removed. No localStorage involved.
   useEffect(() => {
     if (!hydrated || demoBackfillDone.current) return
     demoBackfillDone.current = true
     if (getActiveUserId() !== DEMO_USER_ID) return
-    try {
-      if (window.localStorage.getItem(scopedKey(DEMO_BACKFILL_MARKER))) return
-    } catch {
-      return
-    }
 
     const canonical = demoBeneficiaries()
     const canonicalById = new Map(canonical.map((b) => [b.id, b]))
@@ -154,15 +141,6 @@ export function BeneficiariesProvider({ children }: { children: React.ReactNode 
       const ref = canonicalById.get(b.id)
       return ref && b.iban && b.iban !== ref.iban && !validateIban(b.iban).valid
     })
-
-    try {
-      window.localStorage.setItem(
-        scopedKey(DEMO_BACKFILL_MARKER),
-        JSON.stringify({ at: new Date().toISOString(), added: missing.length, ibanRepair: needsIbanRepair }),
-      )
-    } catch {
-      // ignore availability errors — marker is best-effort
-    }
 
     if (!missing.length && !needsIbanRepair) return
 
