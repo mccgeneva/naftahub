@@ -7,17 +7,21 @@ import {
   sessionCookieOptions,
   sessionMetaCookieOptions,
   userCookieOptions,
+  expiredCookieOptions,
 } from "@/lib/auth"
 import { USER_COOKIE } from "@/lib/user-scope"
 import { signSessionMeta, verifySessionMeta, evaluateSessionMeta } from "@/lib/session-token"
 
 const IDLE_MS = SESSION_IDLE_MAX_AGE * 1000
 
-// Clear every session cookie on a response (used when rejecting access).
+// Clear every session cookie on a response (used when rejecting access). Cookies
+// set with `SameSite=None; Secure` must be cleared with the SAME attributes or
+// the browser keeps them — so we overwrite with an expired value using
+// `expiredCookieOptions`, not a bare `delete(name)`.
 function clearSessionCookies(res: NextResponse) {
-  res.cookies.delete(SESSION_COOKIE)
-  res.cookies.delete(SESSION_META_COOKIE)
-  res.cookies.delete(USER_COOKIE)
+  for (const name of [SESSION_COOKIE, SESSION_META_COOKIE, USER_COOKIE]) {
+    res.cookies.set(name, "", expiredCookieOptions)
+  }
 }
 
 export async function proxy(request: NextRequest) {

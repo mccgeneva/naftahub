@@ -87,3 +87,20 @@ export const userCookieOptions = {
   path: "/",
   maxAge: SESSION_IDLE_MAX_AGE,
 } as const
+
+// Attributes for EXPIRING (clearing) a cookie. A cookie is only overwritten /
+// removed by the browser when the clearing `Set-Cookie` matches the original on
+// name + path + domain AND carries compatible attributes. Cookies set with
+// `SameSite=None; Secure` (required so the session survives inside the
+// cross-origin preview iframe) are NOT reliably removed by Next's bare
+// `cookies().delete(name)`, because that emits a `Set-Cookie` without
+// `SameSite=None; Secure` — so the original cookie lingers and a post-logout
+// refresh silently re-authenticates. Always clear session cookies with these
+// matching attributes and `maxAge: 0`.
+export const expiredCookieOptions = {
+  secure: true,
+  sameSite: "none",
+  path: "/",
+  maxAge: 0,
+  expires: new Date(0),
+} as const

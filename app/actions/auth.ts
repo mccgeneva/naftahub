@@ -11,6 +11,7 @@ import {
   sessionMetaCookieOptions,
   freshLoginCookieOptions,
   userCookieOptions,
+  expiredCookieOptions,
 } from "@/lib/auth"
 import { signSessionMeta } from "@/lib/session-token"
 import { USER_COOKIE } from "@/lib/user-scope"
@@ -18,6 +19,24 @@ import { getDynamicUserByEmail } from "@/lib/admin-users-db"
 import { logActivity } from "@/app/actions/log-activity"
 
 export type LoginState = { error?: string }
+
+/**
+ * Hard-clear every session cookie. Each cookie is OVERWRITTEN with an empty,
+ * already-expired value using the SAME attributes it was set with
+ * (`SameSite=None; Secure; Path=/`). A bare `cookies().delete(name)` is NOT
+ * sufficient for `SameSite=None; Secure` cookies — the browser won't replace
+ * them unless the clearing cookie matches, which previously left `mcc_session`
+ * alive after logout so a refresh re-authenticated silently.
+ */
+async function clearAllSessionCookies() {
+  const cookieStore = await cookies()
+  for (const name of [SESSION_COOKIE, SESSION_META_COOKIE, USER_COOKIE, FRESH_LOGIN_COOKIE]) {
+    cookieStore.set(name, "", expiredCookieOptions)
+    // Belt-and-braces: also issue the attribute-less delete in case a cookie was
+    // ever set with different attributes in an older build.
+    cookieStore.delete(name)
+  }
+}
 
 // A minimal, auth-only view of a credential match. Every account is a dynamic
 // record in Neon (lib/admin-users-db.ts).
@@ -108,11 +127,7 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
   // A failed attempt must never leave an active session behind. Clear any
   // lingering session/fresh-login cookies so wrong credentials can never appear
   // to "pass" by falling back to a previously authenticated session.
-  const cookieStore = await cookies()
-  cookieStore.delete(SESSION_COOKIE)
-  cookieStore.delete(SESSION_META_COOKIE)
-  cookieStore.delete(USER_COOKIE)
-  cookieStore.delete(FRESH_LOGIN_COOKIE)
+  await clearAllSessionCookies()
 
   // Log failed attempt for security monitoring (never include the password).
   const reason = !matchedUser
@@ -140,10 +155,7 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
 }
 
 export async function logout() {
-  const cookieStore = await cookies()
-  cookieStore.delete(SESSION_COOKIE)
-  cookieStore.delete(SESSION_META_COOKIE)
-  cookieStore.delete(USER_COOKIE)
+  await clearAllSessionCookies()
   await logActivity({
     action: "Logout",
     category: "Authentication",
@@ -164,10 +176,7 @@ const EXPIRE_REASON_LABELS: Record<ExpireReason, string> = {
 // Securely terminates the session from the client (cookie is httpOnly, so only
 // the server can delete it). Logs the reason for the audit trail.
 export async function expireSession(reason: ExpireReason) {
-  const cookieStore = await cookies()
-  cookieStore.delete(SESSION_COOKIE)
-  cookieStore.delete(SESSION_META_COOKIE)
-  cookieStore.delete(USER_COOKIE)
+  await clearAllSessionCookies()
   await logActivity({
     action: "Session terminated automatically",
     category: "Authentication / Security",
