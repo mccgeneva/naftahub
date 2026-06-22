@@ -242,14 +242,60 @@ export function generateStatementPdf(input: StatementInput): GeneratedPdf {
     return { doc, filename: `MCC-Statement-${statementNo}.pdf`, title: "Account Statement" }
   }
 
-  // Column layout for the ledger table.
+  // ---- Ledger table geometry --------------------------------------------
+  // The three numeric columns are sized generously (this platform routinely
+  // handles 9-figure amounts) and each value is right-aligned WITHIN a fixed
+  // band. Crucially, the description wraps to the LEFT edge of the debit band
+  // (not the right-align anchor), so large numbers can never bleed back over
+  // the description text or collide with each other.
+  const cellPad = 6
+  const numColW = 88 // width reserved per numeric column
+  const dateW = 58
+  const refW = 62
+  const tableRight = margin + contentWidth
+  const balLeft = tableRight - numColW
+  const creditLeft = balLeft - numColW
+  const debitLeft = creditLeft - numColW
   const cols = {
-    date: margin + 4,
-    ref: margin + 78,
-    desc: margin + 168,
-    debit: margin + contentWidth - 230,
-    credit: margin + contentWidth - 120,
-    balance: margin + contentWidth - 4,
+    date: margin + cellPad,
+    ref: margin + cellPad + dateW,
+    desc: margin + cellPad + dateW + refW,
+    debitR: debitLeft + numColW - cellPad,
+    creditR: creditLeft + numColW - cellPad,
+    balanceR: balLeft + numColW - cellPad,
+  }
+  const descWidth = debitLeft - cols.desc - cellPad
+  const numTextMax = numColW - cellPad * 2
+
+  // Truncate a single-line string with an ellipsis so it fits within maxW.
+  const fitText = (text: string, maxW: number, style: "normal" | "bold", size: number): string => {
+    doc.setFont("helvetica", style)
+    doc.setFontSize(size)
+    if (doc.getTextWidth(text) <= maxW) return text
+    let t = text
+    while (t.length > 1 && doc.getTextWidth(`${t}…`) > maxW) t = t.slice(0, -1)
+    return `${t}…`
+  }
+
+  // Right-align a monetary value, shrinking the font if an extreme amount would
+  // otherwise overflow its column band.
+  const drawAmount = (
+    text: string,
+    rightX: number,
+    baselineY: number,
+    color: [number, number, number],
+    style: "normal" | "bold" = "normal",
+  ) => {
+    doc.setFont("helvetica", style)
+    doc.setTextColor(...color)
+    let size = 8.5
+    doc.setFontSize(size)
+    while (size > 6 && doc.getTextWidth(text) > numTextMax) {
+      size -= 0.5
+      doc.setFontSize(size)
+    }
+    doc.text(text, rightX, baselineY, { align: "right" })
+    doc.setFontSize(8.5)
   }
 
   const drawTableHead = () => {
@@ -262,9 +308,9 @@ export function generateStatementPdf(input: StatementInput): GeneratedPdf {
     doc.text("DATE", cols.date, ty)
     doc.text("REFERENCE", cols.ref, ty)
     doc.text("DESCRIPTION", cols.desc, ty)
-    doc.text("DEBIT", cols.debit, ty, { align: "right" })
-    doc.text("CREDIT", cols.credit, ty, { align: "right" })
-    doc.text("BALANCE", cols.balance, ty, { align: "right" })
+    doc.text("DEBIT", cols.debitR, ty, { align: "right" })
+    doc.text("CREDIT", cols.creditR, ty, { align: "right" })
+    doc.text("BALANCE", cols.balanceR, ty, { align: "right" })
     y += 22
   }
 
@@ -323,11 +369,14 @@ export function generateStatementPdf(input: StatementInput): GeneratedPdf {
         else totalDebits += e.amount
       }
 
+      // Measure the description with the body font so wrapping is accurate.
+      doc.setFont("helvetica", "normal")
+      doc.setFontSize(8.5)
       const descLines = doc.splitTextToSize(
         `${e.counterparty}${e.category ? ` · ${e.category}` : ""}${
           e.status !== "completed" ? " (on hold)" : ""
         }`,
-        cols.debit - cols.desc - 8,
+        descWidth,
       ) as string[]
       const rowH = Math.max(20, descLines.length * 11 + 9)
       ensureSpace(rowH)
@@ -342,16 +391,14 @@ export function generateStatementPdf(input: StatementInput): GeneratedPdf {
       doc.setTextColor(...BRAND.ink)
       doc.text(formatDate(e._d), cols.date, ty)
       doc.setTextColor(...BRAND.slate)
-      doc.text(e.reference || e.id, cols.ref, ty)
+      doc.text(fitText(e.reference || e.id, refW - cellPad, "normal", 8.5), cols.ref, ty)
+      doc.setFont("helvetica", "normal")
+      doc.setFontSize(8.5)
       doc.setTextColor(...BRAND.ink)
       descLines.forEach((ln, li) => doc.text(ln, cols.desc, ty + li * 11))
-      doc.setTextColor(...BRAND.red)
-      doc.text(!isCredit && counts ? money(e.amount, currency) : "—", cols.debit, ty, { align: "right" })
-      doc.setTextColor(...BRAND.green)
-      doc.text(isCredit && counts ? money(e.amount, currency) : "—", cols.credit, ty, { align: "right" })
-      doc.setTextColor(...BRAND.ink)
-      doc.setFont("helvetica", "bold")
-      doc.text(counts ? money(running, currency) : "—", cols.balance, ty, { align: "right" })
+      drawAmount(!isCredit && counts ? money(e.amount, currency) : "—", cols.debitR, ty, BRAND.red)
+      drawAmount(isCredit && counts ? money(e.amount, currency) : "—", cols.creditR, ty, BRAND.green)
+      drawAmount(counts ? money(running, currency) : "—", cols.balanceR, ty, BRAND.ink, "bold")
       y += rowH
     })
 
