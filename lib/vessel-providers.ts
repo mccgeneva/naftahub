@@ -14,10 +14,14 @@
 import "server-only"
 import {
   VESSEL_PROVIDERS,
+  isValidImo,
   type Vessel,
+  type VesselCompliance,
+  type VesselComplianceStatus,
   type VesselProviderId,
   type VesselProviderInfo,
 } from "@/lib/spot-deals-shared"
+import { screenImoAgainstOfac } from "@/lib/ofac-screening"
 
 export interface ResolvedProvider extends VesselProviderInfo {
   token: string
@@ -39,6 +43,8 @@ export function providerStatus(): {
   connected: boolean
   active: { id: VesselProviderId; label: string } | null
   providers: Array<{ id: VesselProviderId; label: string; envVar: string; signupUrl: string; configured: boolean }>
+  /** The free OFAC sanctions + IMO-validity screening is always available. */
+  complianceEnabled: boolean
 } {
   const providers = VESSEL_PROVIDERS.map((p) => ({
     id: p.id,
@@ -52,6 +58,57 @@ export function providerStatus(): {
     connected: Boolean(active),
     active: active ? { id: active.id, label: active.label } : null,
     providers,
+    complianceEnabled: true,
+  }
+}
+
+/**
+ * Free, token-free compliance auto-check for a vessel IMO. Runs the official
+ * IMO check-digit validation (offline) and screens the number against the
+ * public OFAC sanctions lists. Never throws — degrades to "unverified" if the
+ * sanctions source is briefly unavailable.
+ */
+export async function screenVesselImo(imo: string): Promise<VesselCompliance> {
+  const clean = (imo ?? "").trim()
+  const imoValid = isValidImo(clean)
+  const sources = ["IMO check digit"]
+  let status: VesselComplianceStatus
+  let note: string | undefined
+  let matches: VesselCompliance["matches"] = []
+
+  const ofac = await screenImoAgainstOfac(clean)
+  if (ofac.available) {
+    sources.push(...ofac.sources)
+    matches = ofac.matches
+    if (matches.length > 0) {
+      status = "flagged"
+      const programs = [...new Set(matches.flatMap((m) => m.programs))].join("; ")
+      note = `Sanctions match: ${matches[0].name}${programs ? ` (${programs})` : ""}. Do not transact.`
+    } else {
+      status = "clear"
+      note = "No match on OFAC sanctions lists."
+    }
+  } else {
+    status = "unverified"
+    note = "OFAC sanctions list temporarily unavailable; re-screen recommended."
+  }
+
+  return { status, imoValid, sources, matches, checkedAt: new Date().toISOString(), note }
+}
+
+/** Minimal catalogue entry created from a token-free, compliance-only import. */
+function complianceStub(imo: string, compliance: VesselCompliance): Vessel {
+  return {
+    imo,
+    name: `IMO ${imo}`,
+    type: "crude",
+    capacity: 0,
+    capacityUnit: "DWT",
+    status: "idle",
+    location: "Unknown",
+    source: "compliance",
+    compliance,
+    updatedAt: new Date().toISOString(),
   }
 }
 
@@ -156,25 +213,33 @@ const PROVIDER_ADAPTERS: Record<VesselProviderId, Adapter> = {
 }
 
 /**
- * Fetch a vessel by IMO from whichever provider is configured. Returns the
- * normalized Vessel, or an error string suitable for showing to the admin.
+ * Fetch a vessel by IMO. The free OFAC + IMO-validity compliance screen always
+ * runs and is stamped onto the returned vessel. If a paid provider is linked,
+ * we also fetch real master data; otherwise we return a compliance-screened
+ * stub so the import still works automatically with no token.
  */
 export async function fetchVesselByImo(
   imo: string,
-): Promise<{ vessel: Vessel; providerLabel: string } | { error: string }> {
+): Promise<{ vessel: Vessel; providerLabel: string; compliance: VesselCompliance } | { error: string; compliance: VesselCompliance }> {
+  const compliance = await screenVesselImo(imo)
   const provider = resolveProvider()
+
   if (!provider) {
+    // Token-free path: no master-data subscription, so we return a stub the
+    // admin can complete, already stamped with the compliance verdict.
     return {
-      error:
-        "No live vessel-data provider is connected. Add a MarineTraffic, Datalastic or VesselFinder API token to enable live import.",
+      vessel: complianceStub(imo, compliance),
+      providerLabel: "OFAC compliance screening",
+      compliance,
     }
   }
+
   try {
     const result = await PROVIDER_ADAPTERS[provider.id](imo, provider.token)
-    if ("error" in result) return { error: result.error }
-    return { vessel: result, providerLabel: provider.label }
+    if ("error" in result) return { error: result.error, compliance }
+    return { vessel: { ...result, compliance }, providerLabel: provider.label, compliance }
   } catch (err) {
     console.log(`[v0] vessel provider ${provider.id} failed:`, (err as Error).message)
-    return { error: `Live import via ${provider.label} failed. Please add the vessel manually.` }
+    return { error: `Live import via ${provider.label} failed. Please add the vessel manually.`, compliance }
   }
 }

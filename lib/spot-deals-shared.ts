@@ -45,7 +45,37 @@ export const VESSEL_STATUS_LABELS: Record<VesselStatus, string> = {
 }
 
 /** Where the row originated, for the audit trail / import provenance. */
-export type VesselSource = "manual" | "marinetraffic" | "datalastic" | "vesselfinder" | "seed"
+export type VesselSource = "manual" | "marinetraffic" | "datalastic" | "vesselfinder" | "compliance" | "seed"
+
+/**
+ * Result of the free, token-free compliance auto-check that runs on every
+ * imported / added vessel:
+ *  - "clear"      — valid IMO and no match on public sanctions lists
+ *  - "flagged"    — appears on a sanctions list (do not transact)
+ *  - "unverified" — screening source was unavailable; IMO format still validated
+ */
+export type VesselComplianceStatus = "clear" | "flagged" | "unverified"
+
+export interface VesselComplianceMatch {
+  /** Sanctioned entity name as listed. */
+  name: string
+  /** Sanctions programs / lists, e.g. ["OFAC SDN: IRAN", "OFAC SDN: RUSSIA-EO14024"]. */
+  programs: string[]
+}
+
+export interface VesselCompliance {
+  status: VesselComplianceStatus
+  /** Whether the IMO passed the official 7-digit check-digit algorithm. */
+  imoValid: boolean
+  /** Screening sources consulted, e.g. ["IMO check digit", "OFAC SDN", "OFAC Consolidated"]. */
+  sources: string[]
+  /** Sanctions hits, if any. */
+  matches: VesselComplianceMatch[]
+  /** ISO timestamp of the screening. */
+  checkedAt: string
+  /** Human-readable summary for the UI / audit trail. */
+  note?: string
+}
 
 /** Identifier for a live AIS / vessel-data provider the app can link to. */
 export type VesselProviderId = "marinetraffic" | "datalastic" | "vesselfinder"
@@ -107,7 +137,22 @@ export interface Vessel {
   /** Type of oil/gas currently being transported, free-form. */
   cargo?: string
   source: VesselSource
+  /** Free sanctions / IMO-validity screening result, stamped on import or add. */
+  compliance?: VesselCompliance
   updatedAt: string
+}
+
+/**
+ * Validate a 7-digit IMO number using the official check-digit algorithm:
+ * multiply the first 6 digits by 7,6,5,4,3,2, sum them, and the last digit of
+ * that sum must equal the 7th digit. Pure + offline — no API required.
+ */
+export function isValidImo(imo: string): boolean {
+  const s = (imo ?? "").trim()
+  if (!/^\d{7}$/.test(s)) return false
+  let sum = 0
+  for (let i = 0; i < 6; i++) sum += Number(s[i]) * (7 - i)
+  return sum % 10 === Number(s[6])
 }
 
 // --- Spot deals -------------------------------------------------------------

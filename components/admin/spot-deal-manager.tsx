@@ -18,6 +18,10 @@ import {
   Satellite,
   CheckCircle2,
   ExternalLink,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldQuestion,
+  RefreshCw,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -70,6 +74,7 @@ import {
   upsertVesselAdmin,
   deleteVesselAdmin,
   importVesselFromProvider,
+  rescreenVesselAdmin,
   getVesselProviderStatus,
   listSpotDealsAdmin,
   createSpotDealAdmin,
@@ -77,10 +82,26 @@ import {
   withdrawSpotDealAdmin,
   type CreateSpotDealInput,
 } from "@/app/actions/spot-deals"
-import { VESSEL_PROVIDERS } from "@/lib/spot-deals-shared"
+import { VESSEL_PROVIDERS, type VesselCompliance } from "@/lib/spot-deals-shared"
 
 const CURRENCIES = ["USD", "EUR", "GBP", "CHF", "AED", "SGD"]
 const INCOTERMS = ["FOB", "CIF", "CFR", "FCA", "DES", "DAP"]
+
+/** Compact sanctions / IMO-validity badge shown on each vessel row. */
+function ComplianceBadge({ compliance }: { compliance?: VesselCompliance }) {
+  if (!compliance) return null
+  const map = {
+    clear: { cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600", Icon: ShieldCheck, label: "Clear" },
+    flagged: { cls: "border-red-500/40 bg-red-500/10 text-red-600", Icon: ShieldAlert, label: "Sanctions hit" },
+    unverified: { cls: "border-amber-500/30 bg-amber-500/10 text-amber-600", Icon: ShieldQuestion, label: "Unverified" },
+  }[compliance.status]
+  return (
+    <Badge variant="outline" className={cn("gap-1 text-[10px]", map.cls)} title={compliance.note}>
+      <map.Icon className="h-3 w-3" />
+      {map.label}
+    </Badge>
+  )
+}
 
 const TYPE_BADGE: Record<VesselType, string> = {
   crude: "border-amber-500/30 bg-amber-500/10 text-amber-600",
@@ -200,9 +221,18 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
     try {
       const res = await importVesselFromProvider(ADMIN_PASSCODE, imo)
       if (res.ok) {
-        toast.success("Vessel imported", {
-          description: `${res.vessel?.name} (IMO ${res.vessel?.imo})${providerLabel ? ` · ${providerLabel}` : ""}`,
-        })
+        const c = res.vessel?.compliance
+        const stub = res.vessel?.source === "compliance"
+        const desc = `${res.vessel?.name} (IMO ${res.vessel?.imo})${
+          stub ? " — screened; complete particulars manually" : ""
+        }`
+        if (c?.status === "flagged") {
+          toast.error("Sanctions match — do not transact", { description: c.note ?? desc })
+        } else if (c?.status === "unverified") {
+          toast.warning("Imported (compliance unverified)", { description: desc })
+        } else {
+          toast.success("Vessel imported · compliance clear", { description: desc })
+        }
         setImportImo("")
         await load(search)
       } else {
@@ -219,6 +249,29 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
       }
     } finally {
       setImporting(false)
+    }
+  }
+
+  const [rescreening, setRescreening] = useState<string | null>(null)
+  const handleRescreen = async (v: Vessel) => {
+    setRescreening(v.imo)
+    try {
+      const res = await rescreenVesselAdmin(ADMIN_PASSCODE, v.imo)
+      if (res.ok) {
+        const c = res.vessel?.compliance
+        if (c?.status === "flagged") {
+          toast.error(`${v.name}: sanctions match`, { description: c.note })
+        } else if (c?.status === "unverified") {
+          toast.warning(`${v.name}: compliance unverified`, { description: c?.note })
+        } else {
+          toast.success(`${v.name}: compliance clear`)
+        }
+        await load(search)
+      } else {
+        toast.error(res.error)
+      }
+    } finally {
+      setRescreening(null)
     }
   }
 
@@ -274,31 +327,42 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
             </Button>
           </div>
 
-          {/* Live data provider status */}
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
-            <div className="flex items-center gap-2 text-sm">
-              <Satellite className="h-4 w-4 text-muted-foreground" />
-              {providerConnected ? (
-                <span className="flex items-center gap-1.5">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                  Live vessel data: <span className="font-medium text-foreground">{providerLabel}</span> connected
-                </span>
-              ) : (
-                <span className="text-muted-foreground">
-                  No live vessel-data provider connected — import uses the curated catalogue.
-                </span>
-              )}
+          {/* Live data provider + free compliance status */}
+          <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm">
+                <Satellite className="h-4 w-4 text-muted-foreground" />
+                {providerConnected ? (
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                    Live master data: <span className="font-medium text-foreground">{providerLabel}</span> connected
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">
+                    No paid master-data provider — imports validate the IMO and run compliance only.
+                  </span>
+                )}
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setProvidersOpen(true)} className="shrink-0">
+                <Satellite className="mr-1.5 h-3.5 w-3.5" />
+                {providerConnected ? "Manage providers" : "Add master data"}
+              </Button>
             </div>
-            <Button variant="outline" size="sm" onClick={() => setProvidersOpen(true)} className="shrink-0">
-              <Satellite className="mr-1.5 h-3.5 w-3.5" />
-              {providerConnected ? "Manage providers" : "Connect provider"}
-            </Button>
+            <div className="flex items-center gap-1.5 text-xs text-emerald-600">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              <span>
+                Free compliance auto-check active — official IMO validation + OFAC sanctions screening, no token
+                required.
+              </span>
+            </div>
           </div>
 
           <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/30 p-3 sm:flex-row sm:items-end">
             <div className="flex-1">
               <Label htmlFor="import-imo" className="text-xs">
-                {providerConnected ? `Import from ${providerLabel} (by IMO)` : "Live import by IMO (needs a provider)"}
+                {providerConnected
+                  ? `Import from ${providerLabel} + compliance (by IMO)`
+                  : "Validate & compliance-check by IMO"}
               </Label>
               <Input
                 id="import-imo"
@@ -330,8 +394,8 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
                     <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
                       This vessel isn&apos;t in the catalogue yet.{" "}
                       {providerConnected
-                        ? `Try a live ${providerLabel} import, or add it manually with the IMO pre-filled.`
-                        : "Connect a live data provider to import it, or add it manually with the IMO pre-filled."}
+                        ? `Import full particulars from ${providerLabel} (with compliance), or add it manually.`
+                        : "Validate the IMO and run the free compliance check now, or add it manually."}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center justify-center gap-2">
@@ -343,9 +407,9 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
                       {importing ? (
                         <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
                       ) : (
-                        <Download className="mr-1.5 h-4 w-4" />
+                        <ShieldCheck className="mr-1.5 h-4 w-4" />
                       )}
-                      Import IMO {searchedImo}
+                      {providerConnected ? `Import IMO ${searchedImo}` : `Validate & screen ${searchedImo}`}
                     </Button>
                     <Button onClick={() => openCreate(searchedImo)}>
                       <Plus className="mr-1.5 h-4 w-4" />
@@ -358,8 +422,8 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
                   <p className="text-sm font-medium">No vessels found</p>
                   <p className="mx-auto max-w-sm text-xs text-muted-foreground">
                     {search.trim()
-                      ? "No catalogue entry matches that search. Search by exact 7-digit IMO to import or add a specific vessel."
-                      : "The catalogue is empty. Add a vessel or import one from MarineTraffic by IMO."}
+                      ? "No catalogue entry matches that search. Search by exact 7-digit IMO to validate, screen and add a specific vessel."
+                      : "The catalogue is empty. Add a vessel, or screen one by IMO."}
                   </p>
                   <Button onClick={() => openCreate()}>
                     <Plus className="mr-1.5 h-4 w-4" />
@@ -382,6 +446,7 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
                         <Badge variant="outline" className={cn("text-[10px]", TYPE_BADGE[v.type])}>
                           {VESSEL_TYPE_LABELS[v.type]}
                         </Badge>
+                        <ComplianceBadge compliance={v.compliance} />
                       </div>
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         IMO {v.imo} · {v.vesselClass || "—"} · {v.capacity.toLocaleString("en-US")} {v.capacityUnit}
@@ -402,6 +467,20 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleRescreen(v)}
+                        disabled={rescreening === v.imo}
+                        title="Re-run compliance check"
+                      >
+                        {rescreening === v.imo ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        )}
+                        <span className="sr-only">Re-screen {v.name}</span>
+                      </Button>
                       <Button size="sm" variant="outline" onClick={() => openEdit(v)}>
                         <Pencil className="h-3.5 w-3.5" />
                         <span className="sr-only">Edit {v.name}</span>
@@ -597,12 +676,28 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
               Live vessel-data providers
             </DialogTitle>
             <DialogDescription>
-              Link any supported AIS / vessel-data company by adding its API token to the project&apos;s
-              environment variables. The app automatically uses the first connected provider for live IMO
-              lookups. No token is ever shown here.
+              The free compliance auto-check runs automatically with no token. Optionally link a paid AIS
+              company for full master data (name, class, tonnage). No token is ever shown here.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3">
+            {/* Always-on, token-free compliance */}
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">Compliance auto-check</span>
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-600">
+                    <ShieldCheck className="h-3 w-3" /> Active · free
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Official IMO check-digit validation + OFAC SDN &amp; Consolidated sanctions screening. Runs on
+                  every import and vessel save — no API token required.
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs font-medium text-muted-foreground">Optional paid master-data providers</p>
             {(provider?.providers ?? VESSEL_PROVIDERS.map((p) => ({ ...p, configured: false }))).map((p) => (
               <div
                 key={p.id}

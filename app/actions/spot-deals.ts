@@ -37,11 +37,13 @@ import {
 import {
   computeTotalValue,
   isDealLive,
+  isValidImo,
   VESSEL_TYPE_LABELS,
   type Vessel,
   type SpotDeal,
+  type VesselCompliance,
 } from "@/lib/spot-deals-shared"
-import { fetchVesselByImo, providerStatus } from "@/lib/vessel-providers"
+import { fetchVesselByImo, providerStatus, screenVesselImo } from "@/lib/vessel-providers"
 
 function adminOk(passcode: string): boolean {
   return passcode === ADMIN_PASSCODE
@@ -79,6 +81,13 @@ export interface VesselResult {
   error?: string
 }
 
+/** One-line, human-readable verdict for logs and toasts. */
+function complianceSummary(c: VesselCompliance): string {
+  if (c.status === "flagged") return `FLAGGED — ${c.note ?? "sanctions match"}`
+  if (c.status === "unverified") return "Unverified (sanctions source unavailable)"
+  return `Clear — no sanctions match${c.imoValid ? ", IMO valid" : ""}`
+}
+
 export async function upsertVesselAdmin(passcode: string, vessel: Vessel): Promise<VesselResult> {
   if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
   const imo = (vessel.imo ?? "").trim()
@@ -86,22 +95,26 @@ export async function upsertVesselAdmin(passcode: string, vessel: Vessel): Promi
   if (!vessel.name?.trim()) return { ok: false, error: "Vessel name is required." }
   try {
     const existing = await dbGetVessel(imo)
+    // Free, automatic compliance auto-check (OFAC sanctions + IMO validity).
+    const compliance = await screenVesselImo(imo)
     const saved = await dbUpsertVessel({
       ...vessel,
       imo,
       name: vessel.name.trim(),
       source: vessel.source ?? "manual",
+      compliance,
       updatedAt: new Date().toISOString(),
     })
     await logActivity({
       action: `Administrator ${existing ? "updated" : "added"} vessel ${saved.name} (IMO ${saved.imo})`,
       category: "Administration",
       details: {
-        summary: `Administrator ${existing ? "updated" : "added"} the ${VESSEL_TYPE_LABELS[saved.type]} "${saved.name}" (IMO ${saved.imo}) in the marine vessel catalogue. Status ${saved.status}; last known location ${saved.location || "—"}; cargo ${saved.cargo || "—"}.`,
+        summary: `Administrator ${existing ? "updated" : "added"} the ${VESSEL_TYPE_LABELS[saved.type]} "${saved.name}" (IMO ${saved.imo}) in the marine vessel catalogue. Status ${saved.status}; last known location ${saved.location || "—"}; cargo ${saved.cargo || "—"}. Compliance: ${complianceSummary(compliance)}.`,
         referenceId: saved.imo,
         vessel: saved.name,
         vesselType: VESSEL_TYPE_LABELS[saved.type],
         capacity: `${saved.capacity.toLocaleString("en-US")} ${saved.capacityUnit}`,
+        compliance: complianceSummary(compliance),
       },
     })
     return { ok: true, vessel: saved }
@@ -148,23 +161,55 @@ export async function importVesselFromProvider(passcode: string, imo: string): P
   if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
   const clean = (imo ?? "").trim()
   if (!/^\d{7}$/.test(clean)) return { ok: false, error: "IMO number must be exactly 7 digits." }
+  // Reject structurally-invalid IMOs up front (official check-digit algorithm).
+  if (!isValidImo(clean)) {
+    return { ok: false, error: "That IMO fails the official check-digit validation — it is not a real IMO number." }
+  }
   const result = await fetchVesselByImo(clean)
   if ("error" in result) return { ok: false, error: result.error }
   try {
     const saved = await dbUpsertVessel(result.vessel)
+    const verdict = complianceSummary(result.compliance)
     await logActivity({
-      action: `Administrator imported vessel ${saved.name} (IMO ${saved.imo}) from ${result.providerLabel}`,
+      action: `Administrator imported vessel ${saved.name} (IMO ${saved.imo}) via ${result.providerLabel}`,
       category: "Administration",
       details: {
-        summary: `Administrator imported "${saved.name}" (IMO ${saved.imo}) from ${result.providerLabel} into the vessel catalogue.`,
+        summary: `Administrator imported "${saved.name}" (IMO ${saved.imo}) via ${result.providerLabel}. Compliance: ${verdict}.`,
         referenceId: saved.imo,
         source: result.providerLabel,
+        compliance: verdict,
       },
     })
     return { ok: true, vessel: saved }
   } catch (err) {
     console.log("[v0] importVesselFromProvider save failed:", (err as Error).message)
     return { ok: false, error: "The imported vessel could not be saved. Please try again." }
+  }
+}
+
+/** Re-run the free compliance auto-check for a vessel already in the catalogue. */
+export async function rescreenVesselAdmin(passcode: string, imo: string): Promise<VesselResult> {
+  if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
+  const clean = (imo ?? "").trim()
+  if (!/^\d{7}$/.test(clean)) return { ok: false, error: "IMO number must be exactly 7 digits." }
+  try {
+    const existing = await dbGetVessel(clean)
+    if (!existing) return { ok: false, error: "Vessel not found in the catalogue." }
+    const compliance = await screenVesselImo(clean)
+    const saved = await dbUpsertVessel({ ...existing, compliance, updatedAt: new Date().toISOString() })
+    await logActivity({
+      action: `Administrator re-screened vessel ${saved.name} (IMO ${saved.imo})`,
+      category: "Administration",
+      details: {
+        summary: `Administrator re-ran the compliance auto-check for "${saved.name}" (IMO ${saved.imo}). Result: ${complianceSummary(compliance)}.`,
+        referenceId: saved.imo,
+        compliance: complianceSummary(compliance),
+      },
+    })
+    return { ok: true, vessel: saved }
+  } catch (err) {
+    console.log("[v0] rescreenVesselAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The compliance re-check failed. Please try again." }
   }
 }
 
