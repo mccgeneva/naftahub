@@ -367,52 +367,57 @@ export async function recordGatewayDepositForApproval(
       ],
     )
 
-    const now = new Date().toISOString()
-    const event: FundingEvent = {
-      id: `FND-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-      amount,
-      currency: account.currency,
-      reference,
-      payer: sender.fullName,
-      recordedAt: now,
-      reconciled: true,
-      reconciledAt: now,
-      ledgerEntryId,
-      // Persist the FX trail only when a conversion actually happened.
-      ...(isFx
-        ? {
-            originalAmount: sentAmount,
-            originalCurrency: sentCurrency,
-            fxRate,
-            fxFee,
-          }
-        : {}),
-    }
-    const updated: GatewayAccount = { ...account, funding: [event, ...(account.funding ?? [])] }
-    await query(
-      `UPDATE gateway_accounts SET payload = $3::jsonb, updated_at = now()
-       WHERE user_id = $1 AND request_id = $2`,
-      [account.userId, account.id, JSON.stringify(updated)],
-    )
-
-    await logActivity({
-      action: `Approved payment ${approval.id} auto-matched by IBAN and credited ${account.currency} ${amount.toLocaleString("en-US")} to gateway account ${account.id}${isFx ? ` (FX from ${sentCurrency})` : ""}`,
-      category: "Administration",
-      details: {
-        summary: `Outgoing payment ${approval.id} from ${sender.fullName} was matched by beneficiary IBAN to active gateway account ${account.id} (${account.accountHolder}) and recorded as received funding, crediting the Master Account under ledger reference ${ledgerEntryId}.${fxNote}`,
-        referenceId: approval.id,
-        amount: `${account.currency} ${amount.toLocaleString("en-US")}`,
+    // Stamp the funding event + write the audit trail only for a genuinely new
+    // deposit. When self-healing an existing one, the credit (re)post above is
+    // enough and we must not duplicate the funding event or log line.
+    if (!alreadyFunded) {
+      const now = new Date().toISOString()
+      const event: FundingEvent = {
+        id: `FND-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+        amount,
+        currency: account.currency,
+        reference,
+        payer: sender.fullName,
+        recordedAt: now,
+        reconciled: true,
+        reconciledAt: now,
+        ledgerEntryId,
+        // Persist the FX trail only when a conversion actually happened.
         ...(isFx
           ? {
-              originalAmount: `${sentCurrency} ${sentAmount.toLocaleString("en-US")}`,
-              fxRate: fxRate.toFixed(6),
-              fxFee: `${account.currency} ${fxFee.toLocaleString("en-US")}`,
+              originalAmount: sentAmount,
+              originalCurrency: sentCurrency,
+              fxRate,
+              fxFee,
             }
           : {}),
-        ledgerReference: ledgerEntryId,
-        decision: isFx ? "Auto-matched by IBAN with FX conversion" : "Auto-matched by IBAN",
-      },
-    })
+      }
+      const updated: GatewayAccount = { ...account, funding: [event, ...(account.funding ?? [])] }
+      await query(
+        `UPDATE gateway_accounts SET payload = $3::jsonb, updated_at = now()
+         WHERE user_id = $1 AND request_id = $2`,
+        [account.userId, account.id, JSON.stringify(updated)],
+      )
+
+      await logActivity({
+        action: `Approved payment ${approval.id} auto-matched by IBAN and credited ${account.currency} ${amount.toLocaleString("en-US")} to gateway account ${account.id}${isFx ? ` (FX from ${sentCurrency})` : ""}`,
+        category: "Administration",
+        details: {
+          summary: `Outgoing payment ${approval.id} from ${sender.fullName} was matched by beneficiary IBAN to active gateway account ${account.id} (${account.accountHolder}) and recorded as received funding, crediting the Master Account under ledger reference ${ledgerEntryId}.${fxNote}`,
+          referenceId: approval.id,
+          amount: `${account.currency} ${amount.toLocaleString("en-US")}`,
+          ...(isFx
+            ? {
+                originalAmount: `${sentCurrency} ${sentAmount.toLocaleString("en-US")}`,
+                fxRate: fxRate.toFixed(6),
+                fxFee: `${account.currency} ${fxFee.toLocaleString("en-US")}`,
+              }
+            : {}),
+          ledgerReference: ledgerEntryId,
+          decision: isFx ? "Auto-matched by IBAN with FX conversion" : "Auto-matched by IBAN",
+        },
+      })
+    }
 
     return { matched: true }
   } catch (err) {
