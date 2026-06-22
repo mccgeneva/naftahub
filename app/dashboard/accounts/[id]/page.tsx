@@ -211,22 +211,22 @@ export default function AccountDetailPage() {
                   </div>
 
                   <div className="border-t border-border pt-4">
-                    <div className="grid grid-cols-3 gap-4">
-                      <div className="text-center p-3 rounded-lg bg-secondary">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="min-w-0 text-center p-3 rounded-lg bg-secondary">
                         <p className="text-xs text-muted-foreground mb-1">Total Balance</p>
-                        <p className="text-lg font-bold text-foreground">
+                        <p className="text-sm sm:text-base lg:text-lg font-bold text-foreground leading-tight break-words tabular-nums">
                           {formatCurrency(account.balance, account.currency)}
                         </p>
                       </div>
-                      <div className="text-center p-3 rounded-lg bg-secondary">
+                      <div className="min-w-0 text-center p-3 rounded-lg bg-secondary">
                         <p className="text-xs text-muted-foreground mb-1">Available</p>
-                        <p className="text-lg font-bold text-emerald-400">
+                        <p className="text-sm sm:text-base lg:text-lg font-bold text-emerald-400 leading-tight break-words tabular-nums">
                           {formatCurrency(account.availableBalance, account.currency)}
                         </p>
                       </div>
-                      <div className="text-center p-3 rounded-lg bg-secondary">
+                      <div className="min-w-0 text-center p-3 rounded-lg bg-secondary">
                         <p className="text-xs text-muted-foreground mb-1">Reserved</p>
-                        <p className="text-lg font-bold text-amber-400">
+                        <p className="text-sm sm:text-base lg:text-lg font-bold text-amber-400 leading-tight break-words tabular-nums">
                           {formatCurrency(account.reservedBalance, account.currency)}
                         </p>
                       </div>
