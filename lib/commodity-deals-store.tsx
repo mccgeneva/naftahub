@@ -5,7 +5,12 @@ import { generateUetr } from "@/lib/swift-gpi"
 import { mirrorSubmission, mapApprovalStatus, type ApprovalRecord } from "@/lib/approval-sync"
 import { useServerRequestList } from "@/lib/use-server-request-list"
 import { useLedger } from "@/lib/ledger-store"
-import { revokeMyCommodityDeal, updateMyApprovalRecord } from "@/app/actions/approvals"
+import {
+  revokeMyCommodityDeal,
+  updateMyApprovalRecord,
+  requestDealAmendment,
+  addDealNegotiationNote,
+} from "@/app/actions/approvals"
 
 export type DealStatus = "pending" | "approved" | "rejected" | "cancelled"
 
@@ -64,6 +69,40 @@ export interface DealDocument {
   decisionNote?: string
 }
 
+// The negotiable subset of a deal's commercial terms. A post-approval amendment
+// proposes new values for these, which take effect only after admin sign-off.
+export interface DealTerms {
+  approxValue: number
+  quantity: string
+  tradeStructure: TradeStructure
+}
+
+// A single entry in a deal's negotiation log (client or admin authored).
+export interface DealNegotiationNote {
+  id: string
+  author: string // display name of who logged it
+  authorRole: "client" | "admin"
+  message: string
+  createdAt: string // ISO timestamp
+}
+
+export type AmendmentStatus = "pending" | "approved" | "rejected"
+
+// A proposed (or historical) change to a deal's commercial terms. Lives on the
+// deal record; the `pending` one is mirrored to a `commodity_amendment` approval
+// so it clears the same admin gate as the original deal before going live.
+export interface DealAmendment {
+  id: string
+  approvalId?: string // DB approval id for the amendment request
+  status: AmendmentStatus
+  reason: string // why the client is renegotiating
+  previous: DealTerms // terms before the change (for the audit diff)
+  proposed: DealTerms // terms the client wants
+  requestedAt: string
+  decidedAt?: string
+  decisionNote?: string
+}
+
 export interface CommodityDeal {
   id: string // platform reference, e.g. "DEAL-1A2B3C4D"
   /** DB approval id once mirrored, so admin decisions can be reconciled back. */
@@ -115,6 +154,16 @@ export interface CommodityDeal {
   // deal is finalized and can no longer be revoked by the client.
   delivered?: boolean
   deliveredAt?: string
+
+  // --- Post-approval negotiation / amendment ------------------------------
+  /** Negotiation log shared between the client and admin (audit trail). */
+  negotiationNotes?: DealNegotiationNote[]
+  /** Free-form record of the counterparty's latest position / agreement. */
+  counterpartyPosition?: string
+  /** The amendment awaiting admin approval, if any (only one open at a time). */
+  pendingAmendment?: DealAmendment
+  /** Past amendments (approved/rejected) for the audit trail. */
+  amendmentHistory?: DealAmendment[]
 }
 
 /**
@@ -206,6 +255,24 @@ interface CommodityDealsContextValue {
    * has been flagged delivered by the administrator.
    */
   revokeDeal: (dealId: string) => Promise<{ ok: boolean; error?: string }>
+  /**
+   * Client: propose an amendment to an approved (not-yet-delivered) deal's
+   * commercial terms (price / quantity / incoterms). Files a
+   * `commodity_amendment` approval for the admin to sign off; terms only change
+   * once approved. Rejected by the server if the deal is delivered or already
+   * has an open amendment.
+   */
+  requestAmendment: (
+    dealId: string,
+    proposed: DealTerms,
+    reason: string,
+  ) => Promise<{ ok: boolean; error?: string }>
+  /** Client/admin: append a note to a deal's negotiation log. */
+  addNegotiationNote: (
+    dealId: string,
+    message: string,
+    counterpartyPosition?: string,
+  ) => Promise<{ ok: boolean; error?: string }>
   hydrated: boolean
 }
 
@@ -473,6 +540,41 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
     return { ok: true }
   }
 
+  const requestAmendment: CommodityDealsContextValue["requestAmendment"] = async (dealId, proposed, reason) => {
+    const target = deals.find((d) => d.id === dealId)
+    if (!target) return { ok: false, error: "Deal not found." }
+    if (target.status !== "approved") return { ok: false, error: "Only an approved deal can be amended." }
+    if (target.delivered) {
+      return { ok: false, error: "This deal has been delivered and can no longer be amended." }
+    }
+    if (target.pendingAmendment?.status === "pending") {
+      return { ok: false, error: "An amendment is already pending approval for this deal." }
+    }
+    if (!target.approvalId) {
+      return { ok: false, error: "This deal cannot be amended yet. Please try again shortly." }
+    }
+
+    const res = await requestDealAmendment(target.approvalId, proposed, reason)
+    if (!res.ok) return res
+    // The server stamped the deal record with the pending amendment; refresh so
+    // the diff/badge appears for the client right away.
+    await refresh()
+    return { ok: true }
+  }
+
+  const addNegotiationNote: CommodityDealsContextValue["addNegotiationNote"] = async (
+    dealId,
+    message,
+    counterpartyPosition,
+  ) => {
+    const target = deals.find((d) => d.id === dealId)
+    if (!target?.approvalId) return { ok: false, error: "Deal not found." }
+    const res = await addDealNegotiationNote(target.approvalId, message, counterpartyPosition)
+    if (!res.ok) return res
+    await refresh()
+    return { ok: true }
+  }
+
   return (
     <CommodityDealsContext.Provider
       value={{
@@ -486,6 +588,8 @@ export function CommodityDealsProvider({ children }: { children: React.ReactNode
         approveDeal,
         rejectDeal,
         revokeDeal,
+        requestAmendment,
+        addNegotiationNote,
         hydrated,
       }}
     >

@@ -365,6 +365,38 @@ export async function updateApprovalPayload(
 }
 
 /**
+ * Replace an approval's commercial terms (amount, currency, ledger effect) AND
+ * its payload in one statement. Used when an administrator approves a deal
+ * amendment: the new price/quantity/incoterms must update the stored value and
+ * the reservation effect together so the balance hold tracks the amended value.
+ */
+export async function updateApprovalTerms(
+  id: string,
+  fields: {
+    amount: number | null
+    currency: string | null
+    ledgerEffect: LedgerEffect | null
+    payload: Record<string, unknown>
+  },
+): Promise<ApprovalRequest | null> {
+  await ensureTable()
+  const { rows } = await query(
+    `UPDATE approval_requests
+       SET amount = $2, currency = $3, ledger_effect = $4::jsonb, payload = $5::jsonb
+     WHERE id = $1
+     RETURNING *`,
+    [
+      id,
+      fields.amount,
+      fields.currency,
+      fields.ledgerEffect ? JSON.stringify(fields.ledgerEffect) : null,
+      JSON.stringify(fields.payload ?? {}),
+    ],
+  )
+  return rows.length ? rowToRequest(rows[0]) : null
+}
+
+/**
  * Record the ADMINISTRATOR's verdict (first gate). Recomputes the overall
  * status from both gates so a dual-gate request lands on "awaiting_master"
  * rather than "approved" until the Master also consents. Only acts while the
