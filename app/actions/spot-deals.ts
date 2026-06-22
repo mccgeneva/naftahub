@@ -12,7 +12,8 @@
 //    existing commodity-deal approval workflow on the client side.
 //
 // Vessel data is sourced from a managed catalogue seeded with realistic tanker
-// data. If a MARINETRAFFIC_API_KEY is configured, `importVesselFromMarineTraffic`
+// data. If a live vessel-data provider is linked (MarineTraffic, Datalastic or
+// VesselFinder — by adding that provider's API token), `importVesselFromProvider`
 // fetches a live record; otherwise it returns a clear, non-fatal message.
 // ---------------------------------------------------------------------------
 
@@ -36,10 +37,13 @@ import {
 import {
   computeTotalValue,
   isDealLive,
+  isValidImo,
   VESSEL_TYPE_LABELS,
   type Vessel,
   type SpotDeal,
+  type VesselCompliance,
 } from "@/lib/spot-deals-shared"
+import { fetchVesselByImo, providerStatus, screenVesselImo } from "@/lib/vessel-providers"
 
 function adminOk(passcode: string): boolean {
   return passcode === ADMIN_PASSCODE
@@ -77,6 +81,13 @@ export interface VesselResult {
   error?: string
 }
 
+/** One-line, human-readable verdict for logs and toasts. */
+function complianceSummary(c: VesselCompliance): string {
+  if (c.status === "flagged") return `FLAGGED — ${c.note ?? "sanctions match"}`
+  if (c.status === "unverified") return "Unverified (sanctions source unavailable)"
+  return `Clear — no sanctions match${c.imoValid ? ", IMO valid" : ""}`
+}
+
 export async function upsertVesselAdmin(passcode: string, vessel: Vessel): Promise<VesselResult> {
   if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
   const imo = (vessel.imo ?? "").trim()
@@ -84,22 +95,26 @@ export async function upsertVesselAdmin(passcode: string, vessel: Vessel): Promi
   if (!vessel.name?.trim()) return { ok: false, error: "Vessel name is required." }
   try {
     const existing = await dbGetVessel(imo)
+    // Free, automatic compliance auto-check (OFAC sanctions + IMO validity).
+    const compliance = await screenVesselImo(imo)
     const saved = await dbUpsertVessel({
       ...vessel,
       imo,
       name: vessel.name.trim(),
       source: vessel.source ?? "manual",
+      compliance,
       updatedAt: new Date().toISOString(),
     })
     await logActivity({
       action: `Administrator ${existing ? "updated" : "added"} vessel ${saved.name} (IMO ${saved.imo})`,
       category: "Administration",
       details: {
-        summary: `Administrator ${existing ? "updated" : "added"} the ${VESSEL_TYPE_LABELS[saved.type]} "${saved.name}" (IMO ${saved.imo}) in the marine vessel catalogue. Status ${saved.status}; last known location ${saved.location || "—"}; cargo ${saved.cargo || "—"}.`,
+        summary: `Administrator ${existing ? "updated" : "added"} the ${VESSEL_TYPE_LABELS[saved.type]} "${saved.name}" (IMO ${saved.imo}) in the marine vessel catalogue. Status ${saved.status}; last known location ${saved.location || "—"}; cargo ${saved.cargo || "—"}. Compliance: ${complianceSummary(compliance)}.`,
         referenceId: saved.imo,
         vessel: saved.name,
         vesselType: VESSEL_TYPE_LABELS[saved.type],
         capacity: `${saved.capacity.toLocaleString("en-US")} ${saved.capacityUnit}`,
+        compliance: complianceSummary(compliance),
       },
     })
     return { ok: true, vessel: saved }
@@ -131,68 +146,76 @@ export async function deleteVesselAdmin(passcode: string, imo: string): Promise<
   }
 }
 
+/** Token-free view of which live vessel-data provider (if any) is connected. */
+export async function getVesselProviderStatus() {
+  return providerStatus()
+}
+
 /**
- * Optional live import. Uses MarineTraffic's single-vessel API when a key is
- * present; otherwise returns a clear message so the admin knows to add the
- * vessel manually. Designed so wiring a key later needs no other changes.
+ * Live import from whichever vessel-data provider is connected (MarineTraffic,
+ * Datalastic or VesselFinder — auto-selected by configured token). Returns a
+ * clear message when no provider is linked so the admin can add the vessel
+ * manually. Linking a provider later needs no other code changes.
  */
-export async function importVesselFromMarineTraffic(passcode: string, imo: string): Promise<VesselResult> {
+export async function importVesselFromProvider(passcode: string, imo: string): Promise<VesselResult> {
   if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
-  const key = process.env.MARINETRAFFIC_API_KEY
-  if (!key) {
-    return {
-      ok: false,
-      error:
-        "Live MarineTraffic import is not configured (no MARINETRAFFIC_API_KEY). Add the vessel manually, or set the key to enable live import.",
-    }
-  }
   const clean = (imo ?? "").trim()
   if (!/^\d{7}$/.test(clean)) return { ok: false, error: "IMO number must be exactly 7 digits." }
+  // Reject structurally-invalid IMOs up front (official check-digit algorithm).
+  if (!isValidImo(clean)) {
+    return { ok: false, error: "That IMO fails the official check-digit validation — it is not a real IMO number." }
+  }
+  const result = await fetchVesselByImo(clean)
+  if ("error" in result) return { ok: false, error: result.error }
   try {
-    const url = `https://services.marinetraffic.com/api/vesselmasterdata/${key}/imo:${clean}/protocol:jsono`
-    const res = await fetch(url, { cache: "no-store" })
-    if (!res.ok) return { ok: false, error: `MarineTraffic responded with ${res.status}.` }
-    const data = (await res.json()) as Array<Record<string, unknown>>
-    const row = Array.isArray(data) ? data[0] : undefined
-    if (!row) return { ok: false, error: "No vessel found for that IMO at MarineTraffic." }
-
-    const typeRaw = String(row.SHIPTYPE ?? row.TYPE_NAME ?? "").toLowerCase()
-    const type: Vessel["type"] = typeRaw.includes("gas") || typeRaw.includes("lng") || typeRaw.includes("lpg")
-      ? "gas"
-      : typeRaw.includes("crude")
-        ? "crude"
-        : "product"
-
-    const vessel: Vessel = {
-      imo: clean,
-      name: String(row.NAME ?? row.SHIPNAME ?? `IMO ${clean}`),
-      type,
-      vesselClass: row.TYPE_NAME ? String(row.TYPE_NAME) : undefined,
-      capacity: Number(row.SUMMER_DWT ?? row.DWT ?? 0) || 0,
-      capacityUnit: type === "gas" ? "CBM" : "DWT",
-      status: "idle",
-      location: String(row.PORT ?? row.CURRENT_PORT ?? "Unknown"),
-      flag: row.FLAG ? String(row.FLAG) : undefined,
-      builtYear: row.YEAR_BUILT ? Number(row.YEAR_BUILT) : undefined,
-      cargo: undefined,
-      source: "marinetraffic",
-      updatedAt: new Date().toISOString(),
-    }
-    const saved = await dbUpsertVessel(vessel)
+    const saved = await dbUpsertVessel(result.vessel)
+    const verdict = complianceSummary(result.compliance)
     await logActivity({
-      action: `Administrator imported vessel ${saved.name} (IMO ${saved.imo}) from MarineTraffic`,
+      action: `Administrator imported vessel ${saved.name} (IMO ${saved.imo}) via ${result.providerLabel}`,
       category: "Administration",
       details: {
-        summary: `Administrator imported "${saved.name}" (IMO ${saved.imo}) from MarineTraffic into the vessel catalogue.`,
+        summary: `Administrator imported "${saved.name}" (IMO ${saved.imo}) via ${result.providerLabel}. Compliance: ${verdict}.`,
         referenceId: saved.imo,
-        source: "MarineTraffic",
+        source: result.providerLabel,
+        compliance: verdict,
       },
     })
     return { ok: true, vessel: saved }
   } catch (err) {
-    console.log("[v0] importVesselFromMarineTraffic failed:", (err as Error).message)
-    return { ok: false, error: "Live import failed. Please add the vessel manually." }
+    console.log("[v0] importVesselFromProvider save failed:", (err as Error).message)
+    return { ok: false, error: "The imported vessel could not be saved. Please try again." }
   }
+}
+
+/** Re-run the free compliance auto-check for a vessel already in the catalogue. */
+export async function rescreenVesselAdmin(passcode: string, imo: string): Promise<VesselResult> {
+  if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
+  const clean = (imo ?? "").trim()
+  if (!/^\d{7}$/.test(clean)) return { ok: false, error: "IMO number must be exactly 7 digits." }
+  try {
+    const existing = await dbGetVessel(clean)
+    if (!existing) return { ok: false, error: "Vessel not found in the catalogue." }
+    const compliance = await screenVesselImo(clean)
+    const saved = await dbUpsertVessel({ ...existing, compliance, updatedAt: new Date().toISOString() })
+    await logActivity({
+      action: `Administrator re-screened vessel ${saved.name} (IMO ${saved.imo})`,
+      category: "Administration",
+      details: {
+        summary: `Administrator re-ran the compliance auto-check for "${saved.name}" (IMO ${saved.imo}). Result: ${complianceSummary(compliance)}.`,
+        referenceId: saved.imo,
+        compliance: complianceSummary(compliance),
+      },
+    })
+    return { ok: true, vessel: saved }
+  } catch (err) {
+    console.log("[v0] rescreenVesselAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The compliance re-check failed. Please try again." }
+  }
+}
+
+/** @deprecated Use importVesselFromProvider. Kept for backward compatibility. */
+export async function importVesselFromMarineTraffic(passcode: string, imo: string): Promise<VesselResult> {
+  return importVesselFromProvider(passcode, imo)
 }
 
 // --- Spot deals (admin) -----------------------------------------------------

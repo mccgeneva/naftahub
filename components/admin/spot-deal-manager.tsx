@@ -15,6 +15,13 @@ import {
   Download,
   Anchor,
   Gauge,
+  Satellite,
+  CheckCircle2,
+  ExternalLink,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldQuestion,
+  RefreshCw,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -66,16 +73,35 @@ import {
   listVesselsAdmin,
   upsertVesselAdmin,
   deleteVesselAdmin,
-  importVesselFromMarineTraffic,
+  importVesselFromProvider,
+  rescreenVesselAdmin,
+  getVesselProviderStatus,
   listSpotDealsAdmin,
   createSpotDealAdmin,
   publishSpotDealAdmin,
   withdrawSpotDealAdmin,
   type CreateSpotDealInput,
 } from "@/app/actions/spot-deals"
+import { VESSEL_PROVIDERS, type VesselCompliance } from "@/lib/spot-deals-shared"
 
 const CURRENCIES = ["USD", "EUR", "GBP", "CHF", "AED", "SGD"]
 const INCOTERMS = ["FOB", "CIF", "CFR", "FCA", "DES", "DAP"]
+
+/** Compact sanctions / IMO-validity badge shown on each vessel row. */
+function ComplianceBadge({ compliance }: { compliance?: VesselCompliance }) {
+  if (!compliance) return null
+  const map = {
+    clear: { cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600", Icon: ShieldCheck, label: "Clear" },
+    flagged: { cls: "border-red-500/40 bg-red-500/10 text-red-600", Icon: ShieldAlert, label: "Sanctions hit" },
+    unverified: { cls: "border-amber-500/30 bg-amber-500/10 text-amber-600", Icon: ShieldQuestion, label: "Unverified" },
+  }[compliance.status]
+  return (
+    <Badge variant="outline" className={cn("gap-1 text-[10px]", map.cls)} title={compliance.note}>
+      <map.Icon className="h-3 w-3" />
+      {map.label}
+    </Badge>
+  )
+}
 
 const TYPE_BADGE: Record<VesselType, string> = {
   crude: "border-amber-500/30 bg-amber-500/10 text-amber-600",
@@ -115,6 +141,17 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
   const [importImo, setImportImo] = useState("")
   const [importing, setImporting] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Vessel | null>(null)
+  const [provider, setProvider] = useState<Awaited<ReturnType<typeof getVesselProviderStatus>> | null>(null)
+  const [providersOpen, setProvidersOpen] = useState(false)
+
+  useEffect(() => {
+    getVesselProviderStatus()
+      .then(setProvider)
+      .catch(() => {})
+  }, [])
+
+  const providerLabel = provider?.active?.label ?? null
+  const providerConnected = Boolean(provider?.connected)
 
   const load = useCallback(
     async (term?: string) => {
@@ -136,10 +173,24 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
     load()
   }, [load])
 
-  const openCreate = () => {
-    setForm({ ...emptyVessel })
-    setEditTarget({ ...emptyVessel })
+  const openCreate = (prefillImo?: string) => {
+    const imo = (prefillImo ?? "").trim()
+    const seed = imo && /^\d{7}$/.test(imo) ? { ...emptyVessel, imo } : { ...emptyVessel }
+    setForm(seed)
+    setEditTarget(seed)
   }
+
+  // The IMO the admin is currently searching for, if the term contains a valid
+  // 7-digit IMO number. We strip non-digits first so pasted values like
+  // "IMO 9512331", "9512331 " or "IMO-9512331" (as copied from MarineTraffic)
+  // are still recognised and offered as a direct "import / add this vessel".
+  const searchDigits = search.replace(/\D/g, "")
+  const searchedImo = searchDigits.length === 7 ? searchDigits : ""
+
+  // Run a catalogue search. When the term resolves to a 7-digit IMO we query by
+  // the bare digits so it matches the stored `imo` even if the admin typed an
+  // "IMO " prefix or extra spacing.
+  const runSearch = () => load(searchedImo || search.trim())
   const openEdit = (v: Vessel) => {
     setForm({ ...v, vesselClass: v.vesselClass ?? "", flag: v.flag ?? "", cargo: v.cargo ?? "" })
     setEditTarget(v)
@@ -163,19 +214,64 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
     }
   }
 
-  const handleImport = async () => {
+  const handleImport = async (imoOverride?: string) => {
+    const imo = (imoOverride ?? importImo).trim()
+    if (!imo) return
     setImporting(true)
     try {
-      const res = await importVesselFromMarineTraffic(ADMIN_PASSCODE, importImo.trim())
+      const res = await importVesselFromProvider(ADMIN_PASSCODE, imo)
       if (res.ok) {
-        toast.success("Vessel imported", { description: `${res.vessel?.name} (IMO ${res.vessel?.imo})` })
+        const c = res.vessel?.compliance
+        const stub = res.vessel?.source === "compliance"
+        const desc = `${res.vessel?.name} (IMO ${res.vessel?.imo})${
+          stub ? " — screened; complete particulars manually" : ""
+        }`
+        if (c?.status === "flagged") {
+          toast.error("Sanctions match — do not transact", { description: c.note ?? desc })
+        } else if (c?.status === "unverified") {
+          toast.warning("Imported (compliance unverified)", { description: desc })
+        } else {
+          toast.success("Vessel imported · compliance clear", { description: desc })
+        }
         setImportImo("")
         await load(search)
       } else {
-        toast.message("Import unavailable", { description: res.error })
+        // No provider linked (or IMO not found upstream): guide the admin to
+        // connect a provider, or add the vessel manually with the IMO pre-filled.
+        toast.message("Live import unavailable", {
+          description: res.error,
+          action: providerConnected
+            ? /^\d{7}$/.test(imo)
+              ? { label: "Add manually", onClick: () => openCreate(imo) }
+              : undefined
+            : { label: "Connect provider", onClick: () => setProvidersOpen(true) },
+        })
       }
     } finally {
       setImporting(false)
+    }
+  }
+
+  const [rescreening, setRescreening] = useState<string | null>(null)
+  const handleRescreen = async (v: Vessel) => {
+    setRescreening(v.imo)
+    try {
+      const res = await rescreenVesselAdmin(ADMIN_PASSCODE, v.imo)
+      if (res.ok) {
+        const c = res.vessel?.compliance
+        if (c?.status === "flagged") {
+          toast.error(`${v.name}: sanctions match`, { description: c.note })
+        } else if (c?.status === "unverified") {
+          toast.warning(`${v.name}: compliance unverified`, { description: c?.note })
+        } else {
+          toast.success(`${v.name}: compliance clear`)
+        }
+        await load(search)
+      } else {
+        toast.error(res.error)
+      }
+    } finally {
+      setRescreening(null)
     }
   }
 
@@ -215,26 +311,58 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
                   id="vessel-search"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && load(search)}
+                  onKeyDown={(e) => e.key === "Enter" && runSearch()}
                   placeholder="e.g. Pacific Triton, 9512331, Jet A-1"
                   className="pl-8"
                 />
               </div>
             </div>
-            <Button variant="outline" onClick={() => load(search)} className="shrink-0">
+            <Button variant="outline" onClick={runSearch} className="shrink-0">
               <Search className="mr-1.5 h-4 w-4" />
               Search
             </Button>
-            <Button onClick={openCreate} className="shrink-0">
+            <Button onClick={() => openCreate(searchedImo)} className="shrink-0">
               <Plus className="mr-1.5 h-4 w-4" />
               Add vessel
             </Button>
           </div>
 
+          {/* Live data provider + free compliance status */}
+          <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm">
+                <Satellite className="h-4 w-4 text-muted-foreground" />
+                {providerConnected ? (
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                    Live master data: <span className="font-medium text-foreground">{providerLabel}</span> connected
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">
+                    No paid master-data provider — imports validate the IMO and run compliance only.
+                  </span>
+                )}
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setProvidersOpen(true)} className="shrink-0">
+                <Satellite className="mr-1.5 h-3.5 w-3.5" />
+                {providerConnected ? "Manage providers" : "Add master data"}
+              </Button>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-emerald-600">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              <span>
+                Free compliance auto-check active — official IMO validation + OFAC sanctions screening, no token
+                required.
+              </span>
+            </div>
+          </div>
+
           <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/30 p-3 sm:flex-row sm:items-end">
             <div className="flex-1">
               <Label htmlFor="import-imo" className="text-xs">
-                Import from MarineTraffic (by IMO)
+                {providerConnected
+                  ? `Import from ${providerLabel} + compliance (by IMO)`
+                  : "Validate & compliance-check by IMO"}
               </Label>
               <Input
                 id="import-imo"
@@ -245,7 +373,7 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
                 inputMode="numeric"
               />
             </div>
-            <Button variant="secondary" onClick={handleImport} disabled={importing || !importImo.trim()} className="shrink-0">
+            <Button variant="secondary" onClick={() => handleImport()} disabled={importing || !importImo.trim()} className="shrink-0">
               {importing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Download className="mr-1.5 h-4 w-4" />}
               Import
             </Button>
@@ -257,7 +385,53 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
               Loading catalogue…
             </div>
           ) : vessels.length === 0 ? (
-            <p className="py-10 text-center text-sm text-muted-foreground">No vessels found.</p>
+            <div className="flex flex-col items-center gap-3 py-10 text-center">
+              <Ship className="h-8 w-8 text-muted-foreground/60" />
+              {searchedImo ? (
+                <>
+                  <div>
+                    <p className="text-sm font-medium">No catalogue match for IMO {searchedImo}</p>
+                    <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+                      This vessel isn&apos;t in the catalogue yet.{" "}
+                      {providerConnected
+                        ? `Import full particulars from ${providerLabel} (with compliance), or add it manually.`
+                        : "Validate the IMO and run the free compliance check now, or add it manually."}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => handleImport(searchedImo)}
+                      disabled={importing}
+                    >
+                      {importing ? (
+                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="mr-1.5 h-4 w-4" />
+                      )}
+                      {providerConnected ? `Import IMO ${searchedImo}` : `Validate & screen ${searchedImo}`}
+                    </Button>
+                    <Button onClick={() => openCreate(searchedImo)}>
+                      <Plus className="mr-1.5 h-4 w-4" />
+                      Add IMO {searchedImo} manually
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium">No vessels found</p>
+                  <p className="mx-auto max-w-sm text-xs text-muted-foreground">
+                    {search.trim()
+                      ? "No catalogue entry matches that search. Search by exact 7-digit IMO to validate, screen and add a specific vessel."
+                      : "The catalogue is empty. Add a vessel, or screen one by IMO."}
+                  </p>
+                  <Button onClick={() => openCreate()}>
+                    <Plus className="mr-1.5 h-4 w-4" />
+                    Add vessel
+                  </Button>
+                </>
+              )}
+            </div>
           ) : (
             <ScrollArea className="h-[360px] pr-3">
               <div className="flex flex-col gap-2">
@@ -272,6 +446,7 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
                         <Badge variant="outline" className={cn("text-[10px]", TYPE_BADGE[v.type])}>
                           {VESSEL_TYPE_LABELS[v.type]}
                         </Badge>
+                        <ComplianceBadge compliance={v.compliance} />
                       </div>
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         IMO {v.imo} · {v.vesselClass || "—"} · {v.capacity.toLocaleString("en-US")} {v.capacityUnit}
@@ -292,6 +467,20 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleRescreen(v)}
+                        disabled={rescreening === v.imo}
+                        title="Re-run compliance check"
+                      >
+                        {rescreening === v.imo ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        )}
+                        <span className="sr-only">Re-screen {v.name}</span>
+                      </Button>
                       <Button size="sm" variant="outline" onClick={() => openEdit(v)}>
                         <Pencil className="h-3.5 w-3.5" />
                         <span className="sr-only">Edit {v.name}</span>
@@ -474,6 +663,83 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
             <Button variant="destructive" onClick={handleDelete}>
               Remove
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Live data provider management */}
+      <Dialog open={providersOpen} onOpenChange={setProvidersOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Satellite className="h-4 w-4" />
+              Live vessel-data providers
+            </DialogTitle>
+            <DialogDescription>
+              The free compliance auto-check runs automatically with no token. Optionally link a paid AIS
+              company for full master data (name, class, tonnage). No token is ever shown here.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            {/* Always-on, token-free compliance */}
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">Compliance auto-check</span>
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-600">
+                    <ShieldCheck className="h-3 w-3" /> Active · free
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Official IMO check-digit validation + OFAC SDN &amp; Consolidated sanctions screening. Runs on
+                  every import and vessel save — no API token required.
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs font-medium text-muted-foreground">Optional paid master-data providers</p>
+            {(provider?.providers ?? VESSEL_PROVIDERS.map((p) => ({ ...p, configured: false }))).map((p) => (
+              <div
+                key={p.id}
+                className="flex items-start justify-between gap-3 rounded-lg border border-border p-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{p.label}</span>
+                    {p.configured ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-600">
+                        <CheckCircle2 className="h-3 w-3" /> Connected
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                        Not connected
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Add token as{" "}
+                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">{p.envVar}</code> in
+                    project settings.
+                  </p>
+                </div>
+                <a
+                  href={p.signupUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
+                >
+                  Get token <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+            ))}
+            <p className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+              In v0, add these tokens via the <span className="font-medium text-foreground">Vars</span> section
+              of the project settings (top-right). Once a token is saved, return here and the provider will show
+              as connected.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setProvidersOpen(false)}>Done</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
