@@ -3,7 +3,7 @@
 import { query } from "@/lib/db"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { type UserProfile } from "@/lib/users"
-import { resolveAccountProfileById, resolveCurrentSession } from "@/lib/session-user"
+import { resolveAccountProfileById, resolveCurrentSession, resolveDataOwnerIdFor } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import { backfillGatewayDepositsForUser } from "@/app/actions/reconciliation"
 import type {
@@ -297,6 +297,11 @@ export async function recordGatewayFundingAdmin(
     const reference = funding.reference?.trim() || account.coordinates?.reference || account.id
     const bankName = account.coordinates?.partnerBankName
 
+    // The credit must land on the gateway owner's DATA-OWNER ledger (a
+    // Sub-account's shared balance lives under its Master) so the Master Account
+    // balance — which is read from the data-owner ledger — actually reflects it.
+    const ledgerOwnerId = await resolveDataOwnerIdFor(userId)
+
     // 1) Credit the client's Master Account in the shared ledger.
     const receiptRef = `GW-CR-${Date.now().toString().slice(-8)}`
     const entry: LedgerEntry = {
@@ -323,7 +328,7 @@ export async function recordGatewayFundingAdmin(
          account = EXCLUDED.account, bank = EXCLUDED.bank, reference = EXCLUDED.reference,
          comment = EXCLUDED.comment, category = EXCLUDED.category`,
       [
-        userId,
+        ledgerOwnerId,
         entry.id,
         entry.direction,
         entry.amount,
