@@ -320,11 +320,13 @@ export type AdminLedgerResult =
   | { ok: true; entries: LedgerEntry[] }
   | { ok: false; error: string }
 
-/** Admin: read any client's ledger. */
+/** Admin: read any client's ledger. Scoped to the data-owner id so a Sub-account
+ *  shows the SAME shared Master balance the client itself sees. */
 export async function getLedgerForUserAdmin(passcode: string, userId: string): Promise<AdminLedgerResult> {
   try {
     await requireAdmin(passcode)
-    return { ok: true, entries: await readLedger(userId) }
+    const ownerId = await resolveDataOwnerIdFor(userId)
+    return { ok: true, entries: await readLedger(ownerId) }
   } catch (err) {
     return { ok: false, error: (err as Error).message }
   }
@@ -353,7 +355,11 @@ export async function addLedgerEntryForUserAdmin(
   }
 
   try {
-    await upsertEntry(userId, { ...entry, amount })
+    // Post to the data-owner ledger so crediting a Sub-account lands on the
+    // shared Master balance the client actually reads (otherwise the credit
+    // would silently sit on the sub's own, never-displayed ledger).
+    const ownerId = await resolveDataOwnerIdFor(userId)
+    await upsertEntry(ownerId, { ...entry, amount })
     const target = await resolveAccountProfileById(userId)
     await logActivity({
       action: `Administrator posted a ${entry.direction} of ${entry.currency} ${amount.toLocaleString("en-US")} to ${target.fullName}`,
@@ -368,7 +374,7 @@ export async function addLedgerEntryForUserAdmin(
         comment: entry.comment ?? "(none)",
       },
     })
-    return { ok: true, entries: await readLedger(userId) }
+    return { ok: true, entries: await readLedger(ownerId) }
   } catch (err) {
     console.log("[v0] addLedgerEntryForUserAdmin failed:", (err as Error).message)
     return { ok: false, error: "The entry could not be posted. Please try again." }
@@ -388,8 +394,9 @@ export async function removeLedgerEntryForUserAdmin(
   }
   try {
     await ensureTable()
-    await query(`DELETE FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [userId, entryId])
-    return { ok: true, entries: await readLedger(userId) }
+    const ownerId = await resolveDataOwnerIdFor(userId)
+    await query(`DELETE FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [ownerId, entryId])
+    return { ok: true, entries: await readLedger(ownerId) }
   } catch (err) {
     console.log("[v0] removeLedgerEntryForUserAdmin failed:", (err as Error).message)
     return { ok: false, error: "The entry could not be removed. Please try again." }
@@ -423,7 +430,8 @@ export async function updateLedgerEntryForUserAdmin(
   }
 
   try {
-    await upsertEntry(userId, { ...entry, amount })
+    const ownerId = await resolveDataOwnerIdFor(userId)
+    await upsertEntry(ownerId, { ...entry, amount })
     const target = await resolveAccountProfileById(userId)
     await logActivity({
       action: `Administrator edited ledger entry ${entry.id} for ${target.fullName}`,
@@ -438,7 +446,7 @@ export async function updateLedgerEntryForUserAdmin(
         counterparty: entry.counterparty || "(none)",
       },
     })
-    return { ok: true, entries: await readLedger(userId) }
+    return { ok: true, entries: await readLedger(ownerId) }
   } catch (err) {
     console.log("[v0] updateLedgerEntryForUserAdmin failed:", (err as Error).message)
     return { ok: false, error: "The entry could not be updated. Please try again." }
@@ -463,7 +471,8 @@ export async function reverseLedgerEntryForUserAdmin(
   }
 
   try {
-    const ledger = await readLedger(userId)
+    const ownerId = await resolveDataOwnerIdFor(userId)
+    const ledger = await readLedger(ownerId)
     const original = ledger.find((e) => e.id === entryId)
     if (!original) return { ok: false, error: "Original entry not found." }
 
@@ -477,7 +486,7 @@ export async function reverseLedgerEntryForUserAdmin(
       comment: `Reversal of transaction ${original.id}${original.comment ? ` — ${original.comment}` : ""}`,
       category: "Reversal",
     }
-    await upsertEntry(userId, reversal)
+    await upsertEntry(ownerId, reversal)
 
     const target = await resolveAccountProfileById(userId)
     await logActivity({
@@ -492,7 +501,7 @@ export async function reverseLedgerEntryForUserAdmin(
         amount: `${original.currency} ${Number(original.amount).toLocaleString("en-US")}`,
       },
     })
-    return { ok: true, entries: await readLedger(userId) }
+    return { ok: true, entries: await readLedger(ownerId) }
   } catch (err) {
     console.log("[v0] reverseLedgerEntryForUserAdmin failed:", (err as Error).message)
     return { ok: false, error: "The entry could not be reversed. Please try again." }
@@ -540,8 +549,11 @@ export async function getClientFinancialSnapshotAdmin(
 ): Promise<ClientSnapshotResult> {
   try {
     await requireAdmin(passcode)
+    // Balances come from the shared data-owner ledger (a Sub-account funds from
+    // its Master's pool); the profile stays keyed to the selected account.
+    const ownerId = await resolveDataOwnerIdFor(userId)
     const [entries, profile] = await Promise.all([
-      readLedger(userId),
+      readLedger(ownerId),
       resolveAccountProfileById(userId),
     ])
 
