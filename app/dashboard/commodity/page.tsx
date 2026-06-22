@@ -21,6 +21,8 @@ import {
   Ban,
   PackageCheck,
   Loader2,
+  Scale,
+  Tag,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -103,6 +105,22 @@ const formatCurrency = (value: number, currency: string) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`
+
+// Derive the per-unit price from the total deal value and the stored quantity
+// (e.g. "100,000 MT" → "USD 1,383.24 / MT"). Returns null when the quantity has
+// no parseable amount so the row can be hidden gracefully.
+const formatUnitPrice = (deal: CommodityDeal): string | null => {
+  const match = (deal.quantity || "").match(/([\d.,]+)\s*([A-Za-z]+)?/)
+  if (!match) return null
+  const amount = Number.parseFloat(match[1].replace(/,/g, ""))
+  if (!Number.isFinite(amount) || amount <= 0) return null
+  const unit = (match[2] || "unit").toUpperCase()
+  const perUnit = deal.approxValue / amount
+  return `${deal.currency} ${perUnit.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })} / ${unit}`
+}
 
 const formatTimestamp = (iso?: string) => {
   if (!iso) return "—"
@@ -921,6 +939,24 @@ export default function CommodityTradingPage() {
                             <Package className="h-4 w-4 text-muted-foreground" />
                             <span className="text-muted-foreground">Commodity:</span>
                             <span className="text-foreground">{deal.commodity || "—"}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Scale className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">Quantity:</span>
+                            <span className="text-foreground">{deal.quantity || "—"}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Tag className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">Unit price:</span>
+                            <span className="text-foreground">{formatUnitPrice(deal) || "—"}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Ship className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">Terms:</span>
+                            <span className="text-foreground">
+                              {deal.tradeStructure}
+                              {deal.originCountry ? ` · ${deal.originCountry}` : ""}
+                            </span>
                           </div>
                           <div className="flex items-center gap-2">
                             <Layers className="h-4 w-4 text-muted-foreground" />
