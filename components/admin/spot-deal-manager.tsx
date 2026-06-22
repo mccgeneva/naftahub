@@ -15,6 +15,9 @@ import {
   Download,
   Anchor,
   Gauge,
+  Satellite,
+  CheckCircle2,
+  ExternalLink,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -66,13 +69,15 @@ import {
   listVesselsAdmin,
   upsertVesselAdmin,
   deleteVesselAdmin,
-  importVesselFromMarineTraffic,
+  importVesselFromProvider,
+  getVesselProviderStatus,
   listSpotDealsAdmin,
   createSpotDealAdmin,
   publishSpotDealAdmin,
   withdrawSpotDealAdmin,
   type CreateSpotDealInput,
 } from "@/app/actions/spot-deals"
+import { VESSEL_PROVIDERS } from "@/lib/spot-deals-shared"
 
 const CURRENCIES = ["USD", "EUR", "GBP", "CHF", "AED", "SGD"]
 const INCOTERMS = ["FOB", "CIF", "CFR", "FCA", "DES", "DAP"]
@@ -115,6 +120,17 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
   const [importImo, setImportImo] = useState("")
   const [importing, setImporting] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Vessel | null>(null)
+  const [provider, setProvider] = useState<Awaited<ReturnType<typeof getVesselProviderStatus>> | null>(null)
+  const [providersOpen, setProvidersOpen] = useState(false)
+
+  useEffect(() => {
+    getVesselProviderStatus()
+      .then(setProvider)
+      .catch(() => {})
+  }, [])
+
+  const providerLabel = provider?.active?.label ?? null
+  const providerConnected = Boolean(provider?.connected)
 
   const load = useCallback(
     async (term?: string) => {
@@ -182,19 +198,23 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
     if (!imo) return
     setImporting(true)
     try {
-      const res = await importVesselFromMarineTraffic(ADMIN_PASSCODE, imo)
+      const res = await importVesselFromProvider(ADMIN_PASSCODE, imo)
       if (res.ok) {
-        toast.success("Vessel imported", { description: `${res.vessel?.name} (IMO ${res.vessel?.imo})` })
+        toast.success("Vessel imported", {
+          description: `${res.vessel?.name} (IMO ${res.vessel?.imo})${providerLabel ? ` · ${providerLabel}` : ""}`,
+        })
         setImportImo("")
         await load(search)
       } else {
-        // No live key configured (or IMO not found upstream): guide the admin to
-        // add it manually with the IMO already pre-filled.
+        // No provider linked (or IMO not found upstream): guide the admin to
+        // connect a provider, or add the vessel manually with the IMO pre-filled.
         toast.message("Live import unavailable", {
           description: res.error,
-          action: /^\d{7}$/.test(imo)
-            ? { label: "Add manually", onClick: () => openCreate(imo) }
-            : undefined,
+          action: providerConnected
+            ? /^\d{7}$/.test(imo)
+              ? { label: "Add manually", onClick: () => openCreate(imo) }
+              : undefined
+            : { label: "Connect provider", onClick: () => setProvidersOpen(true) },
         })
       }
     } finally {
@@ -254,10 +274,31 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
             </Button>
           </div>
 
+          {/* Live data provider status */}
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+            <div className="flex items-center gap-2 text-sm">
+              <Satellite className="h-4 w-4 text-muted-foreground" />
+              {providerConnected ? (
+                <span className="flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                  Live vessel data: <span className="font-medium text-foreground">{providerLabel}</span> connected
+                </span>
+              ) : (
+                <span className="text-muted-foreground">
+                  No live vessel-data provider connected — import uses the curated catalogue.
+                </span>
+              )}
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setProvidersOpen(true)} className="shrink-0">
+              <Satellite className="mr-1.5 h-3.5 w-3.5" />
+              {providerConnected ? "Manage providers" : "Connect provider"}
+            </Button>
+          </div>
+
           <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/30 p-3 sm:flex-row sm:items-end">
             <div className="flex-1">
               <Label htmlFor="import-imo" className="text-xs">
-                Import from MarineTraffic (by IMO)
+                {providerConnected ? `Import from ${providerLabel} (by IMO)` : "Live import by IMO (needs a provider)"}
               </Label>
               <Input
                 id="import-imo"
@@ -287,8 +328,10 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
                   <div>
                     <p className="text-sm font-medium">No catalogue match for IMO {searchedImo}</p>
                     <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
-                      This vessel isn&apos;t in the catalogue yet. Try a live MarineTraffic import, or add
-                      it manually with the IMO pre-filled.
+                      This vessel isn&apos;t in the catalogue yet.{" "}
+                      {providerConnected
+                        ? `Try a live ${providerLabel} import, or add it manually with the IMO pre-filled.`
+                        : "Connect a live data provider to import it, or add it manually with the IMO pre-filled."}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center justify-center gap-2">
@@ -541,6 +584,67 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
             <Button variant="destructive" onClick={handleDelete}>
               Remove
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Live data provider management */}
+      <Dialog open={providersOpen} onOpenChange={setProvidersOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Satellite className="h-4 w-4" />
+              Live vessel-data providers
+            </DialogTitle>
+            <DialogDescription>
+              Link any supported AIS / vessel-data company by adding its API token to the project&apos;s
+              environment variables. The app automatically uses the first connected provider for live IMO
+              lookups. No token is ever shown here.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            {(provider?.providers ?? VESSEL_PROVIDERS.map((p) => ({ ...p, configured: false }))).map((p) => (
+              <div
+                key={p.id}
+                className="flex items-start justify-between gap-3 rounded-lg border border-border p-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{p.label}</span>
+                    {p.configured ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-600">
+                        <CheckCircle2 className="h-3 w-3" /> Connected
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                        Not connected
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Add token as{" "}
+                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">{p.envVar}</code> in
+                    project settings.
+                  </p>
+                </div>
+                <a
+                  href={p.signupUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
+                >
+                  Get token <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+            ))}
+            <p className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+              In v0, add these tokens via the <span className="font-medium text-foreground">Vars</span> section
+              of the project settings (top-right). Once a token is saved, return here and the provider will show
+              as connected.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setProvidersOpen(false)}>Done</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

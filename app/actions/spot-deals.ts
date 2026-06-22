@@ -12,7 +12,8 @@
 //    existing commodity-deal approval workflow on the client side.
 //
 // Vessel data is sourced from a managed catalogue seeded with realistic tanker
-// data. If a MARINETRAFFIC_API_KEY is configured, `importVesselFromMarineTraffic`
+// data. If a live vessel-data provider is linked (MarineTraffic, Datalastic or
+// VesselFinder — by adding that provider's API token), `importVesselFromProvider`
 // fetches a live record; otherwise it returns a clear, non-fatal message.
 // ---------------------------------------------------------------------------
 
@@ -40,6 +41,7 @@ import {
   type Vessel,
   type SpotDeal,
 } from "@/lib/spot-deals-shared"
+import { fetchVesselByImo, providerStatus } from "@/lib/vessel-providers"
 
 function adminOk(passcode: string): boolean {
   return passcode === ADMIN_PASSCODE
@@ -131,68 +133,44 @@ export async function deleteVesselAdmin(passcode: string, imo: string): Promise<
   }
 }
 
+/** Token-free view of which live vessel-data provider (if any) is connected. */
+export async function getVesselProviderStatus() {
+  return providerStatus()
+}
+
 /**
- * Optional live import. Uses MarineTraffic's single-vessel API when a key is
- * present; otherwise returns a clear message so the admin knows to add the
- * vessel manually. Designed so wiring a key later needs no other changes.
+ * Live import from whichever vessel-data provider is connected (MarineTraffic,
+ * Datalastic or VesselFinder — auto-selected by configured token). Returns a
+ * clear message when no provider is linked so the admin can add the vessel
+ * manually. Linking a provider later needs no other code changes.
  */
-export async function importVesselFromMarineTraffic(passcode: string, imo: string): Promise<VesselResult> {
+export async function importVesselFromProvider(passcode: string, imo: string): Promise<VesselResult> {
   if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
-  const key = process.env.MARINETRAFFIC_API_KEY
-  if (!key) {
-    return {
-      ok: false,
-      error:
-        "Live MarineTraffic import is not configured (no MARINETRAFFIC_API_KEY). Add the vessel manually, or set the key to enable live import.",
-    }
-  }
   const clean = (imo ?? "").trim()
   if (!/^\d{7}$/.test(clean)) return { ok: false, error: "IMO number must be exactly 7 digits." }
+  const result = await fetchVesselByImo(clean)
+  if ("error" in result) return { ok: false, error: result.error }
   try {
-    const url = `https://services.marinetraffic.com/api/vesselmasterdata/${key}/imo:${clean}/protocol:jsono`
-    const res = await fetch(url, { cache: "no-store" })
-    if (!res.ok) return { ok: false, error: `MarineTraffic responded with ${res.status}.` }
-    const data = (await res.json()) as Array<Record<string, unknown>>
-    const row = Array.isArray(data) ? data[0] : undefined
-    if (!row) return { ok: false, error: "No vessel found for that IMO at MarineTraffic." }
-
-    const typeRaw = String(row.SHIPTYPE ?? row.TYPE_NAME ?? "").toLowerCase()
-    const type: Vessel["type"] = typeRaw.includes("gas") || typeRaw.includes("lng") || typeRaw.includes("lpg")
-      ? "gas"
-      : typeRaw.includes("crude")
-        ? "crude"
-        : "product"
-
-    const vessel: Vessel = {
-      imo: clean,
-      name: String(row.NAME ?? row.SHIPNAME ?? `IMO ${clean}`),
-      type,
-      vesselClass: row.TYPE_NAME ? String(row.TYPE_NAME) : undefined,
-      capacity: Number(row.SUMMER_DWT ?? row.DWT ?? 0) || 0,
-      capacityUnit: type === "gas" ? "CBM" : "DWT",
-      status: "idle",
-      location: String(row.PORT ?? row.CURRENT_PORT ?? "Unknown"),
-      flag: row.FLAG ? String(row.FLAG) : undefined,
-      builtYear: row.YEAR_BUILT ? Number(row.YEAR_BUILT) : undefined,
-      cargo: undefined,
-      source: "marinetraffic",
-      updatedAt: new Date().toISOString(),
-    }
-    const saved = await dbUpsertVessel(vessel)
+    const saved = await dbUpsertVessel(result.vessel)
     await logActivity({
-      action: `Administrator imported vessel ${saved.name} (IMO ${saved.imo}) from MarineTraffic`,
+      action: `Administrator imported vessel ${saved.name} (IMO ${saved.imo}) from ${result.providerLabel}`,
       category: "Administration",
       details: {
-        summary: `Administrator imported "${saved.name}" (IMO ${saved.imo}) from MarineTraffic into the vessel catalogue.`,
+        summary: `Administrator imported "${saved.name}" (IMO ${saved.imo}) from ${result.providerLabel} into the vessel catalogue.`,
         referenceId: saved.imo,
-        source: "MarineTraffic",
+        source: result.providerLabel,
       },
     })
     return { ok: true, vessel: saved }
   } catch (err) {
-    console.log("[v0] importVesselFromMarineTraffic failed:", (err as Error).message)
-    return { ok: false, error: "Live import failed. Please add the vessel manually." }
+    console.log("[v0] importVesselFromProvider save failed:", (err as Error).message)
+    return { ok: false, error: "The imported vessel could not be saved. Please try again." }
   }
+}
+
+/** @deprecated Use importVesselFromProvider. Kept for backward compatibility. */
+export async function importVesselFromMarineTraffic(passcode: string, imo: string): Promise<VesselResult> {
+  return importVesselFromProvider(passcode, imo)
 }
 
 // --- Spot deals (admin) -----------------------------------------------------

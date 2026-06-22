@@ -45,7 +45,46 @@ export const VESSEL_STATUS_LABELS: Record<VesselStatus, string> = {
 }
 
 /** Where the row originated, for the audit trail / import provenance. */
-export type VesselSource = "manual" | "marinetraffic" | "seed"
+export type VesselSource = "manual" | "marinetraffic" | "datalastic" | "vesselfinder" | "seed"
+
+/** Identifier for a live AIS / vessel-data provider the app can link to. */
+export type VesselProviderId = "marinetraffic" | "datalastic" | "vesselfinder"
+
+export interface VesselProviderInfo {
+  id: VesselProviderId
+  /** Human label shown in the UI. */
+  label: string
+  /** Environment variable that stores this provider's API token. */
+  envVar: string
+  /** Where to obtain an API token. */
+  signupUrl: string
+}
+
+/**
+ * Supported live vessel-data providers, in priority order. The app uses the
+ * first one that has a token configured. Add a provider here and implement its
+ * adapter in lib/vessel-providers.ts to support it everywhere.
+ */
+export const VESSEL_PROVIDERS: VesselProviderInfo[] = [
+  {
+    id: "marinetraffic",
+    label: "MarineTraffic",
+    envVar: "MARINETRAFFIC_API_KEY",
+    signupUrl: "https://www.marinetraffic.com/en/online-services/api",
+  },
+  {
+    id: "datalastic",
+    label: "Datalastic",
+    envVar: "DATALASTIC_API_KEY",
+    signupUrl: "https://datalastic.com/pricing/",
+  },
+  {
+    id: "vesselfinder",
+    label: "VesselFinder",
+    envVar: "VESSELFINDER_API_KEY",
+    signupUrl: "https://api.vesselfinder.com/docs/",
+  },
+]
 
 export interface Vessel {
   /** IMO number — the stable, globally-unique vessel identifier (primary key). */
