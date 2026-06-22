@@ -305,6 +305,10 @@ export default function CommodityTradingPage() {
     [deals],
   )
 
+  // The Deals tab counter reflects only OPEN deals — once a deal is delivered it
+  // is closed/settled, so it is deducted from the count.
+  const activeDealsCount = useMemo(() => sortedDeals.filter((d) => !d.delivered).length, [sortedDeals])
+
   const resetForm = () => {
     setForm({ ...emptyDeal })
     setSendingBicValid(false)
@@ -479,9 +483,9 @@ export default function CommodityTradingPage() {
             <Layers className="h-4 w-4" />
             <span className="hidden sm:inline">Deal Workflow</span>
             <span className="sm:hidden">Deals</span>
-            {sortedDeals.length > 0 && (
+            {activeDealsCount > 0 && (
               <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-[10px]">
-                {sortedDeals.length}
+                {activeDealsCount}
               </Badge>
             )}
           </TabsTrigger>
