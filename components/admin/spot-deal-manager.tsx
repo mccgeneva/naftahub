@@ -136,10 +136,24 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
     load()
   }, [load])
 
-  const openCreate = () => {
-    setForm({ ...emptyVessel })
-    setEditTarget({ ...emptyVessel })
+  const openCreate = (prefillImo?: string) => {
+    const imo = (prefillImo ?? "").trim()
+    const seed = imo && /^\d{7}$/.test(imo) ? { ...emptyVessel, imo } : { ...emptyVessel }
+    setForm(seed)
+    setEditTarget(seed)
   }
+
+  // The IMO the admin is currently searching for, if the term contains a valid
+  // 7-digit IMO number. We strip non-digits first so pasted values like
+  // "IMO 9512331", "9512331 " or "IMO-9512331" (as copied from MarineTraffic)
+  // are still recognised and offered as a direct "import / add this vessel".
+  const searchDigits = search.replace(/\D/g, "")
+  const searchedImo = searchDigits.length === 7 ? searchDigits : ""
+
+  // Run a catalogue search. When the term resolves to a 7-digit IMO we query by
+  // the bare digits so it matches the stored `imo` even if the admin typed an
+  // "IMO " prefix or extra spacing.
+  const runSearch = () => load(searchedImo || search.trim())
   const openEdit = (v: Vessel) => {
     setForm({ ...v, vesselClass: v.vesselClass ?? "", flag: v.flag ?? "", cargo: v.cargo ?? "" })
     setEditTarget(v)
@@ -163,16 +177,25 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
     }
   }
 
-  const handleImport = async () => {
+  const handleImport = async (imoOverride?: string) => {
+    const imo = (imoOverride ?? importImo).trim()
+    if (!imo) return
     setImporting(true)
     try {
-      const res = await importVesselFromMarineTraffic(ADMIN_PASSCODE, importImo.trim())
+      const res = await importVesselFromMarineTraffic(ADMIN_PASSCODE, imo)
       if (res.ok) {
         toast.success("Vessel imported", { description: `${res.vessel?.name} (IMO ${res.vessel?.imo})` })
         setImportImo("")
         await load(search)
       } else {
-        toast.message("Import unavailable", { description: res.error })
+        // No live key configured (or IMO not found upstream): guide the admin to
+        // add it manually with the IMO already pre-filled.
+        toast.message("Live import unavailable", {
+          description: res.error,
+          action: /^\d{7}$/.test(imo)
+            ? { label: "Add manually", onClick: () => openCreate(imo) }
+            : undefined,
+        })
       }
     } finally {
       setImporting(false)
@@ -215,17 +238,17 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
                   id="vessel-search"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && load(search)}
+                  onKeyDown={(e) => e.key === "Enter" && runSearch()}
                   placeholder="e.g. Pacific Triton, 9512331, Jet A-1"
                   className="pl-8"
                 />
               </div>
             </div>
-            <Button variant="outline" onClick={() => load(search)} className="shrink-0">
+            <Button variant="outline" onClick={runSearch} className="shrink-0">
               <Search className="mr-1.5 h-4 w-4" />
               Search
             </Button>
-            <Button onClick={openCreate} className="shrink-0">
+            <Button onClick={() => openCreate(searchedImo)} className="shrink-0">
               <Plus className="mr-1.5 h-4 w-4" />
               Add vessel
             </Button>
@@ -245,7 +268,7 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
                 inputMode="numeric"
               />
             </div>
-            <Button variant="secondary" onClick={handleImport} disabled={importing || !importImo.trim()} className="shrink-0">
+            <Button variant="secondary" onClick={() => handleImport()} disabled={importing || !importImo.trim()} className="shrink-0">
               {importing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Download className="mr-1.5 h-4 w-4" />}
               Import
             </Button>
@@ -257,7 +280,51 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
               Loading catalogue…
             </div>
           ) : vessels.length === 0 ? (
-            <p className="py-10 text-center text-sm text-muted-foreground">No vessels found.</p>
+            <div className="flex flex-col items-center gap-3 py-10 text-center">
+              <Ship className="h-8 w-8 text-muted-foreground/60" />
+              {searchedImo ? (
+                <>
+                  <div>
+                    <p className="text-sm font-medium">No catalogue match for IMO {searchedImo}</p>
+                    <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+                      This vessel isn&apos;t in the catalogue yet. Try a live MarineTraffic import, or add
+                      it manually with the IMO pre-filled.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => handleImport(searchedImo)}
+                      disabled={importing}
+                    >
+                      {importing ? (
+                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Download className="mr-1.5 h-4 w-4" />
+                      )}
+                      Import IMO {searchedImo}
+                    </Button>
+                    <Button onClick={() => openCreate(searchedImo)}>
+                      <Plus className="mr-1.5 h-4 w-4" />
+                      Add IMO {searchedImo} manually
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium">No vessels found</p>
+                  <p className="mx-auto max-w-sm text-xs text-muted-foreground">
+                    {search.trim()
+                      ? "No catalogue entry matches that search. Search by exact 7-digit IMO to import or add a specific vessel."
+                      : "The catalogue is empty. Add a vessel or import one from MarineTraffic by IMO."}
+                  </p>
+                  <Button onClick={() => openCreate()}>
+                    <Plus className="mr-1.5 h-4 w-4" />
+                    Add vessel
+                  </Button>
+                </>
+              )}
+            </div>
           ) : (
             <ScrollArea className="h-[360px] pr-3">
               <div className="flex flex-col gap-2">
