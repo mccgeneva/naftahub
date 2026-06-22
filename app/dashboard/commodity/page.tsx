@@ -305,9 +305,13 @@ export default function CommodityTradingPage() {
     [deals],
   )
 
-  // The Deals tab counter reflects only OPEN deals — once a deal is delivered it
-  // is closed/settled, so it is deducted from the count.
-  const activeDealsCount = useMemo(() => sortedDeals.filter((d) => !d.delivered).length, [sortedDeals])
+  // The Deals tab counter reflects only OPEN deals. A deal is deducted once it is
+  // finalized — delivered (settled), revoked (cancelled), or rejected — leaving
+  // only live deals in the count.
+  const activeDealsCount = useMemo(
+    () => sortedDeals.filter((d) => !d.delivered && d.status !== "cancelled" && d.status !== "rejected").length,
+    [sortedDeals],
+  )
 
   const resetForm = () => {
     setForm({ ...emptyDeal })
