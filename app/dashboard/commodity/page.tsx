@@ -85,6 +85,7 @@ import {
   bblPerMtFor,
   formatQuantityWithEquivalent,
   formatUnitPriceFor,
+  parseQuantityString,
   type CommodityUnit,
 } from "@/lib/petroleum-products"
 
@@ -509,9 +510,14 @@ export default function CommodityTradingPage() {
   }
 
   // Open the negotiate/amend dialog pre-filled with the deal's current terms.
+  // The price field holds the UNIT price (per MT/BBL) — what traders renegotiate —
+  // and the new total deal value is derived from unit price × quantity on submit.
   const openAmend = (deal: CommodityDeal) => {
+    const parsedQty = parseQuantityString(deal.quantity)
+    const currentUnitPrice =
+      parsedQty && deal.approxValue ? Math.round((deal.approxValue / parsedQty.amount) * 100) / 100 : 0
     setAmendForm({
-      value: String(deal.approxValue ?? ""),
+      value: currentUnitPrice > 0 ? String(currentUnitPrice) : "",
       quantity: deal.quantity ?? "",
       tradeStructure: deal.tradeStructure,
       reason: "",
@@ -522,19 +528,22 @@ export default function CommodityTradingPage() {
   const handleSubmitAmendment = async () => {
     const deal = amendTarget
     if (!deal) return
-    const value = Number.parseFloat(amendForm.value.replace(/,/g, ""))
-    if (!Number.isFinite(value) || value <= 0) {
-      toast.error("Enter a valid amended value.")
+    const unitPrice = Number.parseFloat(amendForm.value.replace(/,/g, ""))
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+      toast.error("Enter a valid unit price.")
       return
     }
-    if (!amendForm.quantity.trim()) {
-      toast.error("Enter the amended quantity.")
+    const parsedQty = parseQuantityString(amendForm.quantity)
+    if (!parsedQty) {
+      toast.error("Enter a valid quantity, e.g. 200,000 MT.")
       return
     }
     if (!amendForm.reason.trim()) {
       toast.error("Add a short reason for the amendment.")
       return
     }
+    // Total deal value = unit price × quantity. This is what gets reserved.
+    const value = Math.round(unitPrice * parsedQty.amount * 100) / 100
     const proposed: DealTerms = {
       approxValue: value,
       quantity: amendForm.quantity.trim(),
@@ -1355,13 +1364,16 @@ export default function CommodityTradingPage() {
             <div className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="amend-value">Selling price ({amendTarget.currency})</Label>
+                  <Label htmlFor="amend-value">
+                    Unit price ({amendTarget.currency} /{" "}
+                    {parseQuantityString(amendForm.quantity || amendTarget.quantity)?.unit === "bbl" ? "BBL" : "MT"})
+                  </Label>
                   <Input
                     id="amend-value"
                     inputMode="decimal"
                     value={amendForm.value}
                     onChange={(e) => setAmendForm((p) => ({ ...p, value: e.target.value }))}
-                    placeholder="0.00"
+                    placeholder="e.g. 685.00"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -1401,23 +1413,41 @@ export default function CommodityTradingPage() {
                   rows={3}
                 />
               </div>
-              {/* Live preview of the change. */}
-              <div className="rounded-md border border-border bg-muted/40 p-3">
-                <p className="mb-2 text-xs font-medium text-muted-foreground">Proposed change</p>
-                <AmendmentDiff
-                  previous={{
-                    approxValue: amendTarget.approxValue,
-                    quantity: amendTarget.quantity,
-                    tradeStructure: amendTarget.tradeStructure,
-                  }}
-                  proposed={{
-                    approxValue: Number.parseFloat(amendForm.value.replace(/,/g, "")) || 0,
-                    quantity: amendForm.quantity || amendTarget.quantity,
-                    tradeStructure: amendForm.tradeStructure,
-                  }}
-                  currency={amendTarget.currency}
-                />
-              </div>
+              {/* Live preview of the change. Total = unit price × quantity. */}
+              {(() => {
+                const proposedQty = amendForm.quantity || amendTarget.quantity
+                const parsed = parseQuantityString(proposedQty)
+                const unitPrice = Number.parseFloat(amendForm.value.replace(/,/g, "")) || 0
+                const proposedTotal = parsed ? Math.round(unitPrice * parsed.amount * 100) / 100 : 0
+                const unit = parsed?.unit === "bbl" ? "BBL" : "MT"
+                return (
+                  <div className="rounded-md border border-border bg-muted/40 p-3">
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">Proposed change</p>
+                    <AmendmentDiff
+                      previous={{
+                        approxValue: amendTarget.approxValue,
+                        quantity: amendTarget.quantity,
+                        tradeStructure: amendTarget.tradeStructure,
+                      }}
+                      proposed={{
+                        approxValue: proposedTotal,
+                        quantity: proposedQty,
+                        tradeStructure: amendForm.tradeStructure,
+                      }}
+                      currency={amendTarget.currency}
+                    />
+                    <div className="mt-2 flex items-center justify-between border-t border-border pt-2 text-xs">
+                      <span className="text-muted-foreground">
+                        New total deal value ({formatCurrency(unitPrice, amendTarget.currency)} / {unit} ×{" "}
+                        {parsed ? parsed.amount.toLocaleString("en-US") : "—"} {unit})
+                      </span>
+                      <span className="font-semibold text-foreground">
+                        {formatCurrency(proposedTotal, amendTarget.currency)}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })()}
             </div>
           ) : null}
           <DialogFooter>
