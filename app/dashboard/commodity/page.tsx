@@ -23,6 +23,9 @@ import {
   Loader2,
   Scale,
   Tag,
+  Handshake,
+  MessageSquare,
+  Send,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -71,6 +74,7 @@ import {
   type DocModule,
   type InstrumentType,
   type TradeStructure,
+  type DealTerms,
 } from "@/lib/commodity-deals-store"
 import {
   PETROLEUM_PRODUCTS,
@@ -115,6 +119,56 @@ const formatTimestamp = (iso?: string) => {
     hour: "2-digit",
     minute: "2-digit",
   })}`
+}
+
+// Compact old → new diff for an amendment. Only the rows that actually changed
+// show the arrow + new value, so the buyer/admin see exactly what is being
+// renegotiated.
+function AmendmentDiff({
+  previous,
+  proposed,
+  currency,
+}: {
+  previous: DealTerms
+  proposed: DealTerms
+  currency: string
+}) {
+  const rows = [
+    {
+      label: "Value",
+      from: formatCurrency(previous.approxValue, currency),
+      to: formatCurrency(proposed.approxValue, currency),
+      changed: Math.round(previous.approxValue * 100) !== Math.round(proposed.approxValue * 100),
+    },
+    {
+      label: "Quantity",
+      from: previous.quantity || "—",
+      to: proposed.quantity || "—",
+      changed: (previous.quantity || "") !== (proposed.quantity || ""),
+    },
+    {
+      label: "Terms",
+      from: previous.tradeStructure,
+      to: proposed.tradeStructure,
+      changed: previous.tradeStructure !== proposed.tradeStructure,
+    },
+  ]
+  return (
+    <div className="space-y-1">
+      {rows.map((r) => (
+        <div key={r.label} className="flex items-center gap-2 text-xs">
+          <span className="w-16 shrink-0 text-muted-foreground">{r.label}:</span>
+          <span className={r.changed ? "text-muted-foreground line-through" : "text-foreground"}>{r.from}</span>
+          {r.changed && (
+            <>
+              <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+              <span className="font-medium text-foreground">{r.to}</span>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  )
 }
 
 const emptyDeal = {
@@ -239,6 +293,8 @@ export default function CommodityTradingPage() {
     addDocumentVersion,
     setStage,
     revokeDeal,
+    requestAmendment,
+    addNegotiationNote,
     hydrated,
   } = useCommodityDeals()
 
@@ -249,6 +305,15 @@ export default function CommodityTradingPage() {
   // Revoke-confirmation dialog state.
   const [revokeTarget, setRevokeTarget] = useState<CommodityDeal | null>(null)
   const [revoking, setRevoking] = useState(false)
+  // Negotiate / amend dialog state.
+  const [amendTarget, setAmendTarget] = useState<CommodityDeal | null>(null)
+  const [amendForm, setAmendForm] = useState({ value: "", quantity: "", tradeStructure: "FOB" as TradeStructure, reason: "" })
+  const [amending, setAmending] = useState(false)
+  // Negotiation-notes dialog state.
+  const [notesTarget, setNotesTarget] = useState<CommodityDeal | null>(null)
+  const [noteText, setNoteText] = useState("")
+  const [counterpartyText, setCounterpartyText] = useState("")
+  const [savingNote, setSavingNote] = useState(false)
 
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -441,6 +506,87 @@ export default function CommodityTradingPage() {
       },
     })
     setRevokeTarget(null)
+  }
+
+  // Open the negotiate/amend dialog pre-filled with the deal's current terms.
+  const openAmend = (deal: CommodityDeal) => {
+    setAmendForm({
+      value: String(deal.approxValue ?? ""),
+      quantity: deal.quantity ?? "",
+      tradeStructure: deal.tradeStructure,
+      reason: "",
+    })
+    setAmendTarget(deal)
+  }
+
+  const handleSubmitAmendment = async () => {
+    const deal = amendTarget
+    if (!deal) return
+    const value = Number.parseFloat(amendForm.value.replace(/,/g, ""))
+    if (!Number.isFinite(value) || value <= 0) {
+      toast.error("Enter a valid amended value.")
+      return
+    }
+    if (!amendForm.quantity.trim()) {
+      toast.error("Enter the amended quantity.")
+      return
+    }
+    if (!amendForm.reason.trim()) {
+      toast.error("Add a short reason for the amendment.")
+      return
+    }
+    const proposed: DealTerms = {
+      approxValue: value,
+      quantity: amendForm.quantity.trim(),
+      tradeStructure: amendForm.tradeStructure,
+    }
+    setAmending(true)
+    const res = await requestAmendment(deal.id, proposed, amendForm.reason.trim())
+    setAmending(false)
+    if (!res.ok) {
+      toast.error(res.error ?? "The amendment could not be submitted.")
+      return
+    }
+    toast.success("Amendment submitted", {
+      description: `Your renegotiated terms for ${deal.id} are pending Administrator approval. Reserved funds adjust only once approved.`,
+    })
+    logActivity({
+      action: `Client requested amendment of commodity deal ${deal.id}`,
+      category: "Commodity Trading",
+      details: {
+        summary: `Client renegotiated deal ${deal.id} "${deal.title}": value ${formatCurrency(deal.approxValue, deal.currency)} → ${formatCurrency(value, deal.currency)}, quantity ${deal.quantity} → ${proposed.quantity}, terms ${deal.tradeStructure} → ${proposed.tradeStructure}. Pending admin approval. Reason: ${amendForm.reason.trim()}.`,
+        referenceId: deal.id,
+        uetr: deal.uetr,
+        decision: "Amendment requested",
+      },
+    })
+    setAmendTarget(null)
+  }
+
+  const openNotes = (deal: CommodityDeal) => {
+    setNoteText("")
+    setCounterpartyText(deal.counterpartyPosition ?? "")
+    setNotesTarget(deal)
+  }
+
+  const handleSaveNote = async () => {
+    const deal = notesTarget
+    if (!deal) return
+    if (!noteText.trim() && (counterpartyText.trim() === (deal.counterpartyPosition ?? "").trim())) {
+      toast.error("Add a note or update the counterparty position.")
+      return
+    }
+    setSavingNote(true)
+    const res = await addNegotiationNote(deal.id, noteText.trim(), counterpartyText.trim())
+    setSavingNote(false)
+    if (!res.ok) {
+      toast.error(res.error ?? "The note could not be saved.")
+      return
+    }
+    toast.success("Negotiation log updated")
+    setNoteText("")
+    // Keep the dialog open with the (now persisted) latest data on next render.
+    setNotesTarget((prev) => (prev ? { ...prev } : prev))
   }
 
   return (
@@ -1016,18 +1162,54 @@ export default function CommodityTradingPage() {
                                 <Button
                                   size="sm"
                                   variant="outline"
+                                  onClick={() => openAmend(deal)}
+                                  disabled={deal.pendingAmendment?.status === "pending"}
+                                >
+                                  <Handshake className="mr-1 h-3.5 w-3.5" />
+                                  Negotiate / Amend
+                                </Button>
+                                <Button size="sm" variant="outline" onClick={() => openNotes(deal)}>
+                                  <MessageSquare className="mr-1 h-3.5 w-3.5" />
+                                  Negotiation log
+                                  {deal.negotiationNotes?.length ? (
+                                    <Badge variant="secondary" className="ml-1.5 px-1.5 py-0 text-[10px]">
+                                      {deal.negotiationNotes.length}
+                                    </Badge>
+                                  ) : null}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
                                   className="text-destructive"
                                   onClick={() => setRevokeTarget(deal)}
                                 >
                                   <Ban className="mr-1 h-3.5 w-3.5" />
                                   Cancel / Revoke deal
                                 </Button>
-                                <span className="text-xs text-muted-foreground">
-                                  Releases the reserved funds back to your available balance. Available until the
-                                  deal is flagged delivered.
-                                </span>
                               </>
                             )}
+                          </div>
+                        )}
+
+                        {/* Pending amendment — old → new diff awaiting admin sign-off. */}
+                        {deal.pendingAmendment?.status === "pending" && (
+                          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+                            <div className="mb-2 flex items-center gap-1.5 font-medium text-amber-600 dark:text-amber-400">
+                              <Handshake className="h-3.5 w-3.5" />
+                              Amendment pending Administrator approval
+                            </div>
+                            <AmendmentDiff
+                              previous={deal.pendingAmendment.previous}
+                              proposed={deal.pendingAmendment.proposed}
+                              currency={deal.currency}
+                            />
+                            <p className="mt-2 text-muted-foreground">
+                              <span className="font-medium text-foreground">Reason:</span>{" "}
+                              {deal.pendingAmendment.reason}
+                            </p>
+                            <p className="mt-1 text-muted-foreground">
+                              Reserved funds will adjust to the new value once the amendment is approved.
+                            </p>
                           </div>
                         )}
 
@@ -1150,6 +1332,172 @@ export default function CommodityTradingPage() {
             <Button variant="destructive" onClick={handleConfirmRevoke} disabled={revoking}>
               {revoking ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Ban className="mr-1 h-4 w-4" />}
               Revoke &amp; release funds
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Negotiate / amend deal terms */}
+      <Dialog open={amendTarget !== null} onOpenChange={(o) => !o && !amending && setAmendTarget(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Handshake className="h-4 w-4 text-primary" />
+              Negotiate / amend deal
+            </DialogTitle>
+            <DialogDescription className="text-pretty">
+              Propose revised commercial terms for{" "}
+              <span className="font-medium text-foreground">{amendTarget?.id}</span>. The amendment is submitted to
+              the Administrator for approval — the reserved funds only adjust once it is approved.
+            </DialogDescription>
+          </DialogHeader>
+          {amendTarget ? (
+            <div className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="amend-value">Selling price ({amendTarget.currency})</Label>
+                  <Input
+                    id="amend-value"
+                    inputMode="decimal"
+                    value={amendForm.value}
+                    onChange={(e) => setAmendForm((p) => ({ ...p, value: e.target.value }))}
+                    placeholder="0.00"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="amend-qty">Quantity</Label>
+                  <Input
+                    id="amend-qty"
+                    value={amendForm.quantity}
+                    onChange={(e) => setAmendForm((p) => ({ ...p, quantity: e.target.value }))}
+                    placeholder="e.g. 200,000 MT"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="amend-terms">Incoterms / trade structure</Label>
+                <Select
+                  value={amendForm.tradeStructure}
+                  onValueChange={(v) => setAmendForm((p) => ({ ...p, tradeStructure: v as TradeStructure }))}
+                >
+                  <SelectTrigger id="amend-terms">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="FOB">FOB — Free On Board</SelectItem>
+                    <SelectItem value="CIF">CIF — Cost, Insurance &amp; Freight</SelectItem>
+                    <SelectItem value="Spot">Spot</SelectItem>
+                    <SelectItem value="Long-term">Long-term contract</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="amend-reason">Reason for amendment</Label>
+                <Textarea
+                  id="amend-reason"
+                  value={amendForm.reason}
+                  onChange={(e) => setAmendForm((p) => ({ ...p, reason: e.target.value }))}
+                  placeholder="e.g. Renegotiated unit price after counterparty review of freight costs."
+                  rows={3}
+                />
+              </div>
+              {/* Live preview of the change. */}
+              <div className="rounded-md border border-border bg-muted/40 p-3">
+                <p className="mb-2 text-xs font-medium text-muted-foreground">Proposed change</p>
+                <AmendmentDiff
+                  previous={{
+                    approxValue: amendTarget.approxValue,
+                    quantity: amendTarget.quantity,
+                    tradeStructure: amendTarget.tradeStructure,
+                  }}
+                  proposed={{
+                    approxValue: Number.parseFloat(amendForm.value.replace(/,/g, "")) || 0,
+                    quantity: amendForm.quantity || amendTarget.quantity,
+                    tradeStructure: amendForm.tradeStructure,
+                  }}
+                  currency={amendTarget.currency}
+                />
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setAmendTarget(null)} disabled={amending}>
+              Cancel
+            </Button>
+            <Button onClick={handleSubmitAmendment} disabled={amending}>
+              {amending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Send className="mr-1 h-4 w-4" />}
+              Submit for approval
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Negotiation log */}
+      <Dialog open={notesTarget !== null} onOpenChange={(o) => !o && !savingNote && setNotesTarget(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-primary" />
+              Negotiation log
+            </DialogTitle>
+            <DialogDescription className="text-pretty">
+              Record the back-and-forth with the counterparty for{" "}
+              <span className="font-medium text-foreground">{notesTarget?.id}</span>. Visible to you and the
+              Administrator.
+            </DialogDescription>
+          </DialogHeader>
+          {notesTarget ? (
+            <div className="space-y-4">
+              {/* Existing thread */}
+              <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border border-border bg-muted/30 p-3">
+                {notesTarget.negotiationNotes?.length ? (
+                  notesTarget.negotiationNotes.map((n) => (
+                    <div key={n.id} className="rounded-md bg-background p-2 text-xs">
+                      <div className="mb-0.5 flex items-center justify-between gap-2">
+                        <span className="font-medium text-foreground">
+                          {n.author}
+                          <Badge variant="outline" className="ml-1.5 px-1.5 py-0 text-[10px] capitalize">
+                            {n.authorRole}
+                          </Badge>
+                        </span>
+                        <span className="text-muted-foreground">{formatTimestamp(n.createdAt)}</span>
+                      </div>
+                      <p className="text-muted-foreground">{n.message}</p>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-center text-xs text-muted-foreground">No notes yet — add the first below.</p>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="cp-position">Counterparty position</Label>
+                <Textarea
+                  id="cp-position"
+                  value={counterpartyText}
+                  onChange={(e) => setCounterpartyText(e.target.value)}
+                  placeholder="e.g. Buyer agreed to CIF terms pending revised unit price of USD 690 / MT."
+                  rows={2}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="note-text">Add a note</Label>
+                <Textarea
+                  id="note-text"
+                  value={noteText}
+                  onChange={(e) => setNoteText(e.target.value)}
+                  placeholder="Log the latest call, email or agreement…"
+                  rows={2}
+                />
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setNotesTarget(null)} disabled={savingNote}>
+              Close
+            </Button>
+            <Button onClick={handleSaveNote} disabled={savingNote}>
+              {savingNote ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Plus className="mr-1 h-4 w-4" />}
+              Save to log
             </Button>
           </DialogFooter>
         </DialogContent>

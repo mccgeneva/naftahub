@@ -22,6 +22,7 @@ import {
   markApprovalDelivered,
   getApprovalById,
   updateApprovalPayload,
+  updateApprovalTerms,
   type ApprovalRequest,
   type ApprovalStatus,
   type LedgerEffect,
@@ -410,6 +411,196 @@ export async function requestPaymentRecall(
   } catch (err) {
     console.log("[v0] requestPaymentRecall failed:", (err as Error).message)
     return { ok: false, error: "The recall could not be submitted. Please try again." }
+  }
+}
+
+// --- Commodity deal negotiation / amendment --------------------------------
+
+/** The negotiable subset of a deal's terms, proposed by the client. */
+export interface ProposedDealTerms {
+  approxValue: number
+  quantity: string
+  tradeStructure: string
+}
+
+/**
+ * Request an AMENDMENT to one of the signed-in client's approved commodity
+ * deals. Renegotiating price/quantity/incoterms changes the reserved hold, so
+ * the change must clear the same administrator gate as the original deal: this
+ * files a `commodity_amendment` approval and stamps the original deal with a
+ * `pendingAmendment` (the diff). The deal's terms are NOT changed until the
+ * admin approves the amendment (see adminDecideApproval).
+ *
+ * Security: takes only the deal's approval id, reloads it server-side, and
+ * verifies ownership; the "previous" terms are read from the stored record, not
+ * from the client.
+ */
+export async function requestDealAmendment(
+  dealApprovalId: string,
+  proposed: ProposedDealTerms,
+  reason: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const session = await resolveCurrentSession()
+  if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
+  try {
+    const original = await getApprovalById(dealApprovalId)
+    if (!original || original.userId !== session.id) {
+      return { ok: false, error: "This deal could not be found." }
+    }
+    if (original.kind !== "commodity") {
+      return { ok: false, error: "Only commodity deals can be amended." }
+    }
+    if (original.status !== "approved") {
+      return { ok: false, error: "Only an approved deal can be amended." }
+    }
+
+    const payload = (original.payload ?? {}) as { delivered?: boolean; record?: Record<string, unknown> }
+    if (payload.delivered === true) {
+      return { ok: false, error: "This deal has been delivered and can no longer be amended." }
+    }
+    const record = (payload.record ?? {}) as Record<string, unknown>
+    if ((record.pendingAmendment as { status?: string } | undefined)?.status === "pending") {
+      return { ok: false, error: "An amendment is already pending approval for this deal." }
+    }
+
+    const newValue = Math.round(Number(proposed.approxValue) * 100) / 100
+    if (!Number.isFinite(newValue) || newValue <= 0) {
+      return { ok: false, error: "Enter a valid amended value." }
+    }
+    if (!reason?.trim()) {
+      return { ok: false, error: "A reason for the amendment is required." }
+    }
+
+    const currency = original.currency ?? (record.currency as string) ?? "USD"
+    const previous = {
+      approxValue: Number(original.amount ?? (record.approxValue as number) ?? 0),
+      quantity: (record.quantity as string) ?? "",
+      tradeStructure: (record.tradeStructure as string) ?? "FOB",
+    }
+    const amendmentId = `AMD-${Math.random().toString(16).slice(2, 10).toUpperCase()}`
+    const commodity = (record.commodity as string) ?? original.title
+
+    // File the amendment approval. It carries NO ledger effect of its own — the
+    // reserved hold is adjusted in place on the ORIGINAL deal at approval time.
+    const amendment = await insertApproval({
+      userId: session.id,
+      kind: "commodity_amendment",
+      title: `Amendment — ${commodity}`,
+      summary: `Amend ${commodity}: ${previous.quantity} → ${proposed.quantity}, ${currency} ${previous.approxValue.toLocaleString("en-US")} → ${currency} ${newValue.toLocaleString("en-US")} (${previous.tradeStructure} → ${proposed.tradeStructure})`,
+      amount: newValue,
+      currency,
+      payload: {
+        dealApprovalId,
+        dealLocalId: (record.id as string) ?? null,
+        commodity,
+        reason: reason.trim(),
+        previous,
+        proposed: { approxValue: newValue, quantity: proposed.quantity, tradeStructure: proposed.tradeStructure },
+      },
+      ledgerEffect: null,
+    })
+
+    // Stamp the deal record with the pending amendment so the client/admin see
+    // the diff immediately (the deal view-model lives under payload.record).
+    const pendingAmendment = {
+      id: amendmentId,
+      approvalId: amendment.id,
+      status: "pending" as const,
+      reason: reason.trim(),
+      previous,
+      proposed: { approxValue: newValue, quantity: proposed.quantity, tradeStructure: proposed.tradeStructure },
+      requestedAt: new Date().toISOString(),
+    }
+    try {
+      await updateApprovalPayload(dealApprovalId, {
+        ...payload,
+        record: { ...record, pendingAmendment },
+      })
+    } catch (err) {
+      console.log("[v0] amendment stamp failed:", (err as Error).message)
+    }
+
+    try {
+      const profile = await resolveAccountProfileById(session.id)
+      await logActivity({
+        action: `Requested amendment of deal ${dealApprovalId} (${commodity})`,
+        category: "Commodity Desk",
+        user: profile.fullName,
+        details: {
+          referenceId: amendment.id,
+          dealId: dealApprovalId,
+          summary: `Client requested to renegotiate deal ${commodity}: value ${currency} ${previous.approxValue.toLocaleString("en-US")} → ${currency} ${newValue.toLocaleString("en-US")}, quantity ${previous.quantity} → ${proposed.quantity}, terms ${previous.tradeStructure} → ${proposed.tradeStructure}. Pending Administrator approval before the reserved funds adjust. Reason: ${reason.trim()}.`,
+          decision: "Amendment requested",
+        },
+      })
+    } catch (err) {
+      console.log("[v0] amendment activity log failed:", (err as Error).message)
+    }
+
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] requestDealAmendment failed:", (err as Error).message)
+    return { ok: false, error: "The amendment could not be submitted. Please try again." }
+  }
+}
+
+/**
+ * Append a note to a deal's negotiation log (and optionally update the recorded
+ * counterparty position). Authored server-side from the authoritative session,
+ * so attribution cannot be spoofed by the client.
+ */
+export async function addDealNegotiationNote(
+  dealApprovalId: string,
+  message: string,
+  counterpartyPosition?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const session = await resolveCurrentSession()
+  if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
+  if (!message?.trim() && !counterpartyPosition?.trim()) {
+    return { ok: false, error: "Enter a note or a counterparty position." }
+  }
+  try {
+    const original = await getApprovalById(dealApprovalId)
+    if (!original || original.userId !== session.id) {
+      return { ok: false, error: "This deal could not be found." }
+    }
+    if (original.kind !== "commodity") {
+      return { ok: false, error: "Notes can only be added to commodity deals." }
+    }
+
+    const payload = (original.payload ?? {}) as { record?: Record<string, unknown> }
+    const record = (payload.record ?? {}) as Record<string, unknown>
+    const profile = await resolveAccountProfileById(session.id)
+    const existingNotes = Array.isArray(record.negotiationNotes)
+      ? (record.negotiationNotes as Record<string, unknown>[])
+      : []
+
+    const nextNotes = message?.trim()
+      ? [
+          ...existingNotes,
+          {
+            id: `NOTE-${Math.random().toString(16).slice(2, 10).toUpperCase()}`,
+            author: profile.fullName,
+            authorRole: "client" as const,
+            message: message.trim(),
+            createdAt: new Date().toISOString(),
+          },
+        ]
+      : existingNotes
+
+    await updateApprovalPayload(dealApprovalId, {
+      ...payload,
+      record: {
+        ...record,
+        negotiationNotes: nextNotes,
+        ...(counterpartyPosition?.trim() ? { counterpartyPosition: counterpartyPosition.trim() } : {}),
+      },
+    })
+
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] addDealNegotiationNote failed:", (err as Error).message)
+    return { ok: false, error: "The note could not be saved. Please try again." }
   }
 }
 
@@ -817,6 +1008,30 @@ export async function adminDecideApproval(
           }
         }
       }
+
+      // An approved AMENDMENT renegotiates the original deal. Update the deal's
+      // value, currency and reservation effect, then re-run its ledger effect so
+      // the reserved hold (`APPR-<dealId>`) auto-adjusts to the new amount
+      // (auto-FX funds any increase). The amendment is moved into the deal's
+      // history and the pending flag cleared. The amendment approval itself
+      // carries no ledger effect, so applyLedgerEffect(updated) above was a no-op.
+      if (updated.kind === "commodity_amendment") {
+        try {
+          await applyApprovedAmendment(updated)
+        } catch (err) {
+          console.log("[v0] apply amendment failed:", (err as Error).message)
+        }
+      }
+    }
+
+    // A REJECTED amendment leaves the deal untouched: just clear the pending flag
+    // and file the rejected amendment in the deal's history for the audit trail.
+    if (updated.kind === "commodity_amendment" && decision === "rejected") {
+      try {
+        await clearRejectedAmendment(updated, note?.trim())
+      } catch (err) {
+        console.log("[v0] clear rejected amendment failed:", (err as Error).message)
+      }
     }
 
     // Notify the owning client.
@@ -880,6 +1095,138 @@ export async function adminDecideApproval(
     console.log("[v0] adminDecideApproval failed:", (err as Error).message)
     return { ok: false, error: "The decision could not be recorded. Please try again." }
   }
+}
+
+interface AmendmentTerms {
+  approxValue: number
+  quantity: string
+  tradeStructure: string
+}
+
+/**
+ * Apply an APPROVED amendment to its parent deal: update the deal's stored value,
+ * quantity and incoterms, rebuild its reservation effect at the new value, and
+ * re-run the ledger effect so the reserved hold (`APPR-<dealId>`) auto-adjusts
+ * (auto-FX funds any increase). The amendment is moved into the deal's
+ * `amendmentHistory` and the `pendingAmendment` flag is cleared.
+ */
+async function applyApprovedAmendment(amendment: ApprovalRequest): Promise<void> {
+  const ap = (amendment.payload ?? {}) as {
+    dealApprovalId?: string
+    proposed?: AmendmentTerms
+    previous?: AmendmentTerms
+    reason?: string
+  }
+  const dealApprovalId = ap.dealApprovalId
+  const proposed = ap.proposed
+  if (!dealApprovalId || !proposed) return
+
+  const deal = await getApprovalById(dealApprovalId)
+  if (!deal) return
+  const payload = (deal.payload ?? {}) as { record?: Record<string, unknown>; [k: string]: unknown }
+  const record = (payload.record ?? {}) as Record<string, unknown>
+
+  const newValue = Math.round(Number(proposed.approxValue) * 100) / 100
+  const currency = deal.currency ?? (record.currency as string) ?? "USD"
+  const sellerName = (record.sellerName as string) || "Commodity supplier"
+  const uetr = (record.uetr as string) || (record.id as string) || deal.id
+
+  // Move the (now decided) amendment from pending → history on the deal record.
+  const pending = (record.pendingAmendment ?? {}) as Record<string, unknown>
+  const decidedAmendment = {
+    ...pending,
+    status: "approved" as const,
+    decidedAt: amendment.decidedAt ?? new Date().toISOString(),
+  }
+  const history = Array.isArray(record.amendmentHistory)
+    ? (record.amendmentHistory as Record<string, unknown>[])
+    : []
+
+  const newRecord = {
+    ...record,
+    approxValue: newValue,
+    quantity: proposed.quantity,
+    tradeStructure: proposed.tradeStructure,
+    pendingAmendment: undefined,
+    amendmentHistory: [decidedAmendment, ...history],
+  }
+
+  // Rebuild the deal's reservation effect at the amended value, then re-run it so
+  // the hold tracks the new amount. Idempotent on `APPR-<dealId>`.
+  const ledgerEffect: LedgerEffect = {
+    direction: "debit",
+    amount: newValue,
+    currency,
+    status: "hold",
+    counterparty: sellerName,
+    reference: uetr,
+    category: "Commodity Trade — Reserved Funds",
+  }
+
+  const updatedDeal = await updateApprovalTerms(dealApprovalId, {
+    amount: newValue,
+    currency,
+    ledgerEffect,
+    payload: { ...payload, record: newRecord },
+  })
+
+  if (updatedDeal) {
+    try {
+      await applyLedgerEffect(updatedDeal)
+    } catch (err) {
+      console.log("[v0] amendment hold adjust failed:", (err as Error).message)
+    }
+  }
+
+  try {
+    const target = await resolveAccountProfileById(deal.userId)
+    await logActivity({
+      action: `Administrator approved an amendment to deal ${dealApprovalId}`,
+      category: "Administration / Approvals",
+      user: "Administrator",
+      details: {
+        referenceId: amendment.id,
+        dealId: dealApprovalId,
+        targetAccount: `${target.fullName} — ${target.email}`,
+        summary: `Deal amended: value → ${currency} ${newValue.toLocaleString("en-US")}, quantity → ${proposed.quantity}, terms → ${proposed.tradeStructure}. Reserved funds adjusted to match. Reason: ${ap.reason ?? "(none)"}.`,
+        decision: "approved",
+      },
+    })
+  } catch (err) {
+    console.log("[v0] amendment approval log failed:", (err as Error).message)
+  }
+}
+
+/**
+ * Clear a REJECTED amendment: the deal's terms are untouched, the
+ * `pendingAmendment` flag is removed, and the rejected amendment is recorded in
+ * the deal's `amendmentHistory` for the audit trail.
+ */
+async function clearRejectedAmendment(amendment: ApprovalRequest, note?: string): Promise<void> {
+  const ap = (amendment.payload ?? {}) as { dealApprovalId?: string }
+  const dealApprovalId = ap.dealApprovalId
+  if (!dealApprovalId) return
+
+  const deal = await getApprovalById(dealApprovalId)
+  if (!deal) return
+  const payload = (deal.payload ?? {}) as { record?: Record<string, unknown>; [k: string]: unknown }
+  const record = (payload.record ?? {}) as Record<string, unknown>
+
+  const pending = (record.pendingAmendment ?? {}) as Record<string, unknown>
+  const decidedAmendment = {
+    ...pending,
+    status: "rejected" as const,
+    decidedAt: amendment.decidedAt ?? new Date().toISOString(),
+    decisionNote: note,
+  }
+  const history = Array.isArray(record.amendmentHistory)
+    ? (record.amendmentHistory as Record<string, unknown>[])
+    : []
+
+  await updateApprovalPayload(dealApprovalId, {
+    ...payload,
+    record: { ...record, pendingAmendment: undefined, amendmentHistory: [decidedAmendment, ...history] },
+  })
 }
 
 /**
