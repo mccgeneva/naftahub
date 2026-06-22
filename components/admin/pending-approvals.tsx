@@ -31,7 +31,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Check, X, Loader2, ClipboardList, Filter, RefreshCw, User, Wallet, PackageCheck, Ban } from "lucide-react"
+import {
+  Check,
+  X,
+  Loader2,
+  ClipboardList,
+  Filter,
+  RefreshCw,
+  User,
+  Wallet,
+  PackageCheck,
+  Ban,
+  ArrowRight,
+  Handshake,
+} from "lucide-react"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
 import {
@@ -67,6 +80,79 @@ function formatDate(iso: string): string {
   } catch {
     return iso
   }
+}
+
+interface AmendmentTerms {
+  approxValue?: number
+  quantity?: string
+  tradeStructure?: string
+}
+
+// Renders the old → new diff and reason for a commodity_amendment request so the
+// administrator sees exactly what the client wants to renegotiate before
+// approving (which auto-adjusts the reserved funds) or rejecting.
+function AmendmentDiff({ payload }: { payload?: ApprovalRequest["payload"] }) {
+  const p = (payload ?? {}) as {
+    previous?: AmendmentTerms
+    proposed?: AmendmentTerms
+    reason?: string
+    commodity?: string
+  }
+  const previous = p.previous
+  const proposed = p.proposed
+  if (!previous || !proposed) return null
+
+  const money = (v?: number) =>
+    typeof v === "number" ? v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"
+
+  const rows = [
+    {
+      label: "Value",
+      from: money(previous.approxValue),
+      to: money(proposed.approxValue),
+      changed: Math.round((previous.approxValue ?? 0) * 100) !== Math.round((proposed.approxValue ?? 0) * 100),
+    },
+    {
+      label: "Quantity",
+      from: previous.quantity || "—",
+      to: proposed.quantity || "—",
+      changed: (previous.quantity || "") !== (proposed.quantity || ""),
+    },
+    {
+      label: "Terms",
+      from: previous.tradeStructure || "—",
+      to: proposed.tradeStructure || "—",
+      changed: (previous.tradeStructure || "") !== (proposed.tradeStructure || ""),
+    },
+  ]
+
+  return (
+    <div className="mt-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 p-2.5">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+        <Handshake className="h-3.5 w-3.5" />
+        Renegotiated terms — approving will adjust the reserved funds
+      </div>
+      <div className="space-y-1">
+        {rows.map((r) => (
+          <div key={r.label} className="flex flex-wrap items-center gap-1.5 text-[11px]">
+            <span className="w-14 shrink-0 text-muted-foreground">{r.label}:</span>
+            <span className={r.changed ? "text-muted-foreground line-through" : "text-foreground"}>{r.from}</span>
+            {r.changed && (
+              <>
+                <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <span className="font-medium text-foreground">{r.to}</span>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      {p.reason && (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          <span className="font-medium text-foreground">Reason:</span> {p.reason}
+        </p>
+      )}
+    </div>
+  )
 }
 
 const statusVariant: Record<ApprovalStatus, "default" | "secondary" | "destructive" | "outline"> = {
@@ -470,6 +556,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                       </div>
                       <p className="truncate text-sm font-medium text-foreground">{req.title}</p>
                       {req.summary && <p className="text-xs text-muted-foreground text-pretty">{req.summary}</p>}
+                      {req.kind === "commodity_amendment" && <AmendmentDiff payload={req.payload} />}
                       <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-muted-foreground">
                         <span>
                           {clientLabel(req.userId)} · submitted {formatDate(req.createdAt)}

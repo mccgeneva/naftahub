@@ -121,6 +121,56 @@ const formatTimestamp = (iso?: string) => {
   })}`
 }
 
+// Compact old → new diff for an amendment. Only the rows that actually changed
+// show the arrow + new value, so the buyer/admin see exactly what is being
+// renegotiated.
+function AmendmentDiff({
+  previous,
+  proposed,
+  currency,
+}: {
+  previous: DealTerms
+  proposed: DealTerms
+  currency: string
+}) {
+  const rows = [
+    {
+      label: "Value",
+      from: formatCurrency(previous.approxValue, currency),
+      to: formatCurrency(proposed.approxValue, currency),
+      changed: Math.round(previous.approxValue * 100) !== Math.round(proposed.approxValue * 100),
+    },
+    {
+      label: "Quantity",
+      from: previous.quantity || "—",
+      to: proposed.quantity || "—",
+      changed: (previous.quantity || "") !== (proposed.quantity || ""),
+    },
+    {
+      label: "Terms",
+      from: previous.tradeStructure,
+      to: proposed.tradeStructure,
+      changed: previous.tradeStructure !== proposed.tradeStructure,
+    },
+  ]
+  return (
+    <div className="space-y-1">
+      {rows.map((r) => (
+        <div key={r.label} className="flex items-center gap-2 text-xs">
+          <span className="w-16 shrink-0 text-muted-foreground">{r.label}:</span>
+          <span className={r.changed ? "text-muted-foreground line-through" : "text-foreground"}>{r.from}</span>
+          {r.changed && (
+            <>
+              <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+              <span className="font-medium text-foreground">{r.to}</span>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 const emptyDeal = {
   title: "",
   category: "Commodity Trade" as DealCategory,
@@ -1410,7 +1460,7 @@ export default function CommodityTradingPage() {
                             {n.authorRole}
                           </Badge>
                         </span>
-                        <span className="text-muted-foreground">{formatDateTime(n.createdAt)}</span>
+                        <span className="text-muted-foreground">{formatTimestamp(n.createdAt)}</span>
                       </div>
                       <p className="text-muted-foreground">{n.message}</p>
                     </div>

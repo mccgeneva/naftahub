@@ -36,6 +36,8 @@ import {
   CreditCard,
   Send,
   RefreshCw,
+  Handshake,
+  ArrowRight,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -4327,6 +4329,84 @@ export default function AdminPage() {
                     )}
 
                     <p className="font-mono text-xs text-muted-foreground break-all">UETR {deal.uetr}</p>
+
+                    {/* Pending amendment — old → new, decided in the Approvals queue. */}
+                    {deal.pendingAmendment?.status === "pending" && (
+                      <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2.5 text-xs">
+                        <div className="mb-1.5 flex items-center gap-1.5 font-medium text-amber-600 dark:text-amber-400">
+                          <Handshake className="h-3.5 w-3.5" />
+                          Amendment pending — decide in the Pending Approvals queue
+                        </div>
+                        {(
+                          [
+                            {
+                              label: "Value",
+                              from: formatCurrency(deal.pendingAmendment.previous.approxValue, deal.currency),
+                              to: formatCurrency(deal.pendingAmendment.proposed.approxValue, deal.currency),
+                              changed:
+                                Math.round(deal.pendingAmendment.previous.approxValue * 100) !==
+                                Math.round(deal.pendingAmendment.proposed.approxValue * 100),
+                            },
+                            {
+                              label: "Quantity",
+                              from: deal.pendingAmendment.previous.quantity || "—",
+                              to: deal.pendingAmendment.proposed.quantity || "—",
+                              changed:
+                                deal.pendingAmendment.previous.quantity !== deal.pendingAmendment.proposed.quantity,
+                            },
+                            {
+                              label: "Terms",
+                              from: deal.pendingAmendment.previous.tradeStructure,
+                              to: deal.pendingAmendment.proposed.tradeStructure,
+                              changed:
+                                deal.pendingAmendment.previous.tradeStructure !==
+                                deal.pendingAmendment.proposed.tradeStructure,
+                            },
+                          ] as const
+                        ).map((r) => (
+                          <div key={r.label} className="flex flex-wrap items-center gap-1.5">
+                            <span className="w-14 shrink-0 text-muted-foreground">{r.label}:</span>
+                            <span className={r.changed ? "text-muted-foreground line-through" : "text-foreground"}>
+                              {r.from}
+                            </span>
+                            {r.changed && (
+                              <>
+                                <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                <span className="font-medium text-foreground">{r.to}</span>
+                              </>
+                            )}
+                          </div>
+                        ))}
+                        <p className="mt-1.5 text-muted-foreground">
+                          <span className="font-medium text-foreground">Reason:</span>{" "}
+                          {deal.pendingAmendment.reason}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Negotiation log + counterparty position (audit trail). */}
+                    {(deal.negotiationNotes?.length || deal.counterpartyPosition) && (
+                      <div className="rounded-md border border-border bg-card p-2.5 text-xs">
+                        <p className="mb-1 flex items-center gap-1.5 font-medium text-foreground">
+                          <MessageSquareText className="h-3.5 w-3.5 text-primary" />
+                          Negotiation log
+                        </p>
+                        {deal.counterpartyPosition && (
+                          <p className="mb-1.5 text-muted-foreground">
+                            <span className="font-medium text-foreground">Counterparty position:</span>{" "}
+                            {deal.counterpartyPosition}
+                          </p>
+                        )}
+                        <div className="space-y-1">
+                          {deal.negotiationNotes?.map((n) => (
+                            <div key={n.id} className="text-muted-foreground">
+                              <span className="font-medium text-foreground">{n.author}</span>
+                              <span className="text-[10px]"> ({n.authorRole})</span>: {n.message}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {/* POP documents */}
                     <div className="space-y-2">
