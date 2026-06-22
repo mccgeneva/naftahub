@@ -4602,6 +4602,12 @@ export default function AdminPage() {
       </div>
       )}
 
+      {activeView === "spotdeals" && (
+      <div className="space-y-6">
+        <SpotDealManager />
+      </div>
+      )}
+
       {/* Danger zone: reset account data */}
       {activeView === "danger" && (
       <div className="space-y-6">
