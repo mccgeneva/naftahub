@@ -346,11 +346,15 @@ export default function CommodityTradingPage() {
       toast.error("Both buyer and seller are required")
       return
     }
-    const value = Number.parseFloat(form.approxValue.replace(/,/g, ""))
-    if (!Number.isFinite(value) || value <= 0) {
+    const rawValue = Number.parseFloat(form.approxValue.replace(/,/g, ""))
+    if (!Number.isFinite(rawValue) || rawValue <= 0) {
       toast.error("Enter a valid approximate value")
       return
     }
+    // Money is settled in whole cents. Quantity × unit-price (often via a
+    // BBL⇄MT conversion) can yield sub-cent fractions, so round to 2 decimals
+    // before the value is reserved/blocked and emailed — never store raw floats.
+    const value = Math.round(rawValue * 100) / 100
     if (form.sendingBankBic && !sendingBicValid) {
       toast.error("Sending bank BIC/SWIFT is invalid")
       return
