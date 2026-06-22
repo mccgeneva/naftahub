@@ -157,6 +157,9 @@ async function creditMatchedAccount(
   const receiptRef = `RC-CR-${Date.now().toString().slice(-8)}`
   const reference = payment.reference?.trim() || account.coordinates?.reference || account.id
   const bankName = account.coordinates?.partnerBankName
+  // Credit the gateway owner's DATA-OWNER ledger (a Sub-account's shared balance
+  // lives under its Master) so the Master Account balance reflects the funds.
+  const ledgerOwnerId = await resolveDataOwnerIdFor(account.userId)
 
   const entry: LedgerEntry = {
     id: receiptRef,
@@ -183,7 +186,7 @@ async function creditMatchedAccount(
        account = EXCLUDED.account, bank = EXCLUDED.bank, reference = EXCLUDED.reference,
        comment = EXCLUDED.comment, category = EXCLUDED.category`,
     [
-      account.userId,
+      ledgerOwnerId,
       entry.id,
       entry.direction,
       entry.amount,
@@ -290,11 +293,13 @@ export async function recordGatewayDepositForApproval(
     const account = matches[0]
     const accountCurrency = account.currency.toUpperCase()
 
-    // Idempotency: deterministic credit id derived from the approval.
+    // Idempotency: deterministic credit id derived from the approval. If the
+    // funding event is already stamped we do NOT bail out — we still (re)post the
+    // ledger credit below (ON CONFLICT DO NOTHING). This self-heals deposits that
+    // were stamped on the gateway account but whose Master Account credit was
+    // missing or previously landed on the wrong (non data-owner) ledger.
     const ledgerEntryId = `GWD-${approval.id}`
-    if ((account.funding ?? []).some((f) => f.ledgerEntryId === ledgerEntryId)) {
-      return { matched: true }
-    }
+    const alreadyFunded = (account.funding ?? []).some((f) => f.ledgerEntryId === ledgerEntryId)
 
     // --- Automatic FX conversion on currency mismatch ----------------------
     // If the payer sent a different currency than the account is denominated
