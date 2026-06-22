@@ -420,7 +420,14 @@ export default function CommodityTradingPage() {
       instrumentType: "Commodity",
       originCountry: deal.loadPort,
       destinationCountry: deal.dischargePort ?? "",
-      notes: `Engaged limited-time spot deal ${deal.id} aboard ${deal.vesselName} (IMO ${deal.vesselImo}). Load port: ${deal.loadPort}${deal.dischargePort ? ` → ${deal.dischargePort}` : ""}. ${deal.terms || ""}`.trim(),
+      notes: [
+        `Engaged limited-time spot deal ${deal.id} aboard ${deal.vesselName} (IMO ${deal.vesselImo}).`,
+        deal.loadPort ? `Route: ${deal.loadPort}${deal.dischargePort ? ` → ${deal.dischargePort}` : ""}.` : "",
+        deal.terms || "",
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .trim(),
     })
     setSendingBicValid(false)
     setReceivingBicValid(false)
