@@ -197,3 +197,56 @@ export function convertQuantity(
   const factor = bblPerMtFor(product)
   return from === "MT" ? amount * factor : amount / factor
 }
+
+/**
+ * Parse a free-form quantity string ("200,000 MT", "500,000 BBL") into a numeric
+ * amount and normalised unit. Returns null when no amount can be parsed.
+ */
+export function parseQuantityString(quantity?: string): { amount: number; unit: CommodityUnit } | null {
+  const match = (quantity || "").match(/([\d.,]+)\s*([A-Za-z]+)?/)
+  if (!match) return null
+  const amount = Number.parseFloat(match[1].replace(/,/g, ""))
+  if (!Number.isFinite(amount) || amount <= 0) return null
+  const unit: CommodityUnit = (match[2] || "MT").toUpperCase().startsWith("B") ? "bbl" : "MT"
+  return { amount, unit }
+}
+
+/** Best-effort match of a commodity name to a catalogue grade for its density factor. */
+export function catalogForCommodityName(name?: string): CatalogProduct | undefined {
+  if (!name) return undefined
+  const n = name.toLowerCase()
+  return PETROLEUM_PRODUCTS.find((p) => n.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(n))
+}
+
+/**
+ * Format an ordered quantity in its native unit plus the converted equivalent,
+ * e.g. "200,000 MT (≈ 1,490,000 BBL)", so the buyer always sees both barrels and
+ * tonnes. Falls back to the raw string (or "—") when it cannot be parsed.
+ */
+export function formatQuantityWithEquivalent(quantity?: string, commodityName?: string): string {
+  const parsed = parseQuantityString(quantity)
+  if (!parsed) return quantity || "—"
+  const product = catalogForCommodityName(commodityName)
+  const other: CommodityUnit = parsed.unit === "MT" ? "bbl" : "MT"
+  const converted = convertQuantity(parsed.amount, parsed.unit, other, product)
+  if (!Number.isFinite(converted) || converted <= 0) return quantity || "—"
+  const rounded = other === "bbl" ? Math.round(converted) : Math.round(converted * 1000) / 1000
+  const nativeLabel = parsed.unit === "bbl" ? "BBL" : "MT"
+  const otherLabel = other === "bbl" ? "BBL" : "MT"
+  return `${parsed.amount.toLocaleString("en-US")} ${nativeLabel} (≈ ${rounded.toLocaleString("en-US")} ${otherLabel})`
+}
+
+/**
+ * Derive a per-unit price string from a total value and quantity, e.g.
+ * "USD 691.62 / MT". Returns null when the quantity cannot be parsed.
+ */
+export function formatUnitPriceFor(totalValue: number, quantity: string | undefined, currency: string): string | null {
+  const parsed = parseQuantityString(quantity)
+  if (!parsed || !Number.isFinite(totalValue) || totalValue <= 0) return null
+  const perUnit = totalValue / parsed.amount
+  const unitLabel = parsed.unit === "bbl" ? "BBL" : "MT"
+  return `${currency} ${perUnit.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })} / ${unitLabel}`
+}

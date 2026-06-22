@@ -89,6 +89,7 @@ import {
   type CommodityDeal,
   type DealDocument,
 } from "@/lib/commodity-deals-store"
+import { formatQuantityWithEquivalent, formatUnitPriceFor } from "@/lib/petroleum-products"
 import {
   useLeverageRequests,
   accruedInterest,
@@ -4268,8 +4269,20 @@ export default function AdminPage() {
                       <div className="flex items-center gap-2">
                         <Package className="h-4 w-4 text-muted-foreground" />
                         <span className="text-muted-foreground">Commodity:</span>
+                        <span className="text-foreground">{deal.commodity || "—"}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Package className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-muted-foreground">Quantity:</span>
                         <span className="text-foreground">
-                          {deal.commodity || "—"} {deal.quantity ? `(${deal.quantity})` : ""}
+                          {formatQuantityWithEquivalent(deal.quantity, deal.commodity)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Banknote className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-muted-foreground">Unit price:</span>
+                        <span className="text-foreground">
+                          {formatUnitPriceFor(deal.approxValue, deal.quantity, deal.currency) || "—"}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
