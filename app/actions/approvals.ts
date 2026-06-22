@@ -465,23 +465,37 @@ const HOLD_KINDS = new Set<ApprovalKind>(["commodity"])
  * means re-applying never double-posts.
  */
 function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
+  // A delivered commodity deal has been PAID OUT to the supplier: its reservation
+  // must settle (a permanent `completed` debit), never remain a `hold`. Because
+  // this builder also runs on every reconcile/backfill, leaving it as a hold here
+  // would re-block delivered funds after delivery already settled them — exactly
+  // the bug where "reserved" reappears for a delivered deal.
+  const isDelivered = (req.payload as { delivered?: boolean } | undefined)?.delivered === true
+
   const fx = req.ledgerEffect
   if (fx) {
     const amount = Number(fx.amount)
     if (!Number.isFinite(amount) || amount <= 0) return null
+    const baseStatus = fx.status ?? "completed"
+    // A held (reserved) effect that has been delivered is now settled.
+    const settledByDelivery = baseStatus === "hold" && isDelivered
     return {
       id: `APPR-${req.id}`,
       direction: fx.direction,
       amount,
       currency: fx.currency || req.currency || "USD",
-      status: fx.status ?? "completed",
+      status: settledByDelivery ? "completed" : baseStatus,
       date: new Date().toISOString(),
       counterparty: fx.counterparty ?? req.title,
       account: fx.account,
       bank: fx.bank,
       reference: fx.reference ?? req.id,
-      comment: `Approved ${KIND_LABELS[req.kind]} — ${req.title}`,
-      category: fx.category ?? KIND_LABELS[req.kind],
+      comment: settledByDelivery
+        ? `Delivered & settled — funds paid out for ${KIND_LABELS[req.kind]} "${req.title}"`
+        : `Approved ${KIND_LABELS[req.kind]} — ${req.title}`,
+      category: settledByDelivery
+        ? "Commodity Trade — Settled (Delivered)"
+        : (fx.category ?? KIND_LABELS[req.kind]),
     }
   }
   // Fallback: credit the stored amount for known crediting kinds (e.g. a
@@ -554,12 +568,18 @@ function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
       direction: "debit",
       amount,
       currency: req.currency || "USD",
-      status: "hold",
+      // Delivered → settled (paid out, leaves the balance); otherwise → hold
+      // (reserved/blocked). This keeps the backfill consistent with delivery.
+      status: isDelivered ? "completed" : "hold",
       date: new Date().toISOString(),
       counterparty: req.title,
       reference: req.id,
-      comment: `Reserved for approved ${KIND_LABELS[req.kind]} — ${req.title}`,
-      category: "Commodity Trade — Reserved Funds",
+      comment: isDelivered
+        ? `Delivered & settled — funds paid out for ${KIND_LABELS[req.kind]} "${req.title}"`
+        : `Reserved for approved ${KIND_LABELS[req.kind]} — ${req.title}`,
+      category: isDelivered
+        ? "Commodity Trade — Settled (Delivered)"
+        : "Commodity Trade — Reserved Funds",
     }
   }
   return null
