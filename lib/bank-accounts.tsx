@@ -207,24 +207,32 @@ export function getFlagEmoji(countryCode: string): string {
  * currency the client holds surfaces a dedicated settlement account.
  */
 export function useBankAccounts(): BankAccount[] {
-  const { balanceFor, currencies } = useLedger()
+  const { balanceFor, reservedFor, currencies } = useLedger()
 
-  const liveBaseAccounts = baseBankAccounts.map((account) =>
-    account.id === "ACC-001"
-      ? {
-          ...account,
-          balance: balanceFor(account.currency),
-          availableBalance: balanceFor(account.currency) - account.reservedBalance,
-        }
-      : account,
-  )
+  const liveBaseAccounts = baseBankAccounts.map((account) => {
+    if (account.id !== "ACC-001") return account
+    // balanceFor() is the AVAILABLE (spendable) balance — it already excludes
+    // funds on hold. Total = available + reserved, so the three figures add up
+    // and the reserved hold (e.g. a commodity-deal block) is reflected here.
+    const available = balanceFor(account.currency)
+    const reserved = reservedFor(account.currency)
+    return {
+      ...account,
+      balance: available + reserved,
+      availableBalance: available,
+      reservedBalance: reserved,
+    }
+  })
 
   const baseCurrencies = new Set(baseBankAccounts.map((a) => a.currency))
   const extraCurrencyAccounts = currencies
     .filter((cur) => !baseCurrencies.has(cur) && currencyAccountMeta[cur])
     .map((cur) => {
       const meta = currencyAccountMeta[cur]
-      const bal = balanceFor(cur)
+      // Same model as the master account: available is net of holds, total adds
+      // the reserved amount back so reserved funds surface per currency.
+      const available = balanceFor(cur)
+      const reserved = reservedFor(cur)
       return {
         id: `ACC-${cur}`,
         bankName: meta.bankName,
@@ -237,9 +245,9 @@ export function useBankAccounts(): BankAccount[] {
         iban: "—",
         swift: meta.swift,
         currency: cur,
-        balance: bal,
-        availableBalance: bal,
-        reservedBalance: 0,
+        balance: available + reserved,
+        availableBalance: available,
+        reservedBalance: reserved,
         accountType: meta.accountType,
         status: "active",
         openDate: "2026-04-24",
