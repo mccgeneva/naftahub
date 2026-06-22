@@ -63,6 +63,9 @@ import { useActivityLog } from "@/components/activity-tracker"
 import { VerifiedBankField } from "@/components/verified-bank-field"
 import { SwiftGpiTracker } from "@/components/swift-gpi-tracker"
 import { CommodityQuotations } from "@/components/dashboard/commodity-quotations"
+import { SpotDealsBoard } from "@/components/dashboard/spot-deals-board"
+import { type SpotDeal } from "@/lib/spot-deals-shared"
+import { recordSpotDealInterest } from "@/app/actions/spot-deals"
 import {
   useCommodityDeals,
   DEAL_STAGES,
@@ -299,7 +302,15 @@ export default function CommodityTradingPage() {
     hydrated,
   } = useCommodityDeals()
 
-  const [tab, setTab] = useState("quotations")
+  // Allow deep-linking to a specific tab, e.g. the dashboard spot-deal tile
+  // links to /dashboard/commodity?tab=spot. Read from the URL in the lazy
+  // initializer (client component) to avoid a useSearchParams Suspense bail-out.
+  const [tab, setTab] = useState(() => {
+    if (typeof window === "undefined") return "quotations"
+    const requested = new URLSearchParams(window.location.search).get("tab")
+    const valid = ["quotations", "spot", "workflow", "pop", "pof"]
+    return requested && valid.includes(requested) ? requested : "quotations"
+  })
   const [form, setForm] = useState({ ...emptyDeal })
   const [sendingBicValid, setSendingBicValid] = useState(false)
   const [receivingBicValid, setReceivingBicValid] = useState(false)
@@ -387,6 +398,46 @@ export default function CommodityTradingPage() {
     setForm({ ...emptyDeal })
     setSendingBicValid(false)
     setReceivingBicValid(false)
+  }
+
+  // Engaging a published spot offer pre-fills the New Deal form from the offer
+  // snapshot, switches to the Deal Workflow tab and scrolls it into view. The
+  // user still reviews and submits — it then runs through the normal admin
+  // approval + reserved-funds workflow. Nothing executes automatically.
+  const handleEngageSpotDeal = (deal: SpotDeal) => {
+    const matched = deal.productId ? getCatalogProduct(deal.productId) : undefined
+    setForm({
+      ...emptyDeal,
+      title: `${deal.product} — ${deal.quantity.toLocaleString("en-US")} ${deal.unit} ${deal.incoterm} (Spot ${deal.id})`,
+      category: "Commodity Trade",
+      tradeStructure: "Spot",
+      commodityId: matched ? matched.id : CUSTOM_COMMODITY_ID,
+      commodity: deal.product,
+      quantityAmount: deal.quantity.toLocaleString("en-US"),
+      quantityUnit: deal.unit,
+      approxValue: deal.totalValue.toLocaleString("en-US"),
+      currency: deal.currency,
+      instrumentType: "Commodity",
+      originCountry: deal.loadPort,
+      destinationCountry: deal.dischargePort ?? "",
+      notes: [
+        `Engaged limited-time spot deal ${deal.id} aboard ${deal.vesselName} (IMO ${deal.vesselImo}).`,
+        deal.loadPort ? `Route: ${deal.loadPort}${deal.dischargePort ? ` → ${deal.dischargePort}` : ""}.` : "",
+        deal.terms || "",
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .trim(),
+    })
+    setSendingBicValid(false)
+    setReceivingBicValid(false)
+    setTab("workflow")
+    // Record the formal acceptance for the audit trail (engagement was already
+    // logged on click inside the board).
+    recordSpotDealInterest(deal.id, "accepted").catch(() => {})
+    if (typeof window !== "undefined") {
+      requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }))
+    }
   }
 
   const handleSubmitDeal = () => {
@@ -640,11 +691,16 @@ export default function CommodityTradingPage() {
       </Card>
 
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
+        <TabsList className="grid w-full grid-cols-3 sm:grid-cols-5">
           <TabsTrigger value="quotations" className="gap-1.5">
             <Globe className="h-4 w-4" />
             <span className="hidden sm:inline">Quotations</span>
             <span className="sm:hidden">Prices</span>
+          </TabsTrigger>
+          <TabsTrigger value="spot" className="gap-1.5">
+            <Tag className="h-4 w-4" />
+            <span className="hidden sm:inline">Spot Deals</span>
+            <span className="sm:hidden">Spot</span>
           </TabsTrigger>
           <TabsTrigger value="workflow" className="gap-1.5">
             <Layers className="h-4 w-4" />
@@ -671,6 +727,11 @@ export default function CommodityTradingPage() {
         {/* QUOTATIONS TAB */}
         <TabsContent value="quotations">
           <CommodityQuotations />
+        </TabsContent>
+
+        {/* SPOT DEALS TAB */}
+        <TabsContent value="spot">
+          <SpotDealsBoard onEngage={handleEngageSpotDeal} />
         </TabsContent>
 
         {/* DEAL WORKFLOW TAB */}

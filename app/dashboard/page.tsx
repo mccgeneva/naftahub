@@ -9,6 +9,7 @@ import { OverviewAside } from "@/components/dashboard/overview-aside"
 import { WelcomeHeader } from "@/components/dashboard/welcome-header"
 import { PlatformTierBanner } from "@/components/dashboard/platform-tier-banner"
 import { BankekaCard } from "@/components/dashboard/bankeka-card"
+import { SpotDealsHighlight } from "@/components/dashboard/spot-deals-highlight"
 
 export default function DashboardPage() {
   return (
@@ -33,6 +34,7 @@ export default function DashboardPage() {
           <RecentTransactions />
         </div>
         <div className="space-y-6">
+          <SpotDealsHighlight />
           <BankekaCard />
           <OverviewAside />
           <LiveRates />

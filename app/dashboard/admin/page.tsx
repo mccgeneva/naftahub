@@ -38,6 +38,7 @@ import {
   RefreshCw,
   Handshake,
   ArrowRight,
+  Tag,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -121,6 +122,7 @@ import { InstrumentIssuer } from "@/components/admin/instrument-issuer"
 import { CardManager } from "@/components/admin/card-manager"
 import { CertificateManager } from "@/components/admin/certificate-manager"
 import { BankekaBroadcastManager } from "@/components/admin/bankeka-broadcast-manager"
+import { SpotDealManager } from "@/components/admin/spot-deal-manager"
 import { toast } from "sonner"
 
 const MASTER_ACCOUNT_CURRENCY = "EUR"
@@ -1802,6 +1804,7 @@ export default function AdminPage() {
       items: [
         { id: "settlement", label: "Securities Settlement", description: "DTC and Euroclear settlement instructions.", icon: Globe, count: pendingDTC.length + pendingEuroclear.length },
         { id: "commodity", label: "Commodity Deals", description: "POP/POF review and trade execution.", icon: Ship, count: pendingDeals.length },
+        { id: "spotdeals", label: "Spot Deals & Vessels", description: "Manage tankers and publish limited-time spot offers.", icon: Tag, count: 0 },
       ],
     },
     {
@@ -4597,6 +4600,12 @@ export default function AdminPage() {
       {activeView === "bankeka" && (
       <div className="space-y-6">
         <BankekaBroadcastManager />
+      </div>
+      )}
+
+      {activeView === "spotdeals" && (
+      <div className="space-y-6">
+        <SpotDealManager />
       </div>
       )}
 
