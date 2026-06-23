@@ -13,6 +13,7 @@ import {
   type FaceState,
 } from "@/lib/biometric-db"
 import { getDynamicUserById } from "@/lib/admin-users-db"
+import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { logActivity } from "@/app/actions/log-activity"
 
 export type { FaceState }
@@ -47,7 +48,7 @@ export async function enrollMyFace(
   await logActivity({
     action: "Face ID enrolled",
     category: "Authentication / Security",
-    user: session.profile.fullName || session.email,
+    user: session.profile.fullName || session.profile.email,
     details: { samples: descriptors.length, result: "biometric login enabled" },
   })
   return { ok: true }
@@ -61,7 +62,7 @@ export async function disableMyFace(): Promise<{ ok: boolean; error?: string }> 
   await logActivity({
     action: "Face ID disabled",
     category: "Authentication / Security",
-    user: session.profile.fullName || session.email,
+    user: session.profile.fullName || session.profile.email,
     details: { result: "biometric login removed" },
   })
   return { ok: true }
@@ -72,22 +73,25 @@ export async function disableMyFace(): Promise<{ ok: boolean; error?: string }> 
  * client is locked out of face login. Clears the descriptor and lock state so
  * the user can sign in with their password and re-enroll. Admin-only.
  */
-export async function adminResetUserFace(userId: string): Promise<{ ok: boolean; error?: string }> {
-  const session = await resolveCurrentSession()
-  if (!session) return { ok: false, error: "Not authenticated." }
-  if (session.profile.accountType !== "admin") {
-    return { ok: false, error: "Only administrators can reset biometric login." }
+export async function adminResetUserFace(
+  passcode: string,
+  userId: string,
+  adminName?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  if (String(passcode) !== ADMIN_PASSCODE) {
+    return { ok: false, error: "Administrator authorization failed." }
   }
   const target = await getDynamicUserById(userId)
   if (!target) return { ok: false, error: "User not found." }
 
   await clearEnrollment(userId)
   await logActivity({
-    action: "Face ID reset (admin)",
+    action: "Administrator reset client Face ID",
     category: "Authentication / Security",
-    user: session.profile.fullName || session.email,
+    user: adminName || "Administrator",
     details: {
-      targetUser: `${target.profile.fullName || target.email} (${target.email})`,
+      account: target.profile.fullName || target.email,
+      email: target.email,
       result: "biometric enrollment cleared — user may re-enroll",
     },
   })

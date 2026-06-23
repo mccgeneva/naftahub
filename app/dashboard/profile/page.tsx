@@ -4,6 +4,7 @@ import { BadgeCheck, FileText, ExternalLink } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ProfileAvatarEditor } from "@/components/dashboard/profile-avatar-editor"
+import { FaceIdManager } from "@/components/dashboard/face-id-manager"
 import { Separator } from "@/components/ui/separator"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { KYC_DOCUMENT_LABELS, blobFileUrl } from "@/lib/kyc-types"
@@ -107,6 +108,9 @@ export default function ProfilePage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Security — Face ID */}
+      <FaceIdManager />
 
       {/* Identity Document */}
       {user.passportMeta && (

@@ -15,10 +15,31 @@ import {
 } from "@/lib/auth"
 import { signSessionMeta } from "@/lib/session-token"
 import { USER_COOKIE } from "@/lib/user-scope"
-import { getDynamicUserByEmail } from "@/lib/admin-users-db"
+import { getDynamicUserByEmail, getDynamicUserById } from "@/lib/admin-users-db"
 import { logActivity } from "@/app/actions/log-activity"
+import {
+  signChallenge,
+  verifyChallenge,
+  decryptDescriptors,
+  matchesEnrolled,
+  isValidDescriptor,
+} from "@/lib/biometric"
+import {
+  getFaceState,
+  getEncryptedDescriptor,
+  registerFailure,
+  resetFailCount,
+} from "@/lib/biometric-db"
 
-export type LoginState = { error?: string }
+export type LoginState = {
+  error?: string
+  /** Set when the password step passed but a face scan is now required. */
+  faceRequired?: boolean
+  /** Short-lived signed token proving the password step passed (no password inside). */
+  challenge?: string
+  /** Display name for the face-scan UI. */
+  name?: string
+}
 
 /**
  * Hard-clear every session cookie. Each cookie is OVERWRITTEN with an empty,
@@ -77,6 +98,49 @@ async function findAuthMatchByEmail(email: string): Promise<AuthMatch | undefine
   return undefined
 }
 
+/**
+ * Establish the authenticated session cookies for a user and redirect to the
+ * dashboard. Shared by the password-only path and the face-verified path so
+ * both produce an identical, fully-valid session. NOTE: this calls `redirect()`
+ * and never returns.
+ */
+async function establishSessionAndRedirect(matchedUser: AuthMatch, email: string): Promise<never> {
+  const cookieStore = await cookies()
+  // The session cookie carries this user's unique token (the security
+  // boundary), and a separate readable cookie records which user it is so the
+  // client can show the right identity and isolate the right data.
+  cookieStore.set(SESSION_COOKIE, matchedUser.sessionToken, sessionCookieOptions)
+  cookieStore.set(USER_COOKIE, matchedUser.id, userCookieOptions)
+
+  // Issue the signed session-metadata cookie (server-enforced absolute expiry).
+  const nowMs = Date.now()
+  const metaToken = await signSessionMeta({
+    iat: nowMs,
+    exp: nowMs + SESSION_MAX_AGE * 1000,
+    seen: nowMs,
+  })
+  cookieStore.set(SESSION_META_COOKIE, metaToken, sessionMetaCookieOptions)
+  cookieStore.set(FRESH_LOGIN_COOKIE, "1", freshLoginCookieOptions)
+
+  await logActivity({
+    action: "Login successful",
+    category: "Authentication",
+    user: `${matchedUser.fullName} (${matchedUser.company})`,
+    details: { email, result: "granted" },
+  })
+
+  redirect("/dashboard?fresh=1")
+}
+
+async function logFailedLogin(email: string, reason: string): Promise<void> {
+  await logActivity({
+    action: "Login failed",
+    category: "Authentication / Security",
+    user: email || "(no email)",
+    details: { email: email || "(empty)", reason, result: "denied" },
+  })
+}
+
 export async function login(_prevState: LoginState, formData: FormData): Promise<LoginState> {
   const email = String(formData.get("email") || "").trim()
   const password = String(formData.get("password") || "")
@@ -86,68 +150,40 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
   const accountActive = !!matchedUser && matchedUser.active
 
   if (matchedUser && passwordMatches && accountActive) {
-    const cookieStore = await cookies()
-    // The session cookie carries this user's unique token (the security
-    // boundary), and a separate readable cookie records which user it is so the
-    // client can show the right identity and isolate the right data.
-    cookieStore.set(SESSION_COOKIE, matchedUser.sessionToken, sessionCookieOptions)
-    cookieStore.set(USER_COOKIE, matchedUser.id, userCookieOptions)
+    // Password step passed. If this user has enrolled Face ID, DO NOT establish
+    // a session yet — require a successful, strict face match as a second
+    // factor. We hand the browser a short-lived signed challenge (no password
+    // inside) that `completeFaceLogin` will verify alongside the live scan.
+    const face = await getFaceState(matchedUser.id)
+    if (face.enrolled) {
+      if (face.locked) {
+        await logFailedLogin(email, "biometric locked")
+        await clearAllSessionCookies()
+        return {
+          error:
+            "Face ID is locked after too many failed attempts. Please contact your administrator to reset it.",
+        }
+      }
+      return {
+        faceRequired: true,
+        challenge: signChallenge(matchedUser.id),
+        name: matchedUser.fullName,
+      }
+    }
 
-    // Issue the signed session-metadata cookie. This is the server-enforced
-    // record of when the session was created (iat), when it MUST end no matter
-    // what (exp = now + 8h absolute), and when it was last seen (seen). The Edge
-    // proxy and server resolver verify it on every request, so expiry can no
-    // longer be bypassed by client-side tricks or browser cookie-restore.
-    const nowMs = Date.now()
-    const metaToken = await signSessionMeta({
-      iat: nowMs,
-      exp: nowMs + SESSION_MAX_AGE * 1000,
-      seen: nowMs,
-    })
-    cookieStore.set(SESSION_META_COOKIE, metaToken, sessionMetaCookieOptions)
-
-    // Short-lived, readable marker proving this navigation is a genuine fresh
-    // login. The SessionGuard consumes it to establish the per-tab session so a
-    // real login is never mistaken for a reopened tab. Set server-side so it
-    // reliably survives the redirect on mobile and inside the preview iframe.
-    cookieStore.set(FRESH_LOGIN_COOKIE, "1", freshLoginCookieOptions)
-
-    // Log successful login (never include the password).
-    await logActivity({
-      action: "Login successful",
-      category: "Authentication",
-      user: `${matchedUser.fullName} (${matchedUser.company})`,
-      details: { email, result: "granted" },
-    })
-
-    // The `fresh` param is a bulletproof, environment-independent signal of a
-    // genuine login that the SessionGuard reads (URL params survive the redirect
-    // even where sandboxed-iframe cookies/storage are blocked). It is removed
-    // from the URL immediately after the guard consumes it.
-    redirect("/dashboard?fresh=1")
+    // No biometric enrolled → password-only login (unchanged behavior).
+    await establishSessionAndRedirect(matchedUser, email)
   }
 
-  // A failed attempt must never leave an active session behind. Clear any
-  // lingering session/fresh-login cookies so wrong credentials can never appear
-  // to "pass" by falling back to a previously authenticated session.
+  // A failed attempt must never leave an active session behind.
   await clearAllSessionCookies()
 
-  // Log failed attempt for security monitoring (never include the password).
   const reason = !matchedUser
     ? "unauthorized email"
     : !passwordMatches
       ? "incorrect password"
       : "account not active"
-  await logActivity({
-    action: "Login failed",
-    category: "Authentication / Security",
-    user: email || "(no email)",
-    details: {
-      email: email || "(empty)",
-      reason,
-      result: "denied",
-    },
-  })
+  await logFailedLogin(email, reason)
 
   return {
     error:
@@ -155,6 +191,77 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
         ? "This account is not active. Please contact your administrator."
         : "Invalid email or password. Access denied.",
   }
+}
+
+/**
+ * Second login factor: verify a live face scan against the user's enrolled,
+ * encrypted descriptor under a STRICT match threshold. Only callable with a
+ * valid, unexpired challenge issued by the password step — so the password
+ * gate cannot be skipped. On success, establishes the session; on failure,
+ * increments the lockout counter and (after the limit) locks biometric login.
+ */
+export async function completeFaceLogin(
+  challenge: string,
+  descriptor: number[],
+): Promise<LoginState> {
+  const uid = verifyChallenge(challenge)
+  if (!uid) {
+    return { error: "Your sign-in attempt expired. Please enter your password again." }
+  }
+  if (!isValidDescriptor(descriptor)) {
+    return { faceRequired: true, challenge, error: "No face detected. Center your face and try again." }
+  }
+
+  const rec = await getDynamicUserById(uid)
+  if (!rec || rec.status !== "active") {
+    await clearAllSessionCookies()
+    return { error: "Invalid email or password. Access denied." }
+  }
+
+  const face = await getFaceState(uid)
+  if (!face.enrolled) {
+    // Enrollment was cleared (e.g. admin reset) mid-flow → fall back to password.
+    return { error: "Face ID is no longer set up for this account. Please sign in with your password." }
+  }
+  if (face.locked) {
+    return { error: "Face ID is locked. Please contact your administrator to reset it." }
+  }
+
+  const enrolled = decryptDescriptors(await getEncryptedDescriptor(uid))
+  const { ok, distance } = matchesEnrolled(descriptor, enrolled)
+
+  if (!ok) {
+    const { failCount, locked } = await registerFailure(uid)
+    await logActivity({
+      action: locked ? "Face ID locked after failed attempts" : "Face ID verification failed",
+      category: "Authentication / Security",
+      user: `${rec.profile.fullName || rec.email}`,
+      details: { email: rec.email, distance: distance.toFixed(3), failCount, result: locked ? "locked" : "denied" },
+    })
+    if (locked) {
+      return { error: "Face ID locked after too many failed attempts. Please contact your administrator to reset it." }
+    }
+    const remaining = Math.max(0, 5 - failCount)
+    return {
+      faceRequired: true,
+      challenge,
+      error: `Face not recognized. Please try again${remaining ? ` (${remaining} attempt${remaining === 1 ? "" : "s"} left)` : ""}.`,
+    }
+  }
+
+  // Match. Clear the fail counter and start the session.
+  await resetFailCount(uid)
+  return establishSessionAndRedirect(
+    {
+      id: rec.id,
+      password: rec.password,
+      sessionToken: rec.sessionToken,
+      fullName: rec.profile.fullName || rec.profile.company || rec.email,
+      company: rec.profile.company || "",
+      active: true,
+    },
+    rec.email,
+  )
 }
 
 export async function logout() {
