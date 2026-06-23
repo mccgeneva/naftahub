@@ -17,7 +17,17 @@ import {
   type AesEquityComponent,
 } from "@/lib/aes"
 import { fundingCapitalCreditId } from "@/lib/funding-capital"
-import { getProfile, type TreasuryProfileKey } from "@/lib/treasury-store"
+import type { TreasuryProfileKey } from "@/lib/treasury-store"
+
+// Server-safe treasury profile metadata. The amounts mirror TREASURY_PROFILES in
+// lib/treasury-store.tsx, but that module is "use client" (it defines React
+// context), so its runtime `getProfile()` cannot be invoked from a Server
+// Action. These are fixed deposit tiers, so we duplicate the two constants here
+// rather than importing the client function.
+const TREASURY_FINANCING_PROFILES: Record<TreasuryProfileKey, { label: string; requiredDeposit: number }> = {
+  pro: { label: "PRO Account", requiredDeposit: 500_000 },
+  avantgarde: { label: "Avant-Garde Account", requiredDeposit: 1_000_000 },
+}
 import type { ProjectFundingRequest } from "@/lib/project-funding-store"
 import type { UserProfile } from "@/lib/users"
 
@@ -242,10 +252,11 @@ export async function adminTreasuryFinancing(
 
   if (!userId) return { ok: false, error: "Select a client to finance." }
   const profileKey: TreasuryProfileKey = tier === "avantgarde" ? "avantgarde" : "pro"
-  const amount = getProfile(profileKey).requiredDeposit // 500_000 or 1_000_000
+  const profile = TREASURY_FINANCING_PROFILES[profileKey]
+  const amount = profile.requiredDeposit // 500_000 or 1_000_000
 
   const target = await resolveAccountProfileById(userId)
-  const reason = note?.trim() || `Administrator treasury financing — ${getProfile(profileKey).label}.`
+  const reason = note?.trim() || `Administrator treasury financing — ${profile.label}.`
 
   try {
     // 1) Regularize the treasury record to Fully Secured. Setting the customer
@@ -265,7 +276,7 @@ export async function adminTreasuryFinancing(
     // 2) Log the financing on the treasury transaction ledger (audit trail).
     const txn = await postTreasuryTxnAdmin(passcode, userId, {
       type: "deposit",
-      label: `Treasury Financing — ${getProfile(profileKey).label}`,
+      label: `Treasury Financing — ${profile.label}`,
       amount,
       note: reason,
     })
@@ -282,7 +293,7 @@ export async function adminTreasuryFinancing(
       counterparty: "MCC Capital — Treasury Financing Facility",
       reference: `TREASURY-${profileKey.toUpperCase()}`,
       category: "Treasury Financing",
-      comment: `Treasury financing (${getProfile(profileKey).label}) credited to the master account.`,
+      comment: `Treasury financing (${profile.label}) credited to the master account.`,
     })
     if (!credit.ok) return { ok: false, error: credit.error }
 
@@ -292,7 +303,7 @@ export async function adminTreasuryFinancing(
       user: `${admin.fullName} (${admin.company})`,
       details: {
         targetAccount: `${target.fullName} — ${target.email}`,
-        facility: getProfile(profileKey).label,
+        facility: profile.label,
         amount: `EUR ${amount.toLocaleString("en-US")}`,
         treasuryStatus: "Fully Secured",
         action: "Treasury financing",
