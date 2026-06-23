@@ -187,6 +187,26 @@ export async function importVesselFromProvider(passcode: string, imo: string): P
   }
 }
 
+/**
+ * Resolve a vessel by IMO WITHOUT saving it — used to pre-fill the manual "Add
+ * vessel" form. Returns the same free public-registry + compliance enrichment
+ * as import, so the admin sees name/type/flag/year populated before saving.
+ */
+export async function lookupVesselDraftAdmin(passcode: string, imo: string): Promise<VesselResult> {
+  if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
+  const clean = (imo ?? "").trim()
+  if (!/^\d{7}$/.test(clean)) return { ok: false, error: "IMO number must be exactly 7 digits." }
+  if (!isValidImo(clean)) {
+    return { ok: false, error: "That IMO fails the official check-digit validation — it is not a real IMO number." }
+  }
+  // If it's already in the catalogue, return the stored record.
+  const existing = await dbGetVessel(clean)
+  if (existing) return { ok: true, vessel: existing }
+  const result = await fetchVesselByImo(clean)
+  if ("error" in result) return { ok: false, error: result.error }
+  return { ok: true, vessel: result.vessel }
+}
+
 /** Re-run the free compliance auto-check for a vessel already in the catalogue. */
 export async function rescreenVesselAdmin(passcode: string, imo: string): Promise<VesselResult> {
   if (!adminOk(passcode)) return { ok: false, error: "Administrator authorization failed." }
