@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Ship,
   Search,
@@ -75,6 +75,7 @@ import {
   deleteVesselAdmin,
   importVesselFromProvider,
   rescreenVesselAdmin,
+  lookupVesselDraftAdmin,
   getVesselProviderStatus,
   listSpotDealsAdmin,
   createSpotDealAdmin,
@@ -138,6 +139,7 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
   const [editTarget, setEditTarget] = useState<Vessel | null>(null)
   const [form, setForm] = useState<Vessel>({ ...emptyVessel })
   const [saving, setSaving] = useState(false)
+  const [prefilling, setPrefilling] = useState(false)
   const [importImo, setImportImo] = useState("")
   const [importing, setImporting] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Vessel | null>(null)
@@ -173,11 +175,70 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
     load()
   }, [load])
 
+  // Tracks which IMO we've already auto-filled to avoid duplicate lookups.
+  const prefilledImoRef = useRef<string>("")
+
+  // Resolve a vessel by IMO (free public registry + compliance) and merge the
+  // result into the open form, without overwriting fields the admin has already
+  // typed. Used by both "Add manually" and direct typing in the IMO field.
+  const prefillFromImo = useCallback(async (rawImo: string) => {
+    const imo = (rawImo ?? "").replace(/\D/g, "").trim()
+    if (!/^\d{7}$/.test(imo)) return
+    if (prefilledImoRef.current === imo) return
+    prefilledImoRef.current = imo
+    setPrefilling(true)
+    try {
+      const res = await lookupVesselDraftAdmin(ADMIN_PASSCODE, imo)
+      if (res.ok && res.vessel) {
+        // "IMO <n>" is the placeholder when no public record exists — don't
+        // dump that into the editable name field.
+        const resolvedName = res.vessel.name && res.vessel.name !== `IMO ${imo}` ? res.vessel.name : ""
+        setForm((prev) =>
+          prev.imo === imo
+            ? {
+                ...prev,
+                name: prev.name?.trim() ? prev.name : resolvedName,
+                type: res.vessel!.type ?? prev.type,
+                vesselClass: prev.vesselClass?.trim() ? prev.vesselClass : res.vessel!.vesselClass ?? "",
+                capacity: prev.capacity || res.vessel!.capacity || 0,
+                capacityUnit: res.vessel!.capacityUnit ?? prev.capacityUnit,
+                flag: prev.flag?.trim() ? prev.flag : res.vessel!.flag ?? "",
+                builtYear: prev.builtYear ?? res.vessel!.builtYear,
+                location: prev.location?.trim() ? prev.location : res.vessel!.location ?? "",
+                compliance: res.vessel!.compliance ?? prev.compliance,
+              }
+            : prev,
+        )
+        if (resolvedName) {
+          toast.success("Vessel details found", { description: `${resolvedName} (IMO ${imo})` })
+        } else {
+          toast.message("No public record found", {
+            description: "Enter the vessel details manually; the IMO has been validated.",
+          })
+        }
+      } else if (!res.ok) {
+        // Reset so the admin can retry after correcting the IMO.
+        prefilledImoRef.current = ""
+        toast.error(res.error ?? "Lookup failed")
+      }
+    } catch {
+      prefilledImoRef.current = ""
+      toast.error("Lookup failed. Enter details manually.")
+    } finally {
+      setPrefilling(false)
+    }
+  }, [])
+
   const openCreate = (prefillImo?: string) => {
-    const imo = (prefillImo ?? "").trim()
-    const seed = imo && /^\d{7}$/.test(imo) ? { ...emptyVessel, imo } : { ...emptyVessel }
+    const imo = (prefillImo ?? "").replace(/\D/g, "").trim()
+    const valid = /^\d{7}$/.test(imo)
+    const seed = valid ? { ...emptyVessel, imo } : { ...emptyVessel }
+    prefilledImoRef.current = ""
     setForm(seed)
     setEditTarget(seed)
+    // Auto-populate from the free public + compliance lookup so the manual form
+    // isn't blank for a real IMO.
+    if (valid) void prefillFromImo(imo)
   }
 
   // The IMO the admin is currently searching for, if the term contains a valid
@@ -519,17 +580,39 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
               <Input
                 id="f-imo"
                 value={form.imo}
-                onChange={(e) => set("imo", e.target.value.replace(/\D/g, "").slice(0, 7))}
+                onChange={(e) => {
+                  const next = e.target.value.replace(/\D/g, "").slice(0, 7)
+                  set("imo", next)
+                  // Auto-fill as soon as a full 7-digit IMO is entered for a new
+                  // vessel (not when editing an existing record).
+                  if (next.length === 7 && !editTarget?.updatedAt) void prefillFromImo(next)
+                }}
+                onBlur={(e) => {
+                  const v = e.target.value.replace(/\D/g, "")
+                  if (v.length === 7 && !editTarget?.updatedAt) void prefillFromImo(v)
+                }}
                 placeholder="7 digits"
                 disabled={!!editTarget?.updatedAt}
                 className="mt-1"
               />
             </div>
             <div className="sm:col-span-1">
-              <Label htmlFor="f-name" className="text-xs">
+              <Label htmlFor="f-name" className="flex items-center gap-1.5 text-xs">
                 Vessel name
+                {prefilling && (
+                  <span className="flex items-center gap-1 text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    looking up…
+                  </span>
+                )}
               </Label>
-              <Input id="f-name" value={form.name} onChange={(e) => set("name", e.target.value)} className="mt-1" />
+              <Input
+                id="f-name"
+                value={form.name}
+                onChange={(e) => set("name", e.target.value)}
+                placeholder={prefilling ? "Retrieving from public registry…" : "Vessel name"}
+                className="mt-1"
+              />
             </div>
             <div>
               <Label className="text-xs">Type</Label>
