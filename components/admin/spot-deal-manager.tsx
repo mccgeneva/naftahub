@@ -222,10 +222,16 @@ function VesselCatalogue({ onVesselsChanged }: { onVesselsChanged: (v: Vessel[])
       const res = await importVesselFromProvider(ADMIN_PASSCODE, imo)
       if (res.ok) {
         const c = res.vessel?.compliance
-        const stub = res.vessel?.source === "compliance"
-        const desc = `${res.vessel?.name} (IMO ${res.vessel?.imo})${
-          stub ? " — screened; complete particulars manually" : ""
-        }`
+        // A bare stub still has the IMO placeholder as its name (no data found).
+        const bareStub = res.vessel?.name === `IMO ${res.vessel?.imo}`
+        // Free public enrichment resolves name/type/flag but not tonnage.
+        const needsCapacity = res.vessel?.source === "compliance" && !res.vessel?.capacity
+        const hint = bareStub
+          ? " — screened; add particulars manually"
+          : needsCapacity
+            ? " — add capacity to complete"
+            : ""
+        const desc = `${res.vessel?.name} (IMO ${res.vessel?.imo})${hint}`
         if (c?.status === "flagged") {
           toast.error("Sanctions match — do not transact", { description: c.note ?? desc })
         } else if (c?.status === "unverified") {
