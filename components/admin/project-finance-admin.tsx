@@ -32,6 +32,7 @@ import {
   type AesEquityComponent,
 } from "@/lib/aes"
 import { TREASURY_PROFILES } from "@/lib/treasury-store"
+import { TREASURY_FINANCING_ANNUAL_RATE, monthlyTreasuryInterest } from "@/lib/treasury-financing"
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF"]
 
@@ -353,7 +354,9 @@ export function ProjectFinanceAdmin({ onDone }: { onDone?: () => void }) {
           </div>
           <CardDescription>
             Directly finance a client&apos;s treasury security deposit. Credits the balance and
-            regularizes the deposit to Fully Secured in one step.
+            regularizes the deposit to Fully Secured in one step. The financed principal carries a{" "}
+            {(TREASURY_FINANCING_ANNUAL_RATE * 100).toFixed(0)}% p.a. debit interest, charged monthly
+            from the financing date.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -394,6 +397,9 @@ export function ProjectFinanceAdmin({ onDone }: { onDone?: () => void }) {
                       {fmt(p.requiredDeposit)}
                     </p>
                     <p className="text-xs text-muted-foreground">{p.label}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      {fmt(monthlyTreasuryInterest(p.requiredDeposit))}/mo interest
+                    </p>
                   </button>
                 )
               })}
@@ -417,7 +423,9 @@ export function ProjectFinanceAdmin({ onDone }: { onDone?: () => void }) {
               <span className="font-medium text-foreground">{fmt(tierProfile.requiredDeposit)}</span> to the
               client&apos;s EUR balance, regularize the treasury deposit to{" "}
               <span className="font-medium text-foreground">Fully Secured</span>, and log a treasury
-              transaction.
+              transaction. A {(TREASURY_FINANCING_ANNUAL_RATE * 100).toFixed(0)}% p.a. debit interest
+              (≈ <span className="font-medium text-foreground">{fmt(monthlyTreasuryInterest(tierProfile.requiredDeposit))}</span>/month)
+              then accrues automatically from today.
             </p>
           </div>
 
