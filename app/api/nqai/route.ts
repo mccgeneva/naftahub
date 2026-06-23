@@ -1,5 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic"
 import { convertToModelMessages, streamText, stepCountIs, type UIMessage } from "ai"
+import { buildNqaiContext } from "@/lib/nqai-context"
 
 // NQAi runs live through the Anthropic Claude account configured via the
 // ANTHROPIC_API_KEY secret (forinoht@gmail.com). The @ai-sdk/anthropic provider
@@ -51,9 +52,21 @@ export async function POST(req: Request) {
     })
   }
 
+  // Inject a real-time snapshot of the platform (live benchmark prices + the
+  // current spot-deal board) so NQAi can reason over actual figures. Best-effort:
+  // a failure here degrades to the static prompt rather than breaking the chat.
+  let liveContext = ""
+  try {
+    liveContext = await buildNqaiContext()
+  } catch (err) {
+    console.log("[v0] NQAi context build failed:", err instanceof Error ? err.message : String(err))
+  }
+
+  const system = liveContext ? `${NQAI_SYSTEM_PROMPT}\n\n---\n\n${liveContext}` : NQAI_SYSTEM_PROMPT
+
   const result = streamText({
     model: anthropic(NQAI_MODEL),
-    system: NQAI_SYSTEM_PROMPT,
+    system,
     messages: await convertToModelMessages(messages),
     stopWhen: stepCountIs(4),
     temperature: 0.6,
