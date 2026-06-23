@@ -3,8 +3,15 @@
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { resolveCurrentSession, resolveAccountProfileById, resolveDataOwnerIdFor } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
-import { upsertLedgerEntry, readLedgerEntries, availableByCurrency, deleteLedgerEntry } from "@/lib/ledger-db"
+import {
+  upsertLedgerEntry,
+  readLedgerEntries,
+  availableByCurrency,
+  deleteLedgerEntry,
+  assertOwnerSolvent,
+} from "@/lib/ledger-db"
 import { convertCurrency } from "@/lib/fx"
+import { planReservation, formatMoney, type ReservationPlan } from "@/lib/fund-reservation"
 import type { LedgerEntry } from "@/lib/ledger-store"
 import { insertNotification } from "@/lib/notifications-db"
 import {
@@ -776,6 +783,61 @@ function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
   return null
 }
 
+/** Thrown when an approval's reservation cannot be covered by available funds. */
+class InsufficientFundsError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "InsufficientFundsError"
+  }
+}
+
+/**
+ * Available balance per currency, EXCLUDING this approval's own prior ledger
+ * postings (`APPR-<id>*`). This gives reservation planning a stable baseline so
+ * re-runs (idempotent backfill / reconcile / amendment) never see the hold they
+ * themselves placed as a reason to re-fund or to fail a feasibility check.
+ */
+function availableExcludingApproval(entries: LedgerEntry[], reqId: string): Record<string, number> {
+  const prefix = `APPR-${reqId}`
+  return availableByCurrency(entries.filter((e) => !e.id.startsWith(prefix)))
+}
+
+export interface ReservationAssessment {
+  /** True when this approval reserves funds (posts a debit hold). */
+  required: boolean
+  /** True when the full reservation can be covered with no negative balance. */
+  feasible: boolean
+  plan: ReservationPlan | null
+  ownerId: string
+  /** Client/admin-facing explanation when not feasible. */
+  message: string
+}
+
+/**
+ * Real-time fund-availability check for a (possibly) reserving approval, run
+ * BEFORE the decision is committed. Resolves the balance owner (the Master for a
+ * Sub-account), computes the prospective hold, and asks the planner whether it
+ * can be funded — directly or via capped cross-currency FX. Non-reserving
+ * approvals (credits, no ledger effect) are always "feasible".
+ */
+async function assessReservation(req: ApprovalRequest): Promise<ReservationAssessment> {
+  const entry = ledgerEntryForApproval(req)
+  const ownerId = await resolveDataOwnerIdFor(req.userId)
+  if (!entry || entry.direction !== "debit" || entry.status !== "hold") {
+    return { required: false, feasible: true, plan: null, ownerId, message: "" }
+  }
+  const existing = await readLedgerEntries(ownerId)
+  const available = availableExcludingApproval(existing, req.id)
+  const plan = planReservation(available, entry.currency, entry.amount)
+  const message = plan.feasible
+    ? ""
+    : `Insufficient available funds to reserve ${formatMoney(entry.amount, entry.currency)} for this ` +
+      `${KIND_LABELS[req.kind].toLowerCase()}. Total spendable balance is ` +
+      `${formatMoney(plan.totalAvailableInNeedCurrency, entry.currency)} (short by ` +
+      `${formatMoney(entry.amount - plan.totalAvailableInNeedCurrency, entry.currency)}).`
+  return { required: true, feasible: plan.feasible, plan, ownerId, message }
+}
+
 /**
  * Apply the financial effect (if any) of an approved request to the SHARED-data
  * owner's ledger. For a Sub-account the balance lives under its Master, so the
@@ -787,76 +849,89 @@ async function applyLedgerEffect(req: ApprovalRequest): Promise<void> {
   if (!entry) return
   const ownerId = await resolveDataOwnerIdFor(req.userId)
 
-  // Commodity reserve with cross-currency funding: a deal is priced in the deal
-  // currency (e.g. USD) but the client funds from a master account in another
-  // currency (e.g. EUR). When the client lacks enough of the deal currency, we
-  // execute a REAL FX conversion at approval time — selling the funding currency
-  // to buy the USD needed — then place the hold on the bought USD. The two FX
-  // legs are SETTLED (permanent): if the deal is later cancelled, only the hold
-  // (`APPR-<id>`) is released, so the converted USD stays available in the USD
-  // account rather than being converted back.
+  // Reservation (debit hold) with cross-currency funding: a deal is priced in
+  // the deal currency (e.g. USD) but the client may fund it from balances in
+  // other currencies (e.g. EUR). Funds are taken first from the deal currency;
+  // any shortfall is covered by REAL FX conversions, each leg CAPPED at the
+  // source currency's available balance so NO balance can be driven negative.
+  // The FX legs are SETTLED (permanent): if the deal is later cancelled, only
+  // the hold (`APPR-<id>`) is released, so converted funds remain available. If
+  // the full amount cannot be covered, we throw instead of posting a partial or
+  // overdrawn reservation — callers pre-check and auto-reject, this is the last
+  // line of defense.
+  const postedIds: string[] = []
   if (entry.status === "hold" && entry.direction === "debit") {
-    try {
-      const existing = await readLedgerEntries(ownerId)
-      const available = availableByCurrency(existing)
-      const holdCur = entry.currency
-      const needed = entry.amount
-      const availableInHoldCur = Math.max(available[holdCur] ?? 0, 0)
-      const shortfall = needed - availableInHoldCur
+    const existing = await readLedgerEntries(ownerId)
+    const available = availableExcludingApproval(existing, req.id)
+    const plan = planReservation(available, entry.currency, entry.amount)
 
-      if (shortfall > 0) {
-        // Fund from the currency with the largest available balance (≠ holdCur).
-        const best = Object.entries(available)
-          .filter(([cur, bal]) => cur !== holdCur && bal > 0)
-          .sort((a, b) => convertCurrency(b[1], b[0], "USD") - convertCurrency(a[1], a[0], "USD"))[0]
+    if (!plan.feasible) {
+      throw new InsufficientFundsError(
+        `Cannot reserve ${formatMoney(entry.amount, entry.currency)} — only ` +
+          `${formatMoney(plan.totalAvailableInNeedCurrency, entry.currency)} available across all currencies.`,
+      )
+    }
 
-        if (best) {
-          const fundingCur = best[0]
-          const costInFunding = convertCurrency(shortfall, holdCur, fundingCur)
-          const rateLabel = `1 ${holdCur} = ${convertCurrency(1, holdCur, fundingCur).toFixed(4)} ${fundingCur}`
-          const ref = entry.reference || req.id
+    const ref = entry.reference || req.id
+    for (let i = 0; i < plan.legs.length; i++) {
+      const leg = plan.legs[i]
+      // Leg A — sell the source currency (settled, permanent debit), capped at
+      // its balance by the planner.
+      const sellId = `APPR-${req.id}-fx${i}-sell`
+      await upsertLedgerEntry(ownerId, {
+        id: sellId,
+        direction: "debit",
+        amount: leg.sellAmount,
+        currency: leg.fromCurrency,
+        status: "completed",
+        date: new Date().toISOString(),
+        counterparty: "FX Treasury",
+        reference: ref,
+        category: "FX Conversion — Commodity Funding",
+        comment: `Sold ${formatMoney(leg.sellAmount, leg.fromCurrency)} to buy ${formatMoney(leg.buyAmount, entry.currency)} for settlement (${leg.rateLabel})`,
+      })
+      postedIds.push(sellId)
 
-          // Leg 1 — sell funding currency (settled, permanent debit).
-          await upsertLedgerEntry(ownerId, {
-            id: `APPR-${req.id}-fx-sell`,
-            direction: "debit",
-            amount: costInFunding,
-            currency: fundingCur,
-            status: "completed",
-            date: new Date().toISOString(),
-            counterparty: "FX Treasury",
-            reference: ref,
-            category: "FX Conversion — Commodity Funding",
-            comment: `Sold ${fundingCur} to buy ${holdCur} ${shortfall.toLocaleString("en-US", { maximumFractionDigits: 2 })} for commodity settlement (${rateLabel})`,
-          })
+      // Leg B — buy the deal currency (settled, permanent credit).
+      const buyId = `APPR-${req.id}-fx${i}-buy`
+      await upsertLedgerEntry(ownerId, {
+        id: buyId,
+        direction: "credit",
+        amount: leg.buyAmount,
+        currency: entry.currency,
+        status: "completed",
+        date: new Date().toISOString(),
+        counterparty: "FX Treasury",
+        reference: ref,
+        category: "FX Conversion — Commodity Funding",
+        comment: `Bought ${formatMoney(leg.buyAmount, entry.currency)} from ${formatMoney(leg.sellAmount, leg.fromCurrency)} for settlement (${leg.rateLabel})`,
+      })
+      postedIds.push(buyId)
+    }
 
-          // Leg 2 — buy deal currency (settled, permanent credit).
-          await upsertLedgerEntry(ownerId, {
-            id: `APPR-${req.id}-fx-buy`,
-            direction: "credit",
-            amount: shortfall,
-            currency: holdCur,
-            status: "completed",
-            date: new Date().toISOString(),
-            counterparty: "FX Treasury",
-            reference: ref,
-            category: "FX Conversion — Commodity Funding",
-            comment: `Bought ${holdCur} from ${fundingCur} ${costInFunding.toLocaleString("en-US", { maximumFractionDigits: 2 })} for commodity settlement (${rateLabel})`,
-          })
-
-          entry.comment =
-            `${entry.comment ? entry.comment + " · " : ""}Reserved ${holdCur} ` +
-            `${needed.toLocaleString("en-US", { maximumFractionDigits: 2 })} ` +
-            `(funded via FX from ${fundingCur})`
-        }
-      }
-    } catch (err) {
-      // Best-effort FX funding; fall back to placing the hold as-is.
-      console.log("[v0] commodity FX funding failed:", (err as Error).message)
+    if (plan.legs.length > 0) {
+      entry.comment =
+        `${entry.comment ? entry.comment + " · " : ""}Reserved ${formatMoney(entry.amount, entry.currency)} ` +
+        `(funded via FX from ${plan.legs.map((l) => l.fromCurrency).join(", ")})`
     }
   }
 
   await upsertLedgerEntry(ownerId, entry)
+  postedIds.push(entry.id)
+
+  // DB-level non-negativity enforcement (defense in depth). If this posting
+  // overdrew ANY currency, roll back every entry we just wrote and surface the
+  // failure rather than leaving a negative balance committed.
+  if (entry.direction === "debit") {
+    try {
+      await assertOwnerSolvent(ownerId)
+    } catch (err) {
+      for (const id of postedIds) {
+        await deleteLedgerEntry(ownerId, id).catch(() => {})
+      }
+      throw new InsufficientFundsError((err as Error).message)
+    }
+  }
 }
 
 /**
@@ -923,6 +998,50 @@ export async function adminDecideApproval(
     if (!existing) return { ok: false, error: "Request not found." }
     if (existing.status !== "pending" && existing.status !== "awaiting_master") {
       return { ok: false, error: "This request has already been decided." }
+    }
+
+    // HARD fund-availability gate. Before committing an APPROVAL that reserves
+    // funds, verify the balance owner can actually cover it in the deal currency
+    // (including capped cross-currency FX). If it cannot, AUTO-REJECT the
+    // request, notify the client, log the reason, and tell the admin — money is
+    // never moved and no negative balance can be created.
+    if (decision === "approved") {
+      const assessment = await assessReservation(existing)
+      if (assessment.required && !assessment.feasible) {
+        const reason = assessment.message
+        const rejected = await recordAdminDecision(id, "rejected", "Administrator (auto)", reason)
+        const finalReq = rejected ?? existing
+        try {
+          await insertNotification({
+            userId: finalReq.userId,
+            tone: "warning",
+            title: `${KIND_LABELS[finalReq.kind]} declined — insufficient funds`,
+            body: `Your ${KIND_LABELS[finalReq.kind].toLowerCase()} "${finalReq.title}" was automatically declined: the account lacks sufficient available balance to reserve the required funds. ${reason}`,
+            href: KIND_HREF[finalReq.kind] ?? null,
+          })
+        } catch (err) {
+          console.log("[v0] insufficient-funds notification failed:", (err as Error).message)
+        }
+        try {
+          const target = await resolveAccountProfileById(finalReq.userId)
+          await logActivity({
+            action: `Auto-declined a ${KIND_LABELS[finalReq.kind]} request for ${target.fullName} — insufficient funds`,
+            category: "Administration / Approvals",
+            user: "Administrator",
+            details: {
+              referenceId: finalReq.id,
+              targetAccount: `${target.fullName} — ${target.email}`,
+              summary: finalReq.summary || finalReq.title,
+              amount: finalReq.amount != null ? formatMoney(finalReq.amount, finalReq.currency ?? "") : "(n/a)",
+              decision: "rejected (insufficient funds)",
+              reason,
+            },
+          })
+        } catch (err) {
+          console.log("[v0] insufficient-funds audit log failed:", (err as Error).message)
+        }
+        return { ok: false, error: reason }
+      }
     }
 
     // Record the administrator's verdict (first gate). For a Sub-account
@@ -1434,6 +1553,49 @@ export async function masterDecideApproval(
     }
     if (existing.status !== "pending" && existing.status !== "awaiting_master") {
       return { ok: false, error: "This request has already been decided." }
+    }
+
+    // HARD fund-availability gate at the Master's (final) approval — balances may
+    // have changed since the administrator's gate. If the reservation can no
+    // longer be covered, AUTO-REJECT, notify the sub-account, log it, and tell
+    // the Master, so money never moves into a negative balance.
+    if (decision === "approved") {
+      const assessment = await assessReservation(existing)
+      if (assessment.required && !assessment.feasible) {
+        const reason = assessment.message
+        const rejected = await recordMasterDecision(id, session.id, "rejected", reason)
+        const finalReq = rejected ?? existing
+        try {
+          await insertNotification({
+            userId: finalReq.userId,
+            tone: "warning",
+            title: `${KIND_LABELS[finalReq.kind]} declined — insufficient funds`,
+            body: `Your ${KIND_LABELS[finalReq.kind].toLowerCase()} "${finalReq.title}" was automatically declined: the account lacks sufficient available balance to reserve the required funds. ${reason}`,
+            href: KIND_HREF[finalReq.kind] ?? null,
+          })
+        } catch (err) {
+          console.log("[v0] master insufficient-funds notification failed:", (err as Error).message)
+        }
+        try {
+          const target = await resolveAccountProfileById(finalReq.userId)
+          await logActivity({
+            action: `Auto-declined a ${KIND_LABELS[finalReq.kind]} request from ${target.fullName} — insufficient funds`,
+            category: "Account Hierarchy / Approvals",
+            user: session.profile.fullName,
+            details: {
+              referenceId: finalReq.id,
+              subAccount: `${target.fullName} — ${target.email}`,
+              summary: finalReq.summary || finalReq.title,
+              amount: finalReq.amount != null ? formatMoney(finalReq.amount, finalReq.currency ?? "") : "(n/a)",
+              decision: "rejected (insufficient funds)",
+              reason,
+            },
+          })
+        } catch (err) {
+          console.log("[v0] master insufficient-funds audit log failed:", (err as Error).message)
+        }
+        return { ok: false, error: reason }
+      }
     }
 
     const updated = await recordMasterDecision(id, session.id, decision, note)
