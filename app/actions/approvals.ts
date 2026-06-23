@@ -26,6 +26,7 @@ import {
   cancelApproval,
   revokeApprovedApproval,
   adminRevokeApprovedApproval,
+  markApprovalTransferred,
   markApprovalDelivered,
   getApprovalById,
   updateApprovalPayload,
@@ -35,6 +36,7 @@ import {
   type LedgerEffect,
 } from "@/lib/approvals-db"
 import { KIND_LABELS, KIND_HREF, type ApprovalKind } from "@/lib/approval-kinds"
+import { getDynamicUserByEmail } from "@/lib/admin-users-db"
 import {
   recordGatewayDepositForApproval,
   backfillGatewayDepositsForUser,
@@ -1738,6 +1740,128 @@ export async function adminIssueInstrument(
   } catch (err) {
     console.log("[v0] adminIssueInstrument failed:", (err as Error).message)
     return { ok: false, error: "The instrument could not be issued. Please try again." }
+  }
+}
+
+// --- Client-to-client instrument transfer ----------------------------------
+
+export type TransferInstrumentResult =
+  | { ok: true; recipientName: string; recipientEmail: string }
+  | { ok: false; error: string }
+
+/**
+ * Transfer an ACTIVE bank instrument the signed-in client holds to another
+ * platform account, identified by registered email. The instrument moves
+ * immediately (no desk approval): it is issued into the recipient's portfolio
+ * as an active holding (born pending → instantly approved, exactly like
+ * administrator issuance) and removed from the sender's active holdings (marked
+ * "Transferred"). This is a cross-user write, so every guard is enforced
+ * server-side: the caller must own an active instrument, the recipient must be
+ * a distinct active account, and the source record is moved race-safely so the
+ * same instrument can never be duplicated across two concurrent transfers.
+ */
+export async function transferMyInstrument(
+  approvalId: string,
+  recipientEmail: string,
+): Promise<TransferInstrumentResult> {
+  const session = await resolveCurrentSession()
+  if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
+
+  const email = (recipientEmail ?? "").trim()
+  if (!email) return { ok: false, error: "Enter the recipient's account email." }
+
+  // The source must exist, be an instrument, belong to THIS holder's portfolio,
+  // and be active (approved). Anything else is rejected.
+  const senderOwnerId = session.dataOwnerId
+  const record = await getApprovalById(approvalId)
+  if (!record || record.kind !== "instrument") {
+    return { ok: false, error: "Instrument not found." }
+  }
+  if (record.userId !== senderOwnerId) {
+    return { ok: false, error: "You can only transfer instruments held in your own portfolio." }
+  }
+  if (record.status !== "approved") {
+    return { ok: false, error: "Only active instruments can be transferred." }
+  }
+
+  // Resolve the recipient — must be an active account, and not the sender.
+  const recipient = await getDynamicUserByEmail(email)
+  if (!recipient || recipient.status !== "active") {
+    return { ok: false, error: "No active account is registered with that email." }
+  }
+  const recipientOwnerId = await resolveDataOwnerIdFor(recipient.id)
+  if (recipientOwnerId === senderOwnerId) {
+    return { ok: false, error: "This instrument is already in that portfolio." }
+  }
+
+  // Pull the full instrument view-model out of the existing payload (admin-issued
+  // instruments carry it under `instrument`; client-originated under `record`).
+  const payload = (record.payload ?? {}) as {
+    record?: Record<string, unknown>
+    instrument?: Record<string, unknown>
+    issuedByAdmin?: boolean
+  }
+  const base = (payload.issuedByAdmin ? payload.instrument : payload.record ?? payload.instrument) ?? {}
+  const instrument = { ...base, status: "active" }
+  const instrumentId = String((base as { id?: unknown }).id ?? approvalId)
+
+  const recipientProfile = await resolveAccountProfileById(recipientOwnerId)
+  const recipientLabel = recipientProfile.fullName || recipient.email
+  const senderName = session.profile.fullName || session.profile.company || session.profile.email
+
+  try {
+    // 1) Issue into the recipient's portfolio (born pending → approved).
+    const created = await insertApproval({
+      userId: recipientOwnerId,
+      kind: "instrument",
+      title: record.title,
+      summary: `${record.summary} — transferred from ${senderName}.`,
+      amount: record.amount,
+      currency: record.currency,
+      payload: { issuedByAdmin: true, instrument, transferredFrom: senderName },
+    })
+    await decideApproval(created.id, "approved", "Instrument transfer")
+
+    // 2) Remove from the sender's active holdings (marked Transferred). Race-safe
+    //    and ownership-scoped — only acts while still approved and owned by sender.
+    const moved = await markApprovalTransferred(approvalId, senderOwnerId, recipientLabel)
+    if (!moved) {
+      // The source changed under us (already transferred). Roll back the
+      // recipient issuance so the instrument is never duplicated.
+      await adminRevokeApprovedApproval(created.id, "Transfer rolled back — source no longer transferable.")
+      return { ok: false, error: "This instrument is no longer available to transfer." }
+    }
+
+    // 3) Notify the recipient so it surfaces in their alerts.
+    try {
+      await insertNotification({
+        userId: recipientOwnerId,
+        tone: "success",
+        title: "Bank instrument received",
+        body: `${senderName} transferred a ${record.title} to your portfolio.`,
+        href: KIND_HREF.instrument ?? "/dashboard/instruments",
+      })
+    } catch (err) {
+      console.log("[v0] transfer notification failed:", (err as Error).message)
+    }
+
+    await logActivity({
+      action: `Transferred ${record.title} to ${recipientLabel}`,
+      category: "Bank Instruments",
+      user: senderName,
+      details: {
+        summary: `Client transferred the bank instrument ${instrumentId} (${record.currency ?? ""} ${(record.amount ?? 0).toLocaleString("en-US")}) to ${recipientLabel} — ${recipient.email}. The instrument left the sender's portfolio and is now active for the recipient.`,
+        referenceId: instrumentId,
+        recipient: `${recipientLabel} — ${recipient.email}`,
+        faceValue: `${record.currency ?? ""} ${(record.amount ?? 0).toLocaleString("en-US")}`,
+        action: "Transferred",
+      },
+    })
+
+    return { ok: true, recipientName: recipientLabel, recipientEmail: recipient.email }
+  } catch (err) {
+    console.log("[v0] transferMyInstrument failed:", (err as Error).message)
+    return { ok: false, error: "The transfer could not be completed. Please try again." }
   }
 }
 

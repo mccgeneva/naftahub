@@ -523,6 +523,34 @@ export async function revokeApprovedApproval(
 }
 
 /**
+ * Move an already-APPROVED (active) instrument out of a holder's portfolio as
+ * part of a client-to-client transfer. Sets the record to `cancelled` and
+ * stamps `transferredTo` into the payload so the store can surface it as
+ * "Transferred" rather than a plain cancellation. Race-safe and ownership-
+ * scoped: only acts while the record is still `approved` AND owned by `userId`,
+ * so two concurrent transfers of the same instrument cannot both succeed.
+ * Returns the updated record, or null if it can no longer be transferred.
+ */
+export async function markApprovalTransferred(
+  id: string,
+  userId: string,
+  toLabel: string,
+): Promise<ApprovalRequest | null> {
+  await ensureTable()
+  const { rows } = await query(
+    `UPDATE approval_requests
+        SET status = 'cancelled',
+            decided_at = now(),
+            decision_note = $3,
+            payload = payload || jsonb_build_object('transferredTo', $4::text)
+      WHERE id = $1 AND user_id = $2 AND status = 'approved'
+      RETURNING *`,
+    [id, userId, `Transferred to ${toLabel}`, toLabel],
+  )
+  return rows.length ? rowToRequest(rows[0]) : null
+}
+
+/**
  * Administrator REVOCATION of an already-APPROVED request, regardless of which
  * client owns it. Unlike the client revoke, this is NOT scoped to a user id —
  * administrator authority. Still race-safe: only acts while the request is

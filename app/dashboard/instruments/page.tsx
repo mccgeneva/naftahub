@@ -64,6 +64,8 @@ import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { toast } from "sonner"
 import { useInstrumentRequests, type Instrument } from "@/lib/instrument-requests-store"
+import { resolveTransferRecipient } from "@/app/actions/transfers"
+import type { TransferDirectoryEntry } from "@/lib/users"
 import { useLeverageRequests } from "@/lib/leverage-requests-store"
 import {
   useMonetizationRequests,
@@ -123,6 +125,7 @@ const statusConfig = {
   rejected: { icon: XCircle, color: "text-red-500", bg: "bg-red-500/10" },
   expired: { icon: AlertCircle, color: "text-red-500", bg: "bg-red-500/10" },
   cancelled: { icon: Ban, color: "text-muted-foreground", bg: "bg-muted" },
+  transferred: { icon: ArrowRight, color: "text-muted-foreground", bg: "bg-muted" },
 }
 
 const formatCurrency = (value: number, currency: string) => {
@@ -142,7 +145,7 @@ export default function InstrumentsPage() {
   // Read-only portfolio: clients can no longer create, cancel, or delete
   // instruments. Bank instruments are issued and managed exclusively by the
   // administrator; the client view only displays them.
-  const { instruments } = useInstrumentRequests()
+  const { instruments, transferInstrument } = useInstrumentRequests()
   const { addRequest: addMonetizationRequest } = useMonetizationRequests()
   const { requests: leverageRequests } = useLeverageRequests()
 
@@ -170,6 +173,13 @@ export default function InstrumentsPage() {
     action: "Assign/Transfer" | "Monetize"
   } | null>(null)
   const [actionDestination, setActionDestination] = useState("")
+  // Recipient verification for the transfer flow: the holder must confirm WHO
+  // they are sending to before the transfer can be submitted.
+  const [recipientStatus, setRecipientStatus] = useState<
+    "idle" | "checking" | "found" | "notfound" | "self" | "error"
+  >("idle")
+  const [recipient, setRecipient] = useState<TransferDirectoryEntry | null>(null)
+  const [transferring, setTransferring] = useState(false)
 
   // Dedicated bank-instrument monetization request (MT760, advance rate, etc.)
   const [monetizeTarget, setMonetizeTarget] = useState<Instrument | null>(null)
@@ -253,6 +263,8 @@ export default function InstrumentsPage() {
       return
     }
     setActionDestination("")
+    setRecipient(null)
+    setRecipientStatus("idle")
     setActionTarget({ instrument, action })
   }
 
@@ -411,30 +423,68 @@ export default function InstrumentsPage() {
     setMonetizeTarget(null)
   }
 
-  const confirmInstrumentAction = () => {
-    if (!actionTarget) return
-    const { instrument, action } = actionTarget
-    const destinationLabel = actionDestination.trim()
+  // Step 1 — verify the recipient email resolves to a real, active account and
+  // show the holder exactly WHO they are about to transfer to before confirming.
+  const verifyRecipient = async () => {
+    const email = actionDestination.trim()
+    if (!email) {
+      setRecipient(null)
+      setRecipientStatus("idle")
+      return
+    }
+    setRecipientStatus("checking")
+    setRecipient(null)
+    try {
+      const res = await resolveTransferRecipient(email)
+      if (res.ok && res.recipient) {
+        setRecipient(res.recipient)
+        setRecipientStatus("found")
+      } else {
+        setRecipientStatus("notfound")
+      }
+    } catch {
+      setRecipientStatus("error")
+    }
+  }
 
+  // Step 2 — confirm the transfer. The instrument moves immediately: it leaves
+  // this portfolio (shown "Transferred") and becomes active for the recipient.
+  const confirmInstrumentAction = async () => {
+    if (!actionTarget || !recipient) return
+    const { instrument } = actionTarget
+    if (!instrument.approvalId) {
+      toast.error("This instrument can't be transferred", {
+        description: "It is still syncing. Please refresh and try again.",
+      })
+      return
+    }
+    setTransferring(true)
+    const res = await transferInstrument(instrument.approvalId, recipient.email)
+    setTransferring(false)
+    if (!res.ok) {
+      toast.error("Transfer failed", { description: res.error })
+      return
+    }
     logActivity({
-      action: `Requested ${action} for ${instrument.type} ${instrument.id} (${formatCurrency(instrument.faceValue, instrument.currency)})`,
+      action: `Transferred ${instrument.type} ${instrument.id} (${formatCurrency(instrument.faceValue, instrument.currency)}) to ${res.recipientName}`,
       category: "Bank Instruments",
       details: {
-        summary: `Client submitted an assignment/transfer request for the ${instrument.typeFull} (${instrument.type}) ${instrument.id} with a face value of ${formatCurrency(instrument.faceValue, instrument.currency)}${destinationLabel ? ` to ${destinationLabel}` : ""}. Pending desk review.`,
+        summary: `Client transferred the ${instrument.typeFull} (${instrument.type}) ${instrument.id} with a face value of ${formatCurrency(instrument.faceValue, instrument.currency)} to ${res.recipientName} (${recipient.email}). The instrument left this portfolio and is now active for the recipient.`,
         referenceId: instrument.id,
         instrumentType: `${instrument.type} — ${instrument.typeFull}`,
         faceValue: formatCurrency(instrument.faceValue, instrument.currency),
         issuingBank: instrument.issuer,
-        requestType: action,
-        transferTo: destinationLabel || "—",
-        status: "Submitted for review",
+        recipient: `${res.recipientName} — ${recipient.email}`,
+        status: "Transferred",
       },
     })
-    toast.success(`${action} request submitted`, {
-      description: `Your ${action.toLowerCase()} request for ${instrument.id} has been sent to the instruments desk for review.`,
+    toast.success("Instrument transferred", {
+      description: `${instrument.id} is now in ${res.recipientName}'s portfolio.`,
     })
     setActionTarget(null)
     setActionDestination("")
+    setRecipient(null)
+    setRecipientStatus("idle")
   }
 
   const downloadCertificate = (instrument: Instrument) => {
@@ -881,7 +931,7 @@ export default function InstrumentsPage() {
                                 onClick={() => requestInstrumentAction(instrument, "Assign/Transfer")}
                               >
                                 <ArrowRight className="mr-2 h-4 w-4" />
-                                Assign/Transfer
+                                Transfer
                               </DropdownMenuItem>
                             )}
                             {instrument.status === "active" && instrument.monetizable && (
@@ -1245,15 +1295,25 @@ export default function InstrumentsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Assign / Transfer dialog */}
-      <Dialog open={!!actionTarget} onOpenChange={(open) => !open && setActionTarget(null)}>
+      {/* Transfer dialog */}
+      <Dialog
+        open={!!actionTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setActionTarget(null)
+            setActionDestination("")
+            setRecipient(null)
+            setRecipientStatus("idle")
+          }
+        }}
+      >
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
           {actionTarget && (
             <>
               <DialogHeader>
-                <DialogTitle>Assign / Transfer Instrument</DialogTitle>
+                <DialogTitle>Transfer Instrument</DialogTitle>
                 <DialogDescription>
-                  {`Submit an assignment or transfer request for ${actionTarget.instrument.id}. Our instruments desk will review and respond.`}
+                  {`Transfer ${actionTarget.instrument.id} to another account holder. Enter their registered email — we'll confirm who they are before you send. Once confirmed, the instrument moves to their portfolio immediately.`}
                 </DialogDescription>
               </DialogHeader>
               <div className="rounded-lg border border-border bg-secondary/30 p-3">
@@ -1265,21 +1325,79 @@ export default function InstrumentsPage() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="action-destination">
-                  Transfer to (beneficiary or bank, optional)
-                </Label>
-                <Input
-                  id="action-destination"
-                  value={actionDestination}
-                  onChange={(e) => setActionDestination(e.target.value)}
-                  placeholder="e.g. Beneficiary name or receiving bank"
-                />
+                <Label htmlFor="action-destination">Recipient account email</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="action-destination"
+                    type="email"
+                    inputMode="email"
+                    autoComplete="off"
+                    value={actionDestination}
+                    onChange={(e) => {
+                      setActionDestination(e.target.value)
+                      // Any edit invalidates a prior verification — force re-check.
+                      setRecipient(null)
+                      setRecipientStatus("idle")
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault()
+                        void verifyRecipient()
+                      }
+                    }}
+                    placeholder="name@example.com"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void verifyRecipient()}
+                    disabled={!actionDestination.trim() || recipientStatus === "checking"}
+                  >
+                    {recipientStatus === "checking" ? "Checking…" : "Check"}
+                  </Button>
+                </div>
+
+                {/* Recipient verification result */}
+                {recipientStatus === "found" && recipient && (
+                  <div className="flex items-center gap-3 rounded-lg border border-green-500/30 bg-green-500/10 p-3">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-500/20 text-xs font-semibold text-green-500">
+                      {recipient.initials}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-green-500" />
+                        <span className="truncate">{recipient.displayName}</span>
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {recipient.company ? `${recipient.company} · ` : ""}
+                        {recipient.email}
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {recipientStatus === "notfound" && (
+                  <p className="flex items-center gap-1.5 text-sm text-red-500">
+                    <XCircle className="h-4 w-4 shrink-0" />
+                    No active account is registered with that email.
+                  </p>
+                )}
+                {recipientStatus === "error" && (
+                  <p className="flex items-center gap-1.5 text-sm text-red-500">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    Couldn&apos;t verify the recipient right now. Please try again.
+                  </p>
+                )}
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setActionTarget(null)}>
+                <Button variant="outline" onClick={() => setActionTarget(null)} disabled={transferring}>
                   Cancel
                 </Button>
-                <Button onClick={confirmInstrumentAction}>Submit Request</Button>
+                <Button
+                  onClick={() => void confirmInstrumentAction()}
+                  disabled={recipientStatus !== "found" || !recipient || transferring}
+                >
+                  {transferring ? "Transferring…" : "Confirm Transfer"}
+                </Button>
               </DialogFooter>
             </>
           )}

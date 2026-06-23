@@ -4,7 +4,7 @@ import { createContext, useContext } from "react"
 import { buildInstrumentIdentifiers } from "@/lib/instrument-identifiers"
 import { mirrorSubmission, mapApprovalStatus, type ApprovalRecord } from "@/lib/approval-sync"
 import { useServerRequestList } from "@/lib/use-server-request-list"
-import { cancelMyApproval } from "@/app/actions/approvals"
+import { cancelMyApproval, transferMyInstrument } from "@/app/actions/approvals"
 
 /**
  * Ensure an instrument carries the full identifier set. Records created before
@@ -18,7 +18,7 @@ function ensureIdentifiers(inst: Instrument): Instrument {
   return { ...inst, ...ids }
 }
 
-export type InstrumentStatus = "pending" | "active" | "rejected" | "cancelled" | "expired"
+export type InstrumentStatus = "pending" | "active" | "rejected" | "cancelled" | "expired" | "transferred"
 
 export interface Instrument {
   id: string
@@ -76,13 +76,19 @@ export interface Instrument {
  * "approved" maps onto the instrument's "active" status.
  */
 function instrumentFromApproval(rec: ApprovalRecord): Instrument | null {
-  const p = rec.payload as { record?: Instrument; instrument?: Instrument; issuedByAdmin?: boolean } | undefined
+  const p = rec.payload as
+    | { record?: Instrument; instrument?: Instrument; issuedByAdmin?: boolean; transferredTo?: string }
+    | undefined
   const base = p?.issuedByAdmin ? p?.instrument : (p?.record ?? p?.instrument)
   if (!base || typeof base !== "object" || !base.id) return null
+  // A cancelled record that was moved to another holder is surfaced as
+  // "Transferred" (not a plain cancellation) so the sender sees what happened.
+  let status = mapApprovalStatus(rec.status, { approvedStatus: "active" }) as InstrumentStatus
+  if (status === "cancelled" && p?.transferredTo) status = "transferred"
   return ensureIdentifiers({
     ...base,
     approvalId: rec.id,
-    status: mapApprovalStatus(rec.status, { approvedStatus: "active" }) as InstrumentStatus,
+    status,
     decidedAt: rec.decidedAt ?? base.decidedAt,
     decisionNote: rec.decisionNote ?? base.decisionNote,
   })
@@ -102,6 +108,16 @@ interface InstrumentRequestsContextValue {
   cancelInstrument: (id: string) => void
   /** Permanently remove an instrument from the list. */
   deleteInstrument: (id: string) => void
+  /**
+   * Transfer an ACTIVE instrument to another platform account (by email). The
+   * instrument moves server-side immediately, then the local list reconciles:
+   * it leaves the sender's active holdings (shown "Transferred") and appears in
+   * the recipient's portfolio. Returns the outcome for the calling UI.
+   */
+  transferInstrument: (
+    approvalId: string,
+    recipientEmail: string,
+  ) => Promise<{ ok: boolean; error?: string; recipientName?: string }>
   hydrated: boolean
 }
 
@@ -197,6 +213,25 @@ export function InstrumentRequestsProvider({ children }: { children: React.React
     }
   }
 
+  const transferInstrument: InstrumentRequestsContextValue["transferInstrument"] = async (
+    approvalId,
+    recipientEmail,
+  ) => {
+    const res = await transferMyInstrument(approvalId, recipientEmail)
+    if (!res.ok) return { ok: false, error: res.error }
+    // Optimistically reflect the move locally (the sender's copy becomes
+    // "Transferred"), then reconcile against authoritative server state.
+    setInstruments(
+      instruments.map((i) =>
+        i.approvalId === approvalId
+          ? { ...i, status: "transferred", decisionNote: `Transferred to ${res.recipientName}` }
+          : i,
+      ),
+    )
+    void refresh()
+    return { ok: true, recipientName: res.recipientName }
+  }
+
   return (
     <InstrumentRequestsContext.Provider
       value={{
@@ -206,6 +241,7 @@ export function InstrumentRequestsProvider({ children }: { children: React.React
         rejectInstrument,
         cancelInstrument,
         deleteInstrument,
+        transferInstrument,
         hydrated,
       }}
     >
