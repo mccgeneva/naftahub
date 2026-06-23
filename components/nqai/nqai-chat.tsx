@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport, type UIMessage } from "ai"
+import { Streamdown } from "streamdown"
 import { Cpu, ArrowUp, Square, AlertTriangle, Sparkles, User } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -152,7 +153,29 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                 )}
               >
                 {text ? (
-                  <p className="whitespace-pre-wrap text-pretty">{text}</p>
+                  isUser ? (
+                    <p className="whitespace-pre-wrap text-pretty">{text}</p>
+                  ) : (
+                    <Streamdown
+                      className={cn(
+                        "max-w-none text-sm leading-relaxed",
+                        "[&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0",
+                        "[&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5",
+                        "[&_strong]:font-semibold [&_strong]:text-foreground",
+                        "[&_h1]:mb-1.5 [&_h1]:mt-2 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:mb-1.5 [&_h2]:mt-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:mt-2 [&_h3]:text-sm [&_h3]:font-semibold",
+                        "[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2",
+                        "[&_code]:rounded-sm [&_code]:bg-secondary [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em]",
+                        "[&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-sm [&_pre]:border [&_pre]:border-border [&_pre]:bg-secondary/60 [&_pre]:p-2.5",
+                        "[&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_table]:text-xs",
+                        "[&_th]:border [&_th]:border-border [&_th]:bg-secondary/60 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold",
+                        "[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_td]:tabular-nums",
+                        "[&_blockquote]:border-l-2 [&_blockquote]:border-primary/40 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground",
+                        "[&_hr]:my-3 [&_hr]:border-border",
+                      )}
+                    >
+                      {text}
+                    </Streamdown>
+                  )
                 ) : (
                   <span className="inline-flex items-center gap-1 text-muted-foreground">
                     <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.3s]" />

@@ -65,7 +65,7 @@ function ConsoleClock() {
 
 type MobileTab = "markets" | "deals" | "nqai"
 
-export function TradingConsole({ initialDeals }: { initialDeals: SpotDeal[] }) {
+export function TradingConsole({ initialDeals = [] }: { initialDeals?: SpotDeal[] }) {
   const [nqaiDocked, setNqaiDocked] = useState(true)
   const [mobileTab, setMobileTab] = useState<MobileTab>("markets")
 

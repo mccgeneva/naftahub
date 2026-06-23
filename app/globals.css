@@ -1,6 +1,9 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
+/* Let Tailwind scan Streamdown's classes so NQAi's streamed markdown is styled. */
+@source "../node_modules/streamdown/dist/index.js";
+
 @custom-variant dark (&:is(.dark *));
 
 :root {
