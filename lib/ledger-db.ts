@@ -94,6 +94,26 @@ export async function deleteLedgerEntry(userId: string, entryId: string): Promis
   return (rowCount ?? 0) > 0
 }
 
+/**
+ * Hard, database-level non-negativity guard. Recomputes the owner's AVAILABLE
+ * balance per currency directly from the persisted rows and throws if any
+ * currency is overdrawn (beyond a one-cent rounding tolerance). Call this after
+ * posting reservation/debit effects so a negative balance can NEVER be left
+ * committed — the caller is expected to roll back and surface the failure.
+ */
+export async function assertOwnerSolvent(userId: string): Promise<void> {
+  await ensureLedgerTable()
+  const entries = await readLedgerEntries(userId)
+  const balances = availableByCurrency(entries)
+  for (const [currency, balance] of Object.entries(balances)) {
+    if (balance < -0.01) {
+      throw new Error(
+        `INSUFFICIENT_FUNDS: posting would overdraw ${currency} (available ${balance.toFixed(2)})`,
+      )
+    }
+  }
+}
+
 /** Insert or update a single ledger entry for a user. */
 export async function upsertLedgerEntry(userId: string, entry: LedgerEntry): Promise<void> {
   await ensureLedgerTable()
