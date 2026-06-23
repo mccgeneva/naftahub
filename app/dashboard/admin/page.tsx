@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   ShieldCheck,
   Lock,
@@ -80,7 +80,7 @@ import {
   type MonetizationRequest,
 } from "@/lib/monetization-requests-store"
   import { usePPPRequests, type PPPRequest } from "@/lib/ppp-requests-store"
-  import { useProjectFunding, type ProjectFundingRequest } from "@/lib/project-funding-store"
+  import { type ProjectFundingRequest } from "@/lib/project-funding-store"
   import { useFiduciaryRequests, type FiduciaryRequest } from "@/lib/fiduciary-requests-store"
   import { calculateCashCommitment, annualCostOfCapital, AES_EQUITY_COMPONENTS } from "@/lib/aes"
 import { useDOFRequests, type DOFRequest } from "@/lib/dof-requests-store"
@@ -112,7 +112,12 @@ import { UserManager } from "@/components/admin/user-manager"
 import { MembershipManager } from "@/components/admin/membership-manager"
 import { BeneficiaryManager } from "@/components/admin/beneficiary-manager"
 import { PendingApprovals } from "@/components/admin/pending-approvals"
-import { adminCountPending, adminDecideApproval } from "@/app/actions/approvals"
+import {
+  adminCountPending,
+  adminDecideApproval,
+  adminListApprovals,
+  adminUpdateApprovalRecord,
+} from "@/app/actions/approvals"
 import { KIND_LABELS, type ApprovalKind } from "@/lib/approval-kinds"
 import { adminListPendingKyc } from "@/app/actions/beneficiaries"
 import { BalanceManager } from "@/components/admin/balance-manager"
@@ -166,11 +171,36 @@ export default function AdminPage() {
     approveRequest: approvePPP,
     rejectRequest: rejectPPP,
   } = usePPPRequests()
-  const {
-    requests: fundingRequests,
-    approveRequest: approveFunding,
-    rejectRequest: rejectFunding,
-  } = useProjectFunding()
+  // Project funding is reviewed CROSS-CLIENT (every client's applications), so it
+  // is sourced from the DB-backed approvals backbone — NOT the per-user
+  // `useProjectFunding` store, which only ever sees the admin's OWN account data
+  // (the bug where a client's submission never appeared in the admin queue).
+  const [fundingRequests, setFundingRequests] = useState<ProjectFundingRequest[]>([])
+  const loadAdminFunding = useCallback(async () => {
+    try {
+      const res = await adminListApprovals(ADMIN_PASSCODE, { kind: "project_funding" })
+      if (!res.ok) return
+      const mapped = res.requests
+        .map((req): ProjectFundingRequest | null => {
+          const base = req.payload?.record as ProjectFundingRequest | undefined
+          if (!base || typeof base !== "object") return null
+          const status: ProjectFundingRequest["status"] =
+            req.status === "approved" ? "approved" : req.status === "rejected" ? "rejected" : "pending"
+          return {
+            ...base,
+            approvalId: req.id,
+            status,
+            submittedAt: base.submittedAt ?? req.createdAt,
+            decidedAt: req.decidedAt ?? base.decidedAt,
+            decisionNote: req.decisionNote ?? base.decisionNote,
+          }
+        })
+        .filter((r): r is ProjectFundingRequest => r !== null)
+      setFundingRequests(mapped)
+    } catch {
+      // Non-fatal: the funding review queue just stays empty if it can't load.
+    }
+  }, [])
   const {
     requests: fiduciaryRequests,
     approveRequest: approveFiduciary,
@@ -361,6 +391,14 @@ export default function AdminPage() {
       cancelled = true
     }
   }, [unlocked, activeView])
+
+  // Load the cross-client project funding applications whenever the panel
+  // unlocks or the admin navigates (mirrors how `dbPending` counts refresh), so
+  // the AES review queue always reflects every client's latest submissions.
+  useEffect(() => {
+    if (!unlocked) return
+    void loadAdminFunding()
+  }, [unlocked, activeView, loadAdminFunding])
 
   const dbPendingTotal = useMemo(
     () => Object.values(dbPending).reduce((sum, n) => sum + (n || 0), 0),
@@ -568,19 +606,35 @@ export default function AdminPage() {
   const formatFundingAmount = (r: ProjectFundingRequest) =>
     `${r.currency} ${r.facility.toLocaleString()}`
 
-  const confirmApproveFunding = () => {
+  const confirmApproveFunding = async () => {
     if (!approveFundingTarget) return
     const request = approveFundingTarget
+    if (!request.approvalId) {
+      toast.error("Cannot approve project funding", {
+        description: "This application is still syncing. Please refresh and try again.",
+      })
+      return
+    }
     const score = Math.min(10, Math.max(0, Number(approveFundingScore) || 0))
     const commitment = calculateCashCommitment(request.facility, request.totalEquity, score)
-    const approved = approveFunding(request.id, {
+    // Persist the due-diligence risk score + fixed cash commitment onto the
+    // client's record so they follow the application across devices and show in
+    // the client's funding history. Best-effort; the decision is what matters.
+    await adminUpdateApprovalRecord(ADMIN_PASSCODE, request.approvalId, {
       riskScore: score,
       cashCommitment: commitment.applicable,
     })
-    if (!approved) {
-      setApproveFundingTarget(null)
+    // Decide cross-client through the DB. The approved facility capital and the
+    // ongoing 1.8% monthly cost-of-capital are posted onto the CLIENT's ledger by
+    // the client-side FundingCapitalReconciler (deterministic FND-CAP/FND-ROI
+    // ids), so no balance credit is applied here — project_funding is therefore
+    // excluded from the server's CREDIT_KINDS to avoid a double credit.
+    const res = await adminDecideApproval(ADMIN_PASSCODE, request.approvalId, "approved")
+    if (!res.ok) {
+      toast.error("Could not approve project funding", { description: res.error })
       return
     }
+    void loadAdminFunding()
     toast.success("Project funding approved & capital credited", {
       description: `${request.projectName} (${formatFundingAmount(request)}) approved with risk score ${score}/10. Facility credited to the master account; 1.8% p.a. cost of capital accrues monthly.`,
     })
@@ -605,10 +659,26 @@ export default function AdminPage() {
     setApproveFundingScore("5")
   }
 
-  const confirmRejectFunding = () => {
+  const confirmRejectFunding = async () => {
     if (!rejectFundingTarget) return
     const request = rejectFundingTarget
-    rejectFunding(request.id, rejectFundingReason)
+    if (!request.approvalId) {
+      toast.error("Cannot reject project funding", {
+        description: "This application is still syncing. Please refresh and try again.",
+      })
+      return
+    }
+    const res = await adminDecideApproval(
+      ADMIN_PASSCODE,
+      request.approvalId,
+      "rejected",
+      rejectFundingReason.trim() || "Application rejected after review.",
+    )
+    if (!res.ok) {
+      toast.error("Could not reject project funding", { description: res.error })
+      return
+    }
+    void loadAdminFunding()
     toast.success("Project funding rejected", {
       description: `The "${request.projectName}" application ${request.id} (${formatFundingAmount(request)}) was rejected.`,
     })
