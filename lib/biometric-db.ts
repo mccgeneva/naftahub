@@ -7,6 +7,9 @@
 import "server-only"
 import { query } from "@/lib/db"
 import { FACE_MAX_FAILS } from "@/lib/biometric"
+import type { FaceState } from "@/lib/biometric-types"
+
+export type { FaceState }
 
 let ensured = false
 async function ensureColumns(): Promise<void> {
@@ -18,13 +21,6 @@ async function ensureColumns(): Promise<void> {
   await query(`ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS face_locked boolean NOT NULL DEFAULT false`)
   await query(`ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS face_enrolled_at timestamptz`)
   ensured = true
-}
-
-export interface FaceState {
-  enrolled: boolean
-  locked: boolean
-  failCount: number
-  enrolledAt: string | null
 }
 
 /** Lightweight enrollment status for UI and login gating (no descriptor data). */

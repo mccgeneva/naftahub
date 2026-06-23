@@ -6,17 +6,11 @@ import {
   isValidDescriptor,
   DESCRIPTOR_LENGTH,
 } from "@/lib/biometric"
-import {
-  getFaceState,
-  saveEncryptedDescriptor,
-  clearEnrollment,
-  type FaceState,
-} from "@/lib/biometric-db"
+import { getFaceState, saveEncryptedDescriptor, clearEnrollment } from "@/lib/biometric-db"
+import type { FaceState } from "@/lib/biometric-types"
 import { getDynamicUserById } from "@/lib/admin-users-db"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { logActivity } from "@/app/actions/log-activity"
-
-export type { FaceState }
 
 /** Current user's own enrollment status (for the security/profile UI). */
 export async function getMyFaceState(): Promise<FaceState> {
