@@ -4,10 +4,11 @@ import { useEffect, useRef, useState } from "react"
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport, type UIMessage } from "ai"
 import { Streamdown } from "streamdown"
-import { Cpu, ArrowUp, Square, AlertTriangle, Sparkles, User } from "lucide-react"
+import { Cpu, ArrowUp, Square, AlertTriangle, Sparkles, User, RotateCcw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { NQAI_WELCOME, NQAI_TAGLINE, NQAI_SUGGESTIONS } from "@/lib/nqai"
+import { bootstrapNqai, resetNqaiConversation } from "@/app/actions/nqai"
 
 /** Extract the plain-text content from a UIMessage's parts array. */
 function messageText(message: UIMessage): string {
@@ -34,19 +35,53 @@ function NqaiAvatar({ className }: { className?: string }) {
 
 export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
   const [input, setInput] = useState("")
+  const [greeting, setGreeting] = useState("")
+  const [bootstrapped, setBootstrapped] = useState(false)
+  const [resetting, setResetting] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const { messages, sendMessage, status, error, stop } = useChat({
+  const { messages, sendMessage, setMessages, status, error, stop } = useChat({
     transport: new DefaultChatTransport({ api: "/api/nqai" }),
   })
 
   const busy = status === "submitted" || status === "streaming"
   const hasConversation = messages.length > 0
 
+  // On mount, reload this user's prior conversation (session continuity) and
+  // fetch their personalized greeting. Runs once.
+  useEffect(() => {
+    let active = true
+    bootstrapNqai()
+      .then((data) => {
+        if (!active) return
+        if (data.messages?.length) setMessages(data.messages)
+        if (data.greeting) setGreeting(data.greeting)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setBootstrapped(true)
+      })
+    return () => {
+      active = false
+    }
+  }, [setMessages])
+
   // Auto-scroll to the newest content as it streams in.
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
   }, [messages, busy])
+
+  const startNewConversation = async () => {
+    if (busy || resetting) return
+    setResetting(true)
+    try {
+      await resetNqaiConversation()
+      setMessages([])
+      setInput("")
+    } finally {
+      setResetting(false)
+    }
+  }
 
   const submit = (text: string) => {
     const value = text.trim()
@@ -76,16 +111,32 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
             <p className="text-[11px] text-muted-foreground">{NQAI_TAGLINE}</p>
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
-          <span
-            className={cn(
-              "h-2 w-2 rounded-full",
-              error ? "bg-destructive" : busy ? "bg-warning animate-pulse" : "bg-success animate-pulse",
-            )}
-          />
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            {error ? "Fault" : busy ? "Reasoning" : "Online"}
-          </span>
+        <div className="flex items-center gap-2">
+          {hasConversation && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={startNewConversation}
+              disabled={busy || resetting}
+              className="h-7 gap-1.5 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+              aria-label="Start a new conversation"
+            >
+              <RotateCcw className={cn("h-3.5 w-3.5", resetting && "animate-spin")} />
+              <span className="hidden sm:inline">New</span>
+            </Button>
+          )}
+          <div className="flex items-center gap-1.5">
+            <span
+              className={cn(
+                "h-2 w-2 rounded-full",
+                error ? "bg-destructive" : busy ? "bg-warning animate-pulse" : "bg-success animate-pulse",
+              )}
+            />
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {error ? "Fault" : busy ? "Reasoning" : "Online"}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -112,8 +163,19 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
               </p>
             </div>
 
-            {/* Suggested prompts (hidden once a conversation starts) */}
-            {!hasConversation && (
+            {/* Personalized briefing — generated server-side from the signed-in
+                client's own private account context. */}
+            {greeting && (
+              <div className="mt-3 flex gap-2 rounded-sm border border-primary/20 bg-primary/5 p-3 text-sm leading-relaxed text-foreground/90">
+                <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                <p className="text-pretty">{greeting}</p>
+              </div>
+            )}
+
+            {/* Suggested prompts (hidden once a conversation starts, and held
+                back until bootstrap finishes so returning users don't see a
+                flash of chips before their history loads) */}
+            {bootstrapped && !hasConversation && (
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 {NQAI_SUGGESTIONS.map((s) => (
                   <button

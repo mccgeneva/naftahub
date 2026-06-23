@@ -1,6 +1,9 @@
 import { anthropic } from "@ai-sdk/anthropic"
-import { convertToModelMessages, streamText, stepCountIs, type UIMessage } from "ai"
+import { convertToModelMessages, generateText, streamText, stepCountIs, type UIMessage } from "ai"
 import { buildNqaiContext } from "@/lib/nqai-context"
+import { resolveCurrentSession } from "@/lib/session-user"
+import { getNqaiUserSnapshot, renderUserContextBlock } from "@/lib/nqai-user-context"
+import { loadNqaiChat, saveNqaiChat } from "@/lib/nqai-chat-db"
 
 // NQAi runs live through the Anthropic Claude account configured via the
 // ANTHROPIC_API_KEY secret (forinoht@gmail.com). The @ai-sdk/anthropic provider
@@ -12,6 +15,12 @@ export const maxDuration = 60
 
 // Latest Sonnet generation available on the linked account.
 const NQAI_MODEL = "claude-sonnet-4-6"
+
+// How many of the most recent messages are replayed verbatim to the model.
+// Anything older is folded into the rolling memory summary to bound token cost.
+const RECENT_WINDOW = 16
+// Regenerate the rolling memory once the transcript grows beyond this.
+const SUMMARY_THRESHOLD = RECENT_WINDOW + 6
 
 const NQAI_SYSTEM_PROMPT = `You are NQAi — Neural Quantum Artificial Intelligence.
 
@@ -29,7 +38,39 @@ DOMAIN & PURPOSE:
 CONDUCT:
 - Be accurate and measured. When you give indicative prices or market levels, clearly label them as indicative and advise confirming firm pricing with the desk before execution.
 - Never give unlawful sanctions-evasion guidance. Respect compliance and OFAC screening.
-- You are professional, confident, and efficient — a Bloomberg-terminal-grade co-pilot.`
+- You are professional, confident, and efficient — a Bloomberg-terminal-grade co-pilot.
+- You have access to the signed-in client's own private account context and your shared memory of prior sessions. Use them to personalize proactively, but never disclose another client's information.`
+
+/** Fold older turns into a compact rolling memory (best-effort). */
+async function regenerateSummary(priorSummary: string, olderMessages: UIMessage[]): Promise<string | null> {
+  if (!olderMessages.length) return null
+  try {
+    const transcript = olderMessages
+      .map((m) => {
+        const text = (m.parts ?? [])
+          .filter((p): p is { type: "text"; text: string } => p.type === "text")
+          .map((p) => p.text)
+          .join(" ")
+          .trim()
+        return text ? `${m.role.toUpperCase()}: ${text}` : ""
+      })
+      .filter(Boolean)
+      .join("\n")
+    if (!transcript) return null
+
+    const { text } = await generateText({
+      model: anthropic(NQAI_MODEL),
+      system:
+        "You maintain a concise running memory of an ongoing NQAi client conversation. Merge the prior memory with the new exchanges into a single compact briefing (max ~180 words). Capture durable facts, the client's goals, open requests, instruments discussed, and stated preferences. Omit pleasantries. Write in terse note form.",
+      prompt: `PRIOR MEMORY:\n${priorSummary || "(none)"}\n\nNEW EXCHANGES:\n${transcript}\n\nUpdated memory:`,
+      temperature: 0.3,
+    })
+    return text.trim() || null
+  } catch (err) {
+    console.log("[v0] NQAi summary failed:", err instanceof Error ? err.message : String(err))
+    return null
+  }
+}
 
 export async function POST(req: Request) {
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -52,27 +93,67 @@ export async function POST(req: Request) {
     })
   }
 
-  // Inject a real-time snapshot of the platform (live benchmark prices + the
-  // current spot-deal board) so NQAi can reason over actual figures. Best-effort:
-  // a failure here degrades to the static prompt rather than breaking the chat.
-  let liveContext = ""
-  try {
-    liveContext = await buildNqaiContext()
-  } catch (err) {
-    console.log("[v0] NQAi context build failed:", err instanceof Error ? err.message : String(err))
-  }
+  // Identify the signed-in client (server-side, authoritative).
+  const session = await resolveCurrentSession()
+  const userId = session?.id ?? ""
 
-  const system = liveContext ? `${NQAI_SYSTEM_PROMPT}\n\n---\n\n${liveContext}` : NQAI_SYSTEM_PROMPT
+  // Build context in parallel: live platform snapshot, the client's private
+  // account context, and their stored rolling memory. All best-effort.
+  const [liveContext, userSnapshot, stored] = await Promise.all([
+    buildNqaiContext().catch((err) => {
+      console.log("[v0] NQAi platform context failed:", err instanceof Error ? err.message : String(err))
+      return ""
+    }),
+    userId
+      ? getNqaiUserSnapshot().catch((err) => {
+          console.log("[v0] NQAi user context failed:", err instanceof Error ? err.message : String(err))
+          return null
+        })
+      : Promise.resolve(null),
+    userId ? loadNqaiChat(userId).catch(() => ({ messages: [], summary: "", updatedAt: null })) : Promise.resolve({ messages: [], summary: "", updatedAt: null }),
+  ])
+
+  const userContextBlock = renderUserContextBlock(userSnapshot)
+  const memory = stored.summary
+
+  const systemParts = [NQAI_SYSTEM_PROMPT]
+  if (userContextBlock) systemParts.push(userContextBlock)
+  if (memory) systemParts.push(`## LONG-TERM MEMORY (your notes from prior sessions with this client)\n${memory}`)
+  if (liveContext) systemParts.push(liveContext)
+  const system = systemParts.join("\n\n---\n\n")
+
+  // Bound replayed history: only the recent window goes to the model verbatim;
+  // older context is represented by the rolling memory summary above.
+  const recentMessages = messages.length > RECENT_WINDOW ? messages.slice(-RECENT_WINDOW) : messages
 
   const result = streamText({
     model: anthropic(NQAI_MODEL),
     system,
-    messages: await convertToModelMessages(messages),
+    messages: await convertToModelMessages(recentMessages),
     stopWhen: stepCountIs(4),
     temperature: 0.6,
   })
 
   return result.toUIMessageStreamResponse({
+    originalMessages: messages,
+    onFinish: async ({ messages: finalMessages }) => {
+      if (!userId) return
+      try {
+        // Decide whether to refresh the rolling memory: fold everything except
+        // the recent window into the summary.
+        if (finalMessages.length > SUMMARY_THRESHOLD) {
+          const older = finalMessages.slice(0, -RECENT_WINDOW)
+          const newSummary = await regenerateSummary(memory, older)
+          if (newSummary) {
+            await saveNqaiChat(userId, finalMessages, newSummary)
+            return
+          }
+        }
+        await saveNqaiChat(userId, finalMessages)
+      } catch (err) {
+        console.log("[v0] NQAi persist failed:", err instanceof Error ? err.message : String(err))
+      }
+    },
     onError: (error) => {
       console.log("[v0] NQAi stream error:", error instanceof Error ? error.message : String(error))
       return "NQAi encountered a transient fault while reasoning. Please try again."
