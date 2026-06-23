@@ -18,7 +18,8 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { FaceCapture } from "@/components/auth/face-capture"
-import { getMyFaceState, enrollMyFace, disableMyFace, type FaceState } from "@/app/actions/biometric"
+import { getMyFaceState, enrollMyFace, disableMyFace } from "@/app/actions/biometric"
+import type { FaceState } from "@/lib/biometric-types"
 
 const ENROLL_SAMPLES = 3
 
@@ -30,7 +31,12 @@ export function FaceIdManager() {
   const [error, setError] = useState("")
   const [pending, startTransition] = useTransition()
 
-  const refresh = () => getMyFaceState().then(setState)
+  const refresh = () =>
+    getMyFaceState()
+      .then(setState)
+      // Never let a transient failure leave the button permanently disabled —
+      // fall back to a "not enrolled" state so the user can still try to enroll.
+      .catch(() => setState({ enrolled: false, locked: false, failCount: 0, enrolledAt: null }))
   useEffect(() => {
     void refresh()
   }, [])
