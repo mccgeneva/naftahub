@@ -112,6 +112,56 @@ function complianceStub(imo: string, compliance: VesselCompliance): Vessel {
   }
 }
 
+const PUBLIC_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+
+/**
+ * Free, token-free enrichment from public vessel pages. Reads the public
+ * VesselFinder details page and parses its meta description — which exposes the
+ * vessel name, type, build year and flag for any valid IMO with no API key.
+ * Returns a partial Vessel, or null when the vessel can't be resolved.
+ *
+ * Note: deadweight/capacity is not published on the public page, so it stays 0
+ * for the admin to complete. Never throws.
+ */
+async function publicLookup(imo: string): Promise<Partial<Vessel> | null> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 8000)
+    const res = await fetch(`https://www.vesselfinder.com/vessels/details/${imo}`, {
+      headers: { "User-Agent": PUBLIC_UA, Accept: "text/html" },
+      cache: "no-store",
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer))
+    if (!res.ok) return null
+    const html = await res.text()
+    const desc = (html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) || [])[1] || ""
+
+    // "Vessel NAME (IMO x, MMSI y) is a TYPE built in YEAR and currently sailing under the flag of FLAG."
+    const m = desc.match(
+      /^Vessel\s+(.+?)\s+\(IMO\s+\d+(?:,\s*MMSI\s+\d+)?\)\s+is a\s+(.+?)(?:\s+built in\s+(\d{4}))?(?:\s+and currently sailing under the flag of\s+([^.]+))?\.?$/i,
+    )
+    if (!m) return null
+    const name = m[1].trim()
+    const typeRaw = m[2].trim()
+    const builtYear = m[3] ? num(m[3]) : undefined
+    const flag = (m[4] || "").trim() || undefined
+    const type = classifyType(typeRaw)
+    if (!name || /^imo\s/i.test(name)) return null
+    return {
+      name,
+      type,
+      vesselClass: typeRaw || undefined,
+      capacityUnit: type === "gas" ? "CBM" : "DWT",
+      flag,
+      builtYear,
+    }
+  } catch (err) {
+    console.log("[v0] publicLookup failed:", (err as Error).message)
+    return null
+  }
+}
+
 function num(v: unknown): number {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
@@ -225,8 +275,24 @@ export async function fetchVesselByImo(
   const provider = resolveProvider()
 
   if (!provider) {
-    // Token-free path: no master-data subscription, so we return a stub the
-    // admin can complete, already stamped with the compliance verdict.
+    // Token-free path: enrich from free public vessel pages (name, type, flag,
+    // build year), falling back to a bare compliance-only stub. Either way the
+    // record is stamped with the compliance verdict.
+    const enriched = await publicLookup(imo)
+    if (enriched) {
+      const base = complianceStub(imo, compliance)
+      return {
+        vessel: {
+          ...base,
+          ...enriched,
+          source: "compliance",
+          compliance,
+          updatedAt: new Date().toISOString(),
+        },
+        providerLabel: "Public registry + OFAC screening",
+        compliance,
+      }
+    }
     return {
       vessel: complianceStub(imo, compliance),
       providerLabel: "OFAC compliance screening",
