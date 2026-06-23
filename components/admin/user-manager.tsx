@@ -12,6 +12,7 @@ import {
   Trash2,
   ShieldCheck,
   ShieldOff,
+  ScanFace,
   Ban,
   Search,
   FileUp,
@@ -55,6 +56,7 @@ import {
   type AdminUserView,
   type SelectableClient,
 } from "@/app/actions/admin-users"
+import { adminResetUserFace } from "@/app/actions/biometric"
 import type { UserStatus, AccountRelationship } from "@/lib/profile-types"
 import { RELATIONSHIP_OPTIONS, relationshipLabel, relationshipCode } from "@/lib/account-hierarchy"
 import { upload } from "@vercel/blob/client"
@@ -136,6 +138,10 @@ export function UserManager() {
   // Delete confirm
   const [deleteTarget, setDeleteTarget] = useState<AdminUserView | null>(null)
   const [deleting, setDeleting] = useState(false)
+
+  // Face ID reset confirm
+  const [faceResetTarget, setFaceResetTarget] = useState<AdminUserView | null>(null)
+  const [faceResetting, setFaceResetting] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -476,6 +482,30 @@ export function UserManager() {
     })
   }
 
+  const handleFaceReset = async () => {
+    const u = faceResetTarget
+    if (!u) return
+    setFaceResetting(true)
+    const res = await adminResetUserFace(ADMIN_PASSCODE, u.id, "Administrator")
+    setFaceResetting(false)
+    if (!res.ok) {
+      toast.error(res.error || "Could not reset Face ID.")
+      return
+    }
+    setFaceResetTarget(null)
+    toast.success("Face ID reset", {
+      description: `${u.fullName} can sign in with their password and enroll a new face.`,
+    })
+    logActivity({
+      action: `Administrator reset Face ID for ${u.fullName}`,
+      category: "Administration / User Management",
+      details: {
+        summary: `Administrator cleared the biometric (Face ID) enrollment for ${u.fullName} (${u.company}).`,
+        account: `${u.fullName} — ${u.email}`,
+      },
+    })
+  }
+
   const copy = async (text: string, which: "email" | "password" | "both") => {
     try {
       await navigator.clipboard.writeText(text)
@@ -569,6 +599,14 @@ export function UserManager() {
                   <div className="flex flex-wrap items-center gap-1.5">
                     <Button variant="outline" size="sm" onClick={() => openReset(u)}>
                       <KeyRound className="mr-1.5 h-3.5 w-3.5" /> Reset
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setFaceResetTarget(u)}
+                      className="text-primary hover:text-primary"
+                    >
+                      <ScanFace className="mr-1.5 h-3.5 w-3.5" /> Reset Face ID
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => openEdit(u)}>
                       <Pencil className="mr-1.5 h-3.5 w-3.5" /> Edit
@@ -1098,6 +1136,34 @@ export function UserManager() {
               Copy both
             </Button>
             <Button onClick={() => setReveal(null)}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Face ID reset confirm dialog */}
+      <Dialog open={!!faceResetTarget} onOpenChange={(o) => !o && setFaceResetTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reset Face ID?</DialogTitle>
+            <DialogDescription>
+              This clears the biometric (Face ID) enrollment for{" "}
+              <span className="font-medium text-foreground">{faceResetTarget?.fullName}</span> (
+              {faceResetTarget?.email}). Use this when a client is locked out of face login. They will
+              sign in with their password only and can enroll a new face afterwards.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFaceResetTarget(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleFaceReset} disabled={faceResetting}>
+              {faceResetting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <ScanFace className="mr-2 h-4 w-4" />
+              )}
+              Reset Face ID
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -1,12 +1,13 @@
 "use client"
 
-import { useActionState } from "react"
+import { useActionState, useState } from "react"
 import { useFormStatus } from "react-dom"
-import { Lock, Mail, ShieldCheck, AlertCircle } from "lucide-react"
-import { login, type LoginState } from "@/app/actions/auth"
+import { Lock, Mail, ShieldCheck, AlertCircle, ScanFace, ArrowLeft } from "lucide-react"
+import { login, completeFaceLogin, type LoginState } from "@/app/actions/auth"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { FaceCapture } from "@/components/auth/face-capture"
 
 function SubmitButton() {
   const { pending } = useFormStatus()
@@ -17,22 +18,103 @@ function SubmitButton() {
   )
 }
 
-export function LoginForm() {
-  const [state, formAction] = useActionState<LoginState, FormData>(login, {})
-
+function markLoginHandoff() {
   // Mark that authentication originated from this browser tab. The SessionGuard
   // on the dashboard uses this one-time flag to tell a genuine login apart from
   // a tab that was closed and later reopened with a still-valid cookie.
-  function handleSubmit() {
-    try {
-      localStorage.setItem("mcc_login_handoff", "1")
-    } catch {
-      // Ignore storage access errors (e.g. privacy mode).
+  try {
+    localStorage.setItem("mcc_login_handoff", "1")
+  } catch {
+    // Ignore storage access errors (e.g. privacy mode).
+  }
+}
+
+/**
+ * Second step shown only after the password is verified for a user who has
+ * enrolled Face ID. Captures a live descriptor and calls `completeFaceLogin`,
+ * which redirects on a successful strict match.
+ */
+function FaceStep({
+  challenge,
+  name,
+  onBack,
+}: {
+  challenge: string
+  name?: string
+  onBack: () => void
+}) {
+  const [error, setError] = useState("")
+  const [activeChallenge, setActiveChallenge] = useState(challenge)
+
+  const handleCapture = async (descriptor: number[]) => {
+    setError("")
+    // Set the genuine-login handoff before the (possible) server redirect so the
+    // SessionGuard treats a face-verified login the same as a password login.
+    markLoginHandoff()
+    const res = await completeFaceLogin(activeChallenge, descriptor)
+    // On success the action redirects and we never get here. A returned state
+    // means the scan failed or the challenge needs to be retried.
+    if (res?.error) {
+      setError(res.error)
+      if (res.challenge) setActiveChallenge(res.challenge)
+      // If the challenge expired / face no longer enrolled, send them back to password.
+      if (!res.faceRequired) setTimeout(onBack, 2200)
+      return { ok: false, error: res.error }
     }
+    return { ok: true }
   }
 
   return (
-    <form action={formAction} onSubmit={handleSubmit} className="space-y-5">
+    <div className="space-y-5">
+      <div className="text-center space-y-1">
+        <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
+          <ScanFace className="h-5 w-5 text-primary" />
+        </div>
+        <h2 className="text-base font-semibold text-foreground">Face verification</h2>
+        <p className="text-sm text-muted-foreground text-pretty">
+          {name ? `Welcome back, ${name}. ` : ""}Confirm it&apos;s you with a quick face scan.
+        </p>
+      </div>
+
+      <FaceCapture onCapture={handleCapture} actionLabel="Verify my face" autoStart />
+
+      {error && (
+        <div
+          role="alert"
+          className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
+        >
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <Button type="button" variant="ghost" onClick={onBack} className="w-full gap-2">
+        <ArrowLeft className="h-4 w-4" />
+        Use a different account
+      </Button>
+    </div>
+  )
+}
+
+export function LoginForm() {
+  const [state, formAction] = useActionState<LoginState, FormData>(login, {})
+  // Local flag lets the user back out of the face step to the password form.
+  const [backToPassword, setBackToPassword] = useState(false)
+
+  const showFaceStep = state?.faceRequired && state.challenge && !backToPassword
+
+  if (showFaceStep) {
+    return (
+      <FaceStep
+        challenge={state.challenge!}
+        name={state.name}
+        onBack={() => setBackToPassword(true)}
+      />
+    )
+  }
+
+  return (
+    <form action={formAction} onSubmit={markLoginHandoff} className="space-y-5">
       <div className="space-y-2">
         <Label htmlFor="email">Email address</Label>
         <div className="relative">
