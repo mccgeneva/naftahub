@@ -127,7 +127,8 @@ import { InstrumentIssuer } from "@/components/admin/instrument-issuer"
 import { CardManager } from "@/components/admin/card-manager"
 import { CertificateManager } from "@/components/admin/certificate-manager"
 import { BankekaBroadcastManager } from "@/components/admin/bankeka-broadcast-manager"
-import { SpotDealManager } from "@/components/admin/spot-deal-manager"
+ import { SpotDealManager } from "@/components/admin/spot-deal-manager"
+import { ProjectFinanceAdmin } from "@/components/admin/project-finance-admin"
 import { toast } from "sonner"
 
 const MASTER_ACCOUNT_CURRENCY = "EUR"
@@ -2705,6 +2706,9 @@ export default function AdminPage() {
       {/* Project Funding section */}
       {activeView === "funding" && (
       <div className="space-y-6">
+      {/* Admin-originated project finance + treasury financing */}
+      <ProjectFinanceAdmin onDone={() => void loadAdminFunding()} />
+
       {/* Pending Project Funding applications */}
       <Card id="section-funding" className="bg-card border-border">
         <CardHeader>
