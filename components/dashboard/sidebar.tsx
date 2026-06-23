@@ -58,6 +58,14 @@ type NavGroup = {
 
 const navGroups: NavGroup[] = [
   {
+    label: "Terminal",
+    icon: Cpu,
+    items: [
+      { title: "NQAi Co-Pilot", href: "/dashboard/nqai", icon: Cpu, badge: "AI" },
+      { title: "Trading Console", href: "/dashboard/console", icon: Network, badge: "Live" },
+    ],
+  },
+  {
     label: "Banking",
     icon: Building2,
     items: [

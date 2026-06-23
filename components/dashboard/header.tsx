@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import useSWR from "swr"
-import { Bell, User, LogOut, Settings, HelpCircle, Menu, BookOpen, ShieldCheck } from "lucide-react"
+import { Bell, User, LogOut, Settings, HelpCircle, Menu, BookOpen, ShieldCheck, Cpu } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { GlobalSearch } from "./global-search"
 import {
@@ -150,6 +150,19 @@ export function DashboardHeader() {
 
       {/* Actions */}
       <div className="flex items-center gap-2">
+        {/* NQAi launcher — always visible, prominent entry to the AI co-pilot */}
+        <Button
+          asChild
+          size="sm"
+          className="group relative h-9 gap-1.5 overflow-hidden bg-primary px-3 font-semibold text-primary-foreground shadow-[0_0_0_1px_var(--color-primary)] hover:bg-primary/90"
+        >
+          <Link href="/dashboard/nqai" aria-label="Open NQAi, the Neural Quantum AI co-pilot">
+            <Cpu className="h-4 w-4" />
+            <span className="hidden sm:inline">NQAi</span>
+            <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
+          </Link>
+        </Button>
+
         {/* Live UTC clock + market status */}
         <TerminalClock />
 
