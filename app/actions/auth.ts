@@ -39,6 +39,17 @@ export type LoginState = {
   challenge?: string
   /** Display name for the face-scan UI. */
   name?: string
+  /**
+   * Set by `completeFaceLogin` after a successful match. The session cookies
+   * are already established server-side; the client performs the navigation.
+   * We do NOT `redirect()` inside that action because it is invoked imperatively
+   * from the face-capture handler, where a thrown `NEXT_REDIRECT` would be
+   * swallowed by the surrounding try/catch and surfaced as a false "something
+   * went wrong" error — even though login actually succeeded.
+   */
+  success?: boolean
+  /** Where the client should navigate to after a successful face login. */
+  redirectTo?: string
 }
 
 /**
@@ -98,13 +109,15 @@ async function findAuthMatchByEmail(email: string): Promise<AuthMatch | undefine
   return undefined
 }
 
+/** Path the client lands on immediately after a genuine login. */
+const POST_LOGIN_PATH = "/dashboard?fresh=1"
+
 /**
- * Establish the authenticated session cookies for a user and redirect to the
- * dashboard. Shared by the password-only path and the face-verified path so
- * both produce an identical, fully-valid session. NOTE: this calls `redirect()`
- * and never returns.
+ * Establish the authenticated session cookies for a user. Shared by the
+ * password-only path and the face-verified path so both produce an identical,
+ * fully-valid session. Does NOT redirect — callers decide how to navigate.
  */
-async function establishSessionAndRedirect(matchedUser: AuthMatch, email: string): Promise<never> {
+async function establishSession(matchedUser: AuthMatch, email: string): Promise<void> {
   const cookieStore = await cookies()
   // The session cookie carries this user's unique token (the security
   // boundary), and a separate readable cookie records which user it is so the
@@ -128,8 +141,17 @@ async function establishSessionAndRedirect(matchedUser: AuthMatch, email: string
     user: `${matchedUser.fullName} (${matchedUser.company})`,
     details: { email, result: "granted" },
   })
+}
 
-  redirect("/dashboard?fresh=1")
+/**
+ * Establish the session and `redirect()`. Safe ONLY for callers invoked through
+ * a form action / `useActionState` (e.g. the password-only path), where a
+ * thrown `NEXT_REDIRECT` is handled by the framework rather than caught by app
+ * code. NOTE: this never returns.
+ */
+async function establishSessionAndRedirect(matchedUser: AuthMatch, email: string): Promise<never> {
+  await establishSession(matchedUser, email)
+  redirect(POST_LOGIN_PATH)
 }
 
 async function logFailedLogin(email: string, reason: string): Promise<void> {
@@ -249,9 +271,12 @@ export async function completeFaceLogin(
     }
   }
 
-  // Match. Clear the fail counter and start the session.
+  // Match. Clear the fail counter and start the session. We do NOT redirect
+  // here (see LoginState.success): the cookies are set server-side and the
+  // client navigates, so a thrown NEXT_REDIRECT can't be mistaken for a scan
+  // failure.
   await resetFailCount(uid)
-  return establishSessionAndRedirect(
+  await establishSession(
     {
       id: rec.id,
       password: rec.password,
@@ -262,6 +287,7 @@ export async function completeFaceLogin(
     },
     rec.email,
   )
+  return { success: true, redirectTo: POST_LOGIN_PATH }
 }
 
 export async function logout() {
