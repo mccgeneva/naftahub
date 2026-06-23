@@ -1,7 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { FileText, ExternalLink, Clock, CheckCircle2, AlertCircle } from "lucide-react"
+import { FileText, ExternalLink, Clock, CheckCircle2, AlertCircle, Ban, ArrowRight, XCircle } from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -27,11 +28,19 @@ const typeColors = {
   BG: "bg-orange-500/10 text-orange-400 border-orange-500/20",
 }
 
-const statusIcons = {
-  active: CheckCircle2,
-  pending: Clock,
-  expired: AlertCircle,
+// Every instrument status the store can produce must be represented here so we
+// never render an undefined icon component (which crashes the whole dashboard).
+const statusConfig: Record<string, { icon: LucideIcon; color: string }> = {
+  active: { icon: CheckCircle2, color: "text-green-500" },
+  pending: { icon: Clock, color: "text-yellow-500" },
+  expired: { icon: AlertCircle, color: "text-red-500" },
+  rejected: { icon: XCircle, color: "text-red-500" },
+  cancelled: { icon: Ban, color: "text-muted-foreground" },
+  transferred: { icon: ArrowRight, color: "text-muted-foreground" },
 }
+
+// Fallback for any unexpected/unknown status — keeps the card rendering safely.
+const fallbackStatus = { icon: AlertCircle, color: "text-muted-foreground" }
 
 export function Instruments() {
   const { instruments } = useInstrumentRequests()
@@ -65,8 +74,10 @@ export function Instruments() {
         ) : (
           <div className="space-y-4">
           {instruments.map((instrument) => {
-            const StatusIcon = statusIcons[instrument.status as keyof typeof statusIcons]
-            const progressPercent = Math.min(100, (instrument.daysRemaining / 365) * 100)
+            const status = statusConfig[instrument.status] ?? fallbackStatus
+            const StatusIcon = status.icon
+            const daysRemaining = Number.isFinite(instrument.daysRemaining) ? instrument.daysRemaining : 0
+            const progressPercent = Math.min(100, Math.max(0, (daysRemaining / 365) * 100))
 
             return (
               <Link
@@ -105,26 +116,8 @@ export function Instruments() {
                       {formatFaceValue(instrument.faceValue, instrument.currency)}
                     </p>
                     <div className="flex items-center justify-end gap-1">
-                      <StatusIcon
-                        className={cn(
-                          "h-3 w-3",
-                          instrument.status === "active"
-                            ? "text-green-500"
-                            : instrument.status === "pending"
-                            ? "text-yellow-500"
-                            : "text-red-500"
-                        )}
-                      />
-                      <span
-                        className={cn(
-                          "text-xs capitalize",
-                          instrument.status === "active"
-                            ? "text-green-500"
-                            : instrument.status === "pending"
-                            ? "text-yellow-500"
-                            : "text-red-500"
-                        )}
-                      >
+                      <StatusIcon className={cn("h-3 w-3", status.color)} />
+                      <span className={cn("text-xs capitalize", status.color)}>
                         {instrument.status}
                       </span>
                     </div>
@@ -167,7 +160,7 @@ export function Instruments() {
                       Time remaining
                     </span>
                     <span className="text-[10px] text-muted-foreground">
-                      {instrument.daysRemaining} days
+                      {daysRemaining} days
                     </span>
                   </div>
                   <Progress value={progressPercent} className="h-1" />
