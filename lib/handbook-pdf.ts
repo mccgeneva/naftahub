@@ -195,7 +195,7 @@ export function generateHandbookPdf(): GeneratedPdf {
   doc.setTextColor(...BRAND.gold)
   doc.setFont("helvetica", "bold")
   doc.setFontSize(10)
-  doc.text(HANDBOOK_META.version, margin, pageHeight - 124)
+  doc.text(`${HANDBOOK_META.version}  ·  ${HANDBOOK_META.lastUpdated}`, margin, pageHeight - 124)
   doc.setTextColor(190, 192, 196)
   doc.setFont("helvetica", "normal")
   doc.setFontSize(9)

@@ -45,6 +45,7 @@ export default function HandbookPage() {
             <p className="mt-1 text-sm text-muted-foreground text-pretty">
               {HANDBOOK_META.subtitle}
             </p>
+            <p className="mt-0.5 text-xs text-muted-foreground">{HANDBOOK_META.lastUpdated}</p>
           </div>
         </div>
       </div>
