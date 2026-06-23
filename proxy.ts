@@ -42,6 +42,16 @@ export async function proxy(request: NextRequest) {
   const validity = evaluateSessionMeta(meta, IDLE_MS, now)
   const isAuthed = !!token && validity === "valid"
 
+  // Is this a mutating request (Server Action / form POST), as opposed to a
+  // GET navigation or RSC fetch? Server Actions — most importantly `logout()`
+  // and `expireSession()` — manage their OWN session cookies (they clear them
+  // and redirect). The proxy must NEVER re-issue/slide cookies on these
+  // requests: doing so emits a `Set-Cookie` that races with, and overwrites,
+  // the action's cookie-clear, RESURRECTING the just-cleared session. That is
+  // exactly what made "logout → refresh → logged back in" possible. We still
+  // enforce auth on these requests, but we never touch their cookies.
+  const isActionRequest = request.method !== "GET" || request.headers.has("next-action")
+
   if (pathname.startsWith("/dashboard")) {
     if (!isAuthed) {
       const reason = !token ? "tab-close" : validity === "idle" ? "inactivity" : "expiry"
@@ -51,9 +61,20 @@ export async function proxy(request: NextRequest) {
       return res
     }
 
-    // Valid session → slide the idle window forward (keep the absolute exp/iat
-    // fixed) so active users are never interrupted, while inactivity still ends
-    // the session. Re-issue all session cookies with a refreshed maxAge.
+    // For mutating requests, pass through WITHOUT re-issuing any session cookie
+    // so the action stays authoritative over cookie state (see above).
+    if (isActionRequest) {
+      const res = NextResponse.next()
+      res.headers.set("Cache-Control", "private, no-store, no-cache, must-revalidate, max-age=0")
+      res.headers.set("Pragma", "no-cache")
+      res.headers.set("Vary", "Cookie")
+      return res
+    }
+
+    // Valid GET navigation → slide the idle window forward (keep the absolute
+    // exp/iat fixed) so active users are never interrupted, while inactivity
+    // still ends the session. Re-issue all session cookies with a refreshed
+    // maxAge.
     const res = NextResponse.next()
     const slid = await signSessionMeta({ iat: meta!.iat, exp: meta!.exp, seen: now })
     res.cookies.set(SESSION_META_COOKIE, slid, sessionMetaCookieOptions)
