@@ -19,7 +19,8 @@ export interface HandbookSection {
 export const HANDBOOK_META = {
   title: "Client Handbook",
   subtitle: "MCC Banking & Trade Platform — Complete User Guide",
-  version: "Edition 2026.2",
+  version: "Edition 2026.3",
+  lastUpdated: "Last updated: June 2026",
   brand: "MCC Capital",
   legalEntity: "MCC Holding SA",
   address: "Rue du Rhône 14, 1204 Geneva, Switzerland",
@@ -81,27 +82,107 @@ export const HANDBOOK_SECTIONS: HandbookSection[] = [
     ],
   },
   {
-    id: "banking",
+    id: "master-account",
     number: "03",
-    title: "Everyday Banking",
+    title: "Master Account & Multi-Currency Management",
+    intro:
+      "Your MCC master account is the single hub through which all balances, sub-accounts, and currencies are managed. Understanding how it works is the foundation for everything else in the platform.",
+    subsections: [
+      {
+        heading: "The Master Account Model",
+        paragraphs: [
+          "Every relationship is anchored to a master account that holds your funds across all supported currencies. The Overview page aggregates these balances into a single portfolio value while still letting you act on each currency individually.",
+          "Where authorized, sub-accounts (for example, additional authorized representatives) draw on the same underlying pool of funds as the master. This means an approval requested by a sub-account is funded from, and settled against, the master account's balances — keeping treasury centralized and auditable.",
+        ],
+      },
+      {
+        heading: "Supported Currencies",
+        paragraphs: [
+          "The platform operates natively in EUR, USD, GBP, and CHF. Each currency maintains its own available balance, and the system tracks cleared funds, holds (reserved funds), and pending movements separately so you always know what is truly spendable.",
+        ],
+        bullets: [
+          "Available balance — cleared funds you can spend or reserve right now.",
+          "Held / reserved — funds committed to an approved deal or instrument and temporarily unavailable.",
+          "Pending — movements awaiting clearing or Administrator authorization.",
+        ],
+      },
+      {
+        heading: "Cross-Currency Funding & FX",
+        paragraphs: [
+          "When you commit to a transaction priced in a currency you do not hold enough of, the platform can fund the shortfall by executing a real foreign-exchange conversion at the prevailing rate — selling from your strongest currency to buy what the deal requires. Each conversion is capped at the available balance of the source currency, so a transaction can never drive any currency negative.",
+          "If your total spendable balance across all currencies is still insufficient to cover a reservation, the request is automatically declined and you are notified with the exact shortfall, rather than the deal proceeding into an overdraft.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "banking-details",
+    number: "04",
+    title: "Banking Details — IBAN & SWIFT Operations",
+    intro:
+      "This section explains your account coordinates and how the platform routes money internationally.",
+    subsections: [
+      {
+        heading: "Your Account Coordinates",
+        paragraphs: [
+          "Each currency account carries its own IBAN and SWIFT/BIC. These coordinates appear on the Bank Accounts page and on certificates such as Proof of Funds, and are what counterparties use to remit funds to you.",
+        ],
+      },
+      {
+        heading: "SWIFT Messaging",
+        paragraphs: [
+          "International movements are carried over the SWIFT network. The platform supports the message types used in private and institutional banking, each with full end-to-end reference tracking (UETR) so a transfer can be followed from initiation to settlement.",
+        ],
+        bullets: [
+          "MT103 — single customer credit transfer (client payments).",
+          "MT202 — general financial institution transfer (bank-to-bank cover).",
+          "MT760 — guarantee / standby letter of credit messaging for instruments.",
+          "UETR tracking — a unique end-to-end reference on every message for status visibility.",
+        ],
+      },
+      {
+        heading: "Designated Settlement Banks",
+        paragraphs: [
+          "Certain activities route through dedicated correspondent accounts. For example, a designated Barclays Bank PLC account is used exclusively for funds related to bank-instrument trading. The relevant coordinates are always shown on the page for that activity so you remit to the correct account.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "banking",
+    number: "05",
+    title: "Payments, Beneficiaries & Reconciliation",
     intro: "The Banking area covers the tools you use most often to move and monitor money.",
     subsections: [
       {
-        heading: "Payments & Payees",
+        heading: "Sending a Payment (Step by Step)",
         paragraphs: [
-          "Send domestic and international payments from your funded accounts. Choose a saved beneficiary or enter new details, specify the amount and currency, add a reference, and review before confirming.",
+          "Outgoing payments follow a clear, reviewable flow so nothing leaves your account by accident.",
+        ],
+        bullets: [
+          "1. Open Send and choose a saved beneficiary or enter new details.",
+          "2. Enter the amount and select the debit currency.",
+          "3. Add a payment reference for the recipient and your own records.",
+          "4. Review the summary, including any cross-currency conversion.",
+          "5. Confirm — the payment is submitted for Administrator authorization where required, then executed.",
+        ],
+      },
+      {
+        heading: "Incoming Payments & Crediting",
+        paragraphs: [
+          "Funds remitted to your IBAN/SWIFT coordinates are received, verified against their supporting messaging, and credited to the matching currency account. High-value institutional receipts are handled through the Institutional Desk (Download of Funds) described later in this handbook.",
+        ],
+      },
+      {
+        heading: "Reconciliation & Statements",
+        paragraphs: [
+          "Every movement is recorded as a dated ledger entry with a direction, status, counterparty, and category. The Transactions and Statements pages let you search, filter, and export this history, and you can download a professional PDF receipt for any individual transaction for your records or your accountant.",
         ],
       },
       {
         heading: "Beneficiaries",
         paragraphs: [
-          "Maintain a directory of trusted recipients. Each beneficiary stores the account name, bank, IBAN, and SWIFT/BIC so future payments are fast and accurate.",
-        ],
-      },
-      {
-        heading: "Transactions",
-        paragraphs: [
-          "Review a complete, searchable history of every movement on your account. You can filter by direction, status, and category, and download a professional PDF receipt for any individual transaction.",
+          "Maintain a directory of trusted recipients. Each beneficiary stores the account name, bank, IBAN, and SWIFT/BIC so future payments are fast and accurate, and the register itself can be exported as a branded PDF.",
         ],
       },
       {
@@ -110,23 +191,41 @@ export const HANDBOOK_SECTIONS: HandbookSection[] = [
           "Monitor live foreign-exchange rates across major currency pairs and use them to inform conversions and cross-border payments.",
         ],
       },
+    ],
+  },
+  {
+    id: "cards",
+    number: "06",
+    title: "Credit & Debit Cards",
+    intro:
+      "Request, customize, and manage MCC Capital Visa and Mastercard cards directly from the platform.",
+    subsections: [
       {
-        heading: "Bank Accounts",
+        heading: "Requesting a Card",
         paragraphs: [
-          "View the accounts linked to your platform, including currency, IBAN, and SWIFT/BIC. Add new accounts with the required banking details when needed.",
+          "From the Cards page you can request a new Visa or Mastercard in your account currency. You choose the card network, the tier, the format (physical or virtual), a requested monthly spending limit, and optionally the intended purpose. The request is submitted for Administrator review and activated once approved.",
         ],
       },
       {
-        heading: "Cards",
+        heading: "Customization & Controls",
+        bullets: [
+          "Choose Visa or Mastercard and your preferred tier.",
+          "Select a physical or virtual card format.",
+          "Set a requested monthly spending limit in your account currency.",
+          "Track spending against your limit, with figures reflecting only real card activity.",
+        ],
+      },
+      {
+        heading: "Approval & Activation",
         paragraphs: [
-          "Manage your payment cards, review spending against your monthly limit, and access card controls. Spending figures reflect only real card activity.",
+          "Cards follow the same authorization principle as the rest of the platform: a new card or limit change is reviewed by the Administrator before it becomes active, ensuring every instrument issued against your account is verified.",
         ],
       },
     ],
   },
   {
     id: "trading",
-    number: "04",
+    number: "07",
     title: "Trading & Instruments",
     intro:
       "These advanced services support institutional-grade trading, settlement, and structured returns.",
@@ -208,6 +307,36 @@ export const HANDBOOK_SECTIONS: HandbookSection[] = [
         ],
       },
       {
+        heading: "Commodity Quotations & Benchmarks",
+        paragraphs: [
+          "The desk publishes live commodity quotations and benchmark prices — including energy references such as Brent and WTI — so you can price deals against the current market. Indicative prices are clearly labelled as such; firm pricing is always confirmed with the desk before execution.",
+        ],
+      },
+      {
+        heading: "Spot Deals",
+        paragraphs: [
+          "The live Spot Deals board lists time-limited commodity offers with their product, quantity, price basis (for example CIF or FOB), the carrying vessel, and a countdown to expiry. When you commit to a spot deal, the platform reserves the required funds against your master account — running a capped cross-currency conversion if needed — and routes the commitment for Administrator authorization.",
+        ],
+        bullets: [
+          "Product, quantity, and price basis (CIF / FOB) for each offer.",
+          "Associated vessel and a live countdown to expiry.",
+          "Funds are reserved on commitment and released if a deal is cancelled.",
+          "Insufficiently funded commitments are automatically declined — never overdrawn.",
+        ],
+      },
+      {
+        heading: "Vessel Data & SKR",
+        paragraphs: [
+          "Commodity offers are linked to vessel information (such as the carrying ship and its identifiers) for due diligence, and to Safe Keeping Receipts (SKR) where goods or assets are held in custody. SKRs are managed under Certificates and can be issued as branded PDF documents.",
+        ],
+      },
+      {
+        heading: "Negotiation Workflow",
+        paragraphs: [
+          "Deals progress through guided stages — structuring, document exchange, verification, and execution — with the Administrator verifying supporting documentation at each step. This keeps high-value negotiations orderly, evidenced, and fully auditable from first contact to settlement.",
+        ],
+      },
+      {
         heading: "Leverage & Risk",
         paragraphs: [
           "Request leveraged trading lines against your account equity and monitor margin in real time. You choose a leverage ratio of 1:2, 1:5, 1:10, 1:20, or up to 1:30; the borrowed amount, total buying power, and accrued debit interest are calculated for you before you submit.",
@@ -235,8 +364,203 @@ export const HANDBOOK_SECTIONS: HandbookSection[] = [
     ],
   },
   {
+    id: "nqai",
+    number: "08",
+    title: "NQAi — Neural Quantum AI",
+    intro:
+      "NQAi is your private artificial-intelligence co-pilot, built into the platform to help you understand markets, your own account, and your next move — in plain language, on demand.",
+    subsections: [
+      {
+        heading: "What NQAi Is",
+        paragraphs: [
+          "NQAi (Neural Quantum Artificial Intelligence) is a proprietary AI assistant available from the prominent NQAi button in the header and from the sidebar. It answers questions, explains platform features, and reasons over live market data and your own account context to give you grounded, relevant guidance.",
+        ],
+      },
+      {
+        heading: "How to Use It",
+        bullets: [
+          "Open NQAi from the header button (on any page) or the Terminal group in the sidebar.",
+          "Type a question — for example about a benchmark price, a spot deal, or your balances.",
+          "Use the suggested prompts to get started quickly.",
+          "Start a fresh conversation at any time with the New control.",
+        ],
+      },
+      {
+        heading: "Personalization & Memory",
+        paragraphs: [
+          "NQAi greets returning clients with a personalized briefing drawn from your own secure account context — for example your name, balances, pending items, and notifications. Conversations are saved privately to your account so they continue across sessions, and a rolling memory summary lets NQAi recall the thread of long discussions.",
+          "All personal and financial context is assembled securely on the server and scoped strictly to you. It is never exposed to other clients, and NQAi always treats prices it quotes as indicative, directing you to the desk for firm execution.",
+        ],
+      },
+      {
+        heading: "What It Can Help With",
+        bullets: [
+          "Live market and benchmark prices, with context on movements.",
+          "Your balances, recent transactions, certificates, and instruments.",
+          "Explaining how a feature works and walking you through a workflow.",
+          "Summarizing the current spot-deal board and flagging time-sensitive items.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "console",
+    number: "09",
+    title: "Bloomberg-Style Console",
+    intro:
+      "The Console is a dense, professional trading terminal that brings your most important live information together on one screen.",
+    subsections: [
+      {
+        heading: "Overview",
+        paragraphs: [
+          "Accessible from the Terminal group in the sidebar, the Console presents a multi-panel terminal in the style of an institutional trading desk: live markets, commodity benchmarks, the spot-deal board, and the NQAi co-pilot, all visible at once with a scrolling ticker and a live clock.",
+        ],
+      },
+      {
+        heading: "Working with Panels",
+        bullets: [
+          "Resizable, docked panels you can size to your preference on desktop.",
+          "A markets watchlist and a commodity (CIF/FOB) benchmark board.",
+          "The live Spot Deals panel with countdown timers.",
+          "A docked NQAi panel so you can ask questions without leaving the terminal.",
+          "A tabbed layout on mobile so the same information stays usable on a phone.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "bankeka",
+    number: "10",
+    title: "Bankeka Messaging System",
+    intro:
+      "Bankeka is the platform's secure, private messaging system for communicating with the MCC team and other authorized parties.",
+    subsections: [
+      {
+        heading: "Secure Communication",
+        paragraphs: [
+          "Bankeka keeps your platform conversations inside the secure environment rather than ordinary email. Use it to reach MCC Capital support, ask questions about a request, or coordinate on a deal — all tied to your authenticated account.",
+        ],
+      },
+      {
+        heading: "Starting a Conversation",
+        bullets: [
+          "Message MCC Capital support directly from the Bankeka page.",
+          "Start a private conversation with another party by entering their email address.",
+          "Keep all platform-related correspondence in one auditable place.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "certificates",
+    number: "11",
+    title: "Certificates",
+    intro:
+      "Generate official, branded documents from your verified account data. Every certificate is produced from your real holdings and must be approved by MCC Capital before issuance.",
+    subsections: [
+      {
+        heading: "Available Certificates",
+        bullets: [
+          "Certificate of Good Standing — confirmation of an active account in good standing.",
+          "Certificate of Proof of Funds (POF) — your cleared per-currency balances.",
+          "Certificate of Endorsement — formal endorsement for a stated purpose.",
+          "Certificate of Ownership — confirmation of legal and beneficial account ownership.",
+          "Safe Keeping Receipt (SKR) — evidence of assets or goods held in custody.",
+        ],
+      },
+      {
+        heading: "How Certificates Are Issued",
+        paragraphs: [
+          "You request a certificate from the Certificates page, selecting the type and any required parameters. The request is generated from your verified account data and submitted for MCC Capital approval. Once approved, you can download the certificate as a professionally formatted, branded PDF.",
+          "Because certificates draw on your real balances and profile, they always reflect your current position — there are no placeholder figures.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "fees",
+    number: "12",
+    title: "Fees & Pricing",
+    intro:
+      "MCC believes in transparent pricing. This section summarizes the platform's membership plans and the principal costs associated with its services. Exact figures applicable to your relationship are always confirmed by your relationship manager before you commit.",
+    subsections: [
+      {
+        heading: "Membership Plans",
+        paragraphs: [
+          "Access to the platform is organized into annual membership tiers, each pairing a yearly fee with a refundable security deposit held in our treasury bank.",
+        ],
+        bullets: [
+          "PRO — €25,000 / year, with a €500,000 refundable security deposit. For active private investors and SMEs.",
+          "Avant-Garde — €120,000 / year, with a €1,000,000 refundable security deposit. For institutions and high-net-worth clients.",
+        ],
+      },
+      {
+        heading: "What Each Plan Includes",
+        bullets: [
+          "PRO — multi-currency IBAN accounts, SWIFT MT103 & MT760 transfers, up to €5M trading volume per month, standard bank-instrument access, a dedicated account manager, and email & phone support.",
+          "Avant-Garde — everything in PRO plus unlimited trading volume, priority SBLC / MTN / BG issuance, fiduciary & asset-custody mandate, PPP / yield enrollment, a 24/7 relationship manager, and a bespoke compliance & legal desk.",
+        ],
+      },
+      {
+        heading: "Leverage Costs",
+        paragraphs: [
+          "Leveraged trading lines carry debit interest of 1.8% per year on borrowed funds, accruing from activation. When a line is switched off, accrued interest is settled and the borrowed principal is repaid from your balance. There are no separate activation fees — the cost is the transparent interest on what you actually borrow.",
+        ],
+      },
+      {
+        heading: "Treuhand Fund Terms",
+        bullets: [
+          "Token unit value of €10,000, with a minimum entry of 3 tokens (€30,000).",
+          "0% entry and 0% management fees.",
+          "100% capital guaranteed under Swiss fiduciary law.",
+        ],
+      },
+      {
+        heading: "Foreign Exchange",
+        paragraphs: [
+          "Cross-currency funding is executed at the prevailing exchange rate at the time of the transaction, with the conversion shown to you before you confirm. Conversions are always capped at your available balance so a transaction can never create an overdraft.",
+        ],
+      },
+      {
+        heading: "Cards & Instruments",
+        paragraphs: [
+          "Card issuance, bank-instrument, and settlement-related charges depend on the specific product, tier, and transaction structure. Because these are bespoke, the applicable fees are confirmed with you by your relationship manager or shown on the relevant page before you proceed.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "use-cases",
+    number: "13",
+    title: "Powerful Use Cases & Best Practices",
+    intro:
+      "The platform is most powerful when its features work together. These examples and practices help you get the most from your account.",
+    subsections: [
+      {
+        heading: "Example Use Cases",
+        bullets: [
+          "Centralized multi-currency treasury — hold EUR, USD, GBP, and CHF in one master account and pay any counterparty without pre-funding each currency, letting capped FX cover the difference.",
+          "Institutional fund receipt — bring a large incoming transfer onto the platform through the Institutional Desk with MT103/MT202 messaging and full UETR tracking, credited only after authorization.",
+          "Commodity spot trade — price a deal against live benchmarks, commit to a spot offer on the board, and have funds reserved automatically against your master account pending Administrator approval.",
+          "Proof of Funds on demand — generate a branded Proof of Funds certificate from your real cleared balances for a counterparty, then download it as a PDF.",
+          "AI-assisted decisions — ask NQAi to summarize the spot board, explain a benchmark move, or recap your recent activity before you act.",
+        ],
+      },
+      {
+        heading: "Best Practices",
+        bullets: [
+          "Keep beneficiaries up to date so payments route accurately the first time.",
+          "Review the cross-currency conversion shown before confirming a payment or deal.",
+          "Track requests to authorization on each page — sensitive actions are deliberate, not automatic.",
+          "Use Bankeka for platform correspondence so everything stays auditable in one place.",
+          "Download PDF receipts and certificates as you go to keep your own records complete.",
+        ],
+      },
+    ],
+  },
+  {
     id: "platform",
-    number: "05",
+    number: "14",
     title: "Platform & Account Management",
     subsections: [
       {
@@ -286,8 +610,8 @@ export const HANDBOOK_SECTIONS: HandbookSection[] = [
   },
   {
     id: "security",
-    number: "06",
-    title: "Security & Compliance",
+    number: "15",
+    title: "Security, Approvals & Data Privacy",
     subsections: [
       {
         heading: "Protecting Your Account",
@@ -299,16 +623,29 @@ export const HANDBOOK_SECTIONS: HandbookSection[] = [
         ],
       },
       {
+        heading: "The Approval Model",
+        paragraphs: [
+          "Sensitive actions never execute automatically. Outgoing payments, bank instruments, Download of Funds, DTC and Euroclear settlements, commodity and spot deals, leverage lines, card issuance, and Yield/PPP applications are submitted as requests and only take effect once the Administrator reviews and authorizes them. For sub-accounts, payments additionally require the Master's consent — a two-gate control.",
+          "As part of this model, the platform checks fund availability before committing a reservation. If funds are insufficient, the request is declined automatically and you are notified, so no action can ever overdraw your account.",
+        ],
+      },
+      {
         heading: "Regulatory Standards",
         paragraphs: [
           "MCC operates under Swiss fiduciary law and applies full AML, KYC, FATCA, and CRS due diligence. Compliance is monitored on an ongoing basis to protect clients and the integrity of the platform.",
+        ],
+      },
+      {
+        heading: "Data Privacy",
+        paragraphs: [
+          "Your data is scoped strictly to you. Balances, transactions, documents, and the context used by NQAi are assembled securely on the server and are never shared with other clients. Every figure shown across the platform reflects your real account activity — no placeholder or demonstration data is ever displayed.",
         ],
       },
     ],
   },
   {
     id: "support",
-    number: "07",
+    number: "16",
     title: "Help & Contact",
     intro: "If you need assistance at any point, the MCC team is available through the following channels.",
     subsections: [
