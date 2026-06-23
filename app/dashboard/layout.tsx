@@ -11,6 +11,7 @@ import { SessionGuard } from "@/components/session-guard"
 import { PointerEventsGuard } from "@/components/pointer-events-guard"
 import { DemoSeedGate } from "@/components/demo-seed-gate"
 import { FundingCapitalReconciler } from "@/components/funding-capital-reconciler"
+import { TreasuryFinancingReconciler } from "@/components/treasury-financing-reconciler"
 import { BeneficiariesProvider } from "@/lib/beneficiaries-store"
 import { LedgerProvider } from "@/lib/ledger-store"
 import { PaymentRequestsProvider } from "@/lib/payment-requests-store"
@@ -69,6 +70,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <SessionGuard />
       <PointerEventsGuard />
       <FundingCapitalReconciler />
+      <TreasuryFinancingReconciler />
       <div className="flex h-screen overflow-hidden bg-background">
         {/* Desktop Sidebar */}
         <div className="hidden md:block">

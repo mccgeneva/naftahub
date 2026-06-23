@@ -64,7 +64,7 @@ import {
   BANK_STATEMENT_WAIVER_FEE,
   BANK_STATEMENT_WAIVER_CURRENCY,
 } from "@/lib/funding-documents"
-import { monthlyCostOfCapital } from "@/lib/funding-capital"
+import { monthlyCostOfCapital, accruedCostOfCapital, fundingCreditDate } from "@/lib/funding-capital"
 
 const SUPPORTED_CURRENCIES = ["USD", "EUR", "GBP", "CHF"] as const
 
@@ -1302,16 +1302,33 @@ export default function ProjectFundingPage() {
                             </span>
                           </div>
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-muted-foreground">Monthly cost of capital</span>
+                            <span className="text-muted-foreground">Next monthly charge</span>
                             <span className="font-medium text-foreground">
                               {formatMoney(monthlyCostOfCapital(r.facility), r.currency)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-muted-foreground">Interest accrued to date</span>
+                            <span className="font-medium text-amber-500">
+                              {formatMoney(accruedCostOfCapital(r.facility, fundingCreditDate(r)), r.currency)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-muted-foreground">Accruing since</span>
+                            <span className="font-medium text-foreground">
+                              {fundingCreditDate(r).toLocaleDateString(undefined, {
+                                year: "numeric",
+                                month: "short",
+                                day: "numeric",
+                              })}
                             </span>
                           </div>
                         </div>
                         <p className="mt-2 text-xs text-muted-foreground text-pretty">
                           The approved facility is credited to your master account balance. The 1.8%
-                          annual cost of capital is charged monthly (÷12) as a debit at the end of
-                          each calendar month.
+                          annual debit interest accrues from the funding date and is charged monthly
+                          (÷12) at each calendar month-end, with the first month pro-rated to the
+                          activation day. Each charge is logged in your transaction history.
                         </p>
                       </div>
                     )}
