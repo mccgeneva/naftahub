@@ -52,14 +52,19 @@ function FaceStep({
     // SessionGuard treats a face-verified login the same as a password login.
     markLoginHandoff()
     const res = await completeFaceLogin(activeChallenge, descriptor)
-    // On success the action redirects and we never get here. A returned state
-    // means the scan failed or the challenge needs to be retried.
+    // A returned error means the scan failed or the challenge needs retrying.
     if (res?.error) {
       setError(res.error)
       if (res.challenge) setActiveChallenge(res.challenge)
       // If the challenge expired / face no longer enrolled, send them back to password.
       if (!res.faceRequired) setTimeout(onBack, 2200)
       return { ok: false, error: res.error }
+    }
+    // Success: the session cookies are set server-side. Perform a FULL-page
+    // navigation (not client routing) so the proxy re-reads the fresh session
+    // cookies and the SessionGuard sees the genuine-login handoff flag.
+    if (res?.success) {
+      window.location.assign(res.redirectTo || "/dashboard?fresh=1")
     }
     return { ok: true }
   }
