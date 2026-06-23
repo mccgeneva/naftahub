@@ -104,6 +104,9 @@ importers:
       '@vercel/blob':
         specifier: ^2.4.1
         version: 2.4.1
+      '@vladmandic/face-api':
+        specifier: ^1.7.15
+        version: 1.7.15
       ai:
         specifier: ^6.0.208
         version: 6.0.208(zod@3.25.76)
@@ -1477,6 +1480,10 @@ packages:
   '@vercel/oidc@3.6.1':
     resolution: {integrity: sha512-8ipTFoiX3WBRrvXLjSrmgAiwtMDQk3EgSxe8N7v2rXBz39NBIIyoGXeVbJRoBcP8WEuVnvjvIQsggbGU7ZKrMw==}
     engines: {node: '>= 20'}
+
+  '@vladmandic/face-api@1.7.15':
+    resolution: {integrity: sha512-WDMmK3CfNLo8jylWqMoQgf4nIst3M0fzx1dnac96wv/dvMTN4DxC/Pq1DGtduDk1lktCamQ3MIDXFnvrdHTXDw==}
+    engines: {node: '>=14.0.0'}
 
   ai@6.0.208:
     resolution: {integrity: sha512-STz+AaZqJ4ZjH7UkpXkbHx+bjgIDOsE8fIUoZjkZ2whoZcfVmG9K/TqEKouJZ03SuZuD7lagntlU3zBhAEkRpQ==}
@@ -4001,6 +4008,8 @@ snapshots:
       '@vercel/cli-config': 0.2.0
       '@vercel/cli-exec': 0.1.1
       jose: 5.10.0
+
+  '@vladmandic/face-api@1.7.15': {}
 
   ai@6.0.208(zod@3.25.76):
     dependencies:
