@@ -10,6 +10,8 @@
 // ---------------------------------------------------------------------------
 
 import { useLedger } from "@/lib/ledger-store"
+import { useServerRequestList } from "@/lib/use-server-request-list"
+import { mapApprovalStatus, type ApprovalRecord } from "@/lib/approval-sync"
 
 export type BankAccount = {
   id: string
@@ -174,6 +176,8 @@ export function getStatusColor(status: string): string {
   switch (status) {
     case "active":
       return "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
+    case "pending":
+      return "bg-amber-500/20 text-amber-400 border-amber-500/30"
     case "restricted":
       return "bg-amber-500/20 text-amber-400 border-amber-500/30"
     case "dormant":
@@ -201,13 +205,93 @@ export function getFlagEmoji(countryCode: string): string {
   return flags[countryCode] || "🏳️"
 }
 
+/** Two-letter monogram from a bank name, e.g. "Banking Circle" → "BC". */
+function bankMonogram(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return "BK"
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
+  return (words[0][0] + words[1][0]).toUpperCase()
+}
+
+/**
+ * Rebuild a registered BankAccount from a `bank_account` approval record.
+ *
+ * The client's "Add Bank Account" flow mirrors the form straight into the
+ * approval `payload` (flat fields, NOT under `payload.record`), so the admin
+ * can review it cross-client. Once the administrator approves it the account
+ * must surface back on the client's Bank Accounts page — this mapper is what
+ * folds those DB-backed accounts into `useBankAccounts()`.
+ *
+ * Registered (external) accounts have no platform-tracked ledger balance — the
+ * master settlement account (ACC-001) is the only balance-bearing account — so
+ * balances are 0 here and never double-count the ledger. Rejected/cancelled
+ * registrations are dropped (return null) so a declined request disappears.
+ */
+function bankAccountFromApproval(rec: ApprovalRecord): BankAccount | null {
+  const p = (rec.payload ?? {}) as {
+    bankName?: string
+    accountName?: string | null
+    accountType?: string | null
+    country?: string | null
+    countryCode?: string | null
+    iban?: string | null
+    swift?: string | null
+    currency?: string | null
+    accountNumber?: string | null
+    dailyLimit?: number | null
+    rating?: string | null
+    branchAddress?: string | null
+  }
+  const status = mapApprovalStatus(rec.status, { approvedStatus: "active" })
+  // Only registered (approved) or in-review (pending) accounts belong on the
+  // client's list; declined/withdrawn ones are hidden.
+  if (status !== "active" && status !== "pending") return null
+  if (!p.bankName) return null
+
+  return {
+    id: rec.id,
+    bankName: p.bankName,
+    bankLogo: bankMonogram(p.bankName),
+    country: p.country || "—",
+    countryCode: p.countryCode || "",
+    rating: p.rating || "NR",
+    accountName: p.accountName || "—",
+    accountNumber: p.accountNumber || "—",
+    iban: p.iban || "—",
+    swift: p.swift || "—",
+    currency: p.currency || "EUR",
+    balance: 0,
+    availableBalance: 0,
+    reservedBalance: 0,
+    accountType: p.accountType || "Registered Account",
+    status,
+    openDate: (rec.decidedAt ?? rec.createdAt ?? new Date().toISOString()).slice(0, 10),
+    lastActivity: rec.decidedAt ?? rec.createdAt ?? new Date().toISOString(),
+    dailyLimit: p.dailyLimit ?? 0,
+    monthlyVolume: 0,
+    relationship: "Business Banking",
+    contactPerson: "MCC Client Services",
+    contactEmail: "admin@mccgva.ch",
+    branchAddress: p.branchAddress || p.country || "—",
+    beneficiaryAddress: "Rue du Rhone 14, 1204 Geneva, Switzerland",
+  }
+}
+
 /**
  * Build the client's full account list with live ledger balances overlaid.
  * The master EUR account reflects the live ledger balance; every additional
- * currency the client holds surfaces a dedicated settlement account.
+ * currency the client holds surfaces a dedicated settlement account. Accounts
+ * the client registered via "Add Bank Account" (and the admin approved) are
+ * folded in from the DB-backed approvals backbone so they actually appear here.
  */
 export function useBankAccounts(): BankAccount[] {
   const { balanceFor, reservedFor, currencies } = useLedger()
+  // The signed-in client's own bank-account registrations, sourced from Neon
+  // (approved → active, pending → in review). Scoped to this user by the
+  // approvals API, polled/refreshed like every other request list.
+  const { records: registeredAccounts } = useServerRequestList<BankAccount>("bank_account", {
+    fromApproval: bankAccountFromApproval,
+  })
 
   const liveBaseAccounts = baseBankAccounts.map((account) => {
     if (account.id !== "ACC-001") return account
@@ -262,5 +346,13 @@ export function useBankAccounts(): BankAccount[] {
       }
     })
 
-  return [...liveBaseAccounts, ...extraCurrencyAccounts]
+  // De-dupe against any currency-derived settlement account id, then append the
+  // client's registered accounts (newest-first as returned by the API).
+  const existingIds = new Set([
+    ...liveBaseAccounts.map((a) => a.id),
+    ...extraCurrencyAccounts.map((a) => a.id),
+  ])
+  const registered = registeredAccounts.filter((a) => !existingIds.has(a.id))
+
+  return [...liveBaseAccounts, ...extraCurrencyAccounts, ...registered]
 }

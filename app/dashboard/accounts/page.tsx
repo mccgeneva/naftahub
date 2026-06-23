@@ -492,6 +492,7 @@ export default function BankAccountsPage() {
             <SelectContent className="bg-zinc-900 border-zinc-800">
               <SelectItem value="all">All Status</SelectItem>
               <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="pending">Pending Review</SelectItem>
               <SelectItem value="restricted">Restricted</SelectItem>
               <SelectItem value="dormant">Dormant</SelectItem>
             </SelectContent>
