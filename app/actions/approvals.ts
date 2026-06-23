@@ -648,7 +648,12 @@ export async function adminCountPending(passcode: string): Promise<Record<string
 // project funding draws). Used as a fallback when an approval was created
 // before an explicit `ledgerEffect` was attached, so the amount/currency stored
 // on the approval itself still posts to the client's ledger on approval.
-const CREDIT_KINDS = new Set<ApprovalKind>(["monetization", "dof", "project_funding"])
+// NOTE: `project_funding` is intentionally NOT here. An approved AES facility's
+// capital credit — and its ongoing 1.8% monthly cost-of-capital debits — are
+// posted onto the client's ledger by the client-side FundingCapitalReconciler
+// using deterministic `FND-CAP-*` / `FND-ROI-*` ids. Crediting it here too
+// (as `APPR-<id>`) would DOUBLE the facility on the client's balance.
+const CREDIT_KINDS = new Set<ApprovalKind>(["monetization", "dof"])
 
 // Approval kinds that, when approved, RESERVE (place a hold/block on) the
 // owner's balance — funds earmarked to settle the underlying transaction (e.g.
