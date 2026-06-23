@@ -1,6 +1,11 @@
 import { AES_ANNUAL_COST_RATE } from "@/lib/aes"
 import type { LedgerEntry } from "@/lib/ledger-store"
 import type { ProjectFundingRequest } from "@/lib/project-funding-store"
+import {
+  accruedInterestToDate,
+  monthlyInterestAmount,
+  monthlyInterestCharges,
+} from "@/lib/interest-accrual"
 
 /**
  * Project Funding -> Master Account integration.
@@ -9,9 +14,11 @@ import type { ProjectFundingRequest } from "@/lib/project-funding-store"
  * on the client's master account ledger:
  *
  *   1. The approved facility capital is CREDITED to the balance (once).
- *   2. The 1.8% annual cost of capital is CHARGED monthly — i.e. a DEBIT of
- *      `facility * 1.8% / 12` posted at the end of each calendar month for as
- *      long as the facility is active.
+ *   2. The 1.8% annual debit interest (cost of capital) is CHARGED monthly —
+ *      i.e. a DEBIT of `facility * 1.8% / 12` posted at the end of each calendar
+ *      month for as long as the facility is active. Accrual begins on the EXACT
+ *      day the capital is credited, so the first (and any settlement) month is
+ *      PRO-RATED to the active days in that month.
  *
  * Because this is a client-side ledger with no scheduler, charges are accrued
  * lazily: every time the data is reconciled we post any month-end charges that
@@ -20,12 +27,20 @@ import type { ProjectFundingRequest } from "@/lib/project-funding-store"
  * double-posts).
  */
 
+/** Annual debit interest rate on a project funding facility (1.8%). */
+export const FUNDING_ANNUAL_RATE = AES_ANNUAL_COST_RATE
+
 /** Monthly cost-of-capital rate: 1.8% annual, charged in twelfths. */
 export const MONTHLY_COST_RATE = AES_ANNUAL_COST_RATE / 12
 
-/** One month's cost-of-capital charge on a facility. */
+/** One full month's cost-of-capital charge on a facility. */
 export function monthlyCostOfCapital(facility: number): number {
-  return Math.max(0, facility) * MONTHLY_COST_RATE
+  return monthlyInterestAmount(Math.max(0, facility), FUNDING_ANNUAL_RATE)
+}
+
+/** Cost of capital accrued to date (continuous, includes the current month). */
+export function accruedCostOfCapital(facility: number, start: Date, asOf: Date = new Date()): number {
+  return accruedInterestToDate(Math.max(0, facility), FUNDING_ANNUAL_RATE, start, asOf)
 }
 
 /** Deterministic ledger id for an approved facility's capital credit. */
@@ -38,38 +53,9 @@ export function fundingChargeId(requestId: string, yearMonth: string): string {
   return `FND-ROI-${requestId}-${yearMonth}`
 }
 
-/** Format a Date as `YYYY-MM` (calendar month key). */
-function yearMonthKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
-}
-
-/** Last instant of the calendar month that `year`/`monthIndex` (0-based) falls in. */
-function endOfMonth(year: number, monthIndex: number): Date {
-  // Day 0 of the next month = last day of this month.
-  return new Date(year, monthIndex + 1, 0, 23, 59, 59, 999)
-}
-
-/**
- * Every calendar month-end strictly after `start` and on/before `now`.
- * These are the month-ends at which a cost-of-capital charge is due.
- */
-export function dueMonthEnds(start: Date, now: Date): Date[] {
-  const ends: Date[] = []
-  if (!(start instanceof Date) || Number.isNaN(start.getTime())) return ends
-  let year = start.getFullYear()
-  let month = start.getMonth()
-  // Walk month-ends forward until we pass `now`.
-  for (let i = 0; i < 1200; i++) {
-    const monthEnd = endOfMonth(year, month)
-    if (monthEnd > now) break
-    if (monthEnd > start) ends.push(monthEnd)
-    month += 1
-    if (month > 11) {
-      month = 0
-      year += 1
-    }
-  }
-  return ends
+/** The date a request's capital is credited (and from which interest accrues). */
+export function fundingCreditDate(r: ProjectFundingRequest): Date {
+  return r.decidedAt ? new Date(r.decidedAt) : new Date(r.submittedAt)
 }
 
 export interface PendingLedgerPost {
@@ -95,7 +81,7 @@ export function buildFundingLedgerPosts(
 
   for (const r of requests) {
     if (r.status !== "approved" || !r.facility || r.facility <= 0) continue
-    const approvedAt = r.decidedAt ? new Date(r.decidedAt) : new Date(r.submittedAt)
+    const approvedAt = fundingCreditDate(r)
     if (Number.isNaN(approvedAt.getTime())) continue
 
     // 1. Capital credit (once).
@@ -117,28 +103,28 @@ export function buildFundingLedgerPosts(
       })
     }
 
-    // 2. Monthly cost-of-capital charges at each elapsed calendar month-end.
-    const charge = monthlyCostOfCapital(r.facility)
-    if (charge > 0) {
-      for (const monthEnd of dueMonthEnds(approvedAt, now)) {
-        const ym = yearMonthKey(monthEnd)
-        const chargeId = fundingChargeId(r.id, ym)
-        if (existingIds.has(chargeId)) continue
-        posts.push({
-          direction: "debit",
-          entry: {
-            id: chargeId,
-            amount: charge,
-            currency: r.currency,
-            status: "completed",
-            date: monthEnd.toISOString(),
-            counterparty: "MCC Capital — AES Cost of Capital",
-            reference: r.id,
-            category: "Cost of Capital",
-            comment: `Monthly cost of capital (1.8% p.a. ÷ 12) on "${r.projectName}" facility for ${ym}.`,
-          },
-        })
-      }
+    // 2. Monthly cost-of-capital charges at each elapsed calendar month-end,
+    //    accruing from the credit date with the first month pro-rated.
+    for (const charge of monthlyInterestCharges(r.facility, FUNDING_ANNUAL_RATE, approvedAt, now)) {
+      const chargeId = fundingChargeId(r.id, charge.yearMonth)
+      if (existingIds.has(chargeId)) continue
+      const proNote = charge.prorated
+        ? ` (pro-rated ${(charge.fraction * 100).toFixed(0)}% — accrual began on the funding date)`
+        : ""
+      posts.push({
+        direction: "debit",
+        entry: {
+          id: chargeId,
+          amount: charge.amount,
+          currency: r.currency,
+          status: "completed",
+          date: charge.date.toISOString(),
+          counterparty: "MCC Capital — AES Cost of Capital",
+          reference: r.id,
+          category: "Cost of Capital",
+          comment: `Monthly debit interest (1.8% p.a. ÷ 12) on "${r.projectName}" facility for ${charge.yearMonth}${proNote}.`,
+        },
+      })
     }
   }
 

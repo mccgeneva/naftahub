@@ -34,6 +34,13 @@ import {
   type TreasuryStatus,
   type TreasuryTransaction,
 } from "@/lib/treasury-store"
+import {
+  treasuryFinancingTxns,
+  treasuryFinancingPrincipal,
+  accruedTreasuryInterest,
+  monthlyTreasuryInterest,
+  TREASURY_FINANCING_ANNUAL_RATE,
+} from "@/lib/treasury-financing"
 
 const fmt = (value: number, currency = "EUR") =>
   `${currency} ${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -122,6 +129,20 @@ export default function TreasuryPage() {
   const accrued = accruedCycleFee(account, now)
   const annualFee = annualCycleFee(account)
   const coverage = account.requiredDeposit > 0 ? Math.min(100, (secured / account.requiredDeposit) * 100) : 0
+
+  // Special Treasury Financing (€500k / €1m) carries a 3% p.a. debit interest,
+  // accruing from the financing date. Surfaced as accrued-to-date + the next
+  // monthly charge so the client sees both incurred and upcoming interest.
+  const financingTxns = treasuryFinancingTxns(account)
+  const financingPrincipal = treasuryFinancingPrincipal(account)
+  const financingAccrued = accruedTreasuryInterest(account, new Date(now))
+  const financingMonthly = monthlyTreasuryInterest(financingPrincipal)
+  const financingSince = financingTxns.length
+    ? financingTxns.reduce(
+        (earliest, t) => (new Date(t.date).getTime() < new Date(earliest).getTime() ? t.date : earliest),
+        financingTxns[0].date,
+      )
+    : undefined
 
   // Show the status the actual coverage implies, never a stale "secured".
   const effectiveStatus = effectiveTreasuryStatus(account)
@@ -347,6 +368,47 @@ export default function TreasuryPage() {
                     plus any financial transaction exposure associated with the leverage facility (
                     {fmt0(account.transactionExposure, account.currency)}). It accrues continuously
                     {account.securedAt ? ` from ${fmtDate(account.securedAt)}` : ""}.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Special treasury financing interest (3% p.a.) */}
+          {financingPrincipal > 0 && (
+            <Card className="bg-card border-border">
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <Percent className="h-5 w-5 text-orange-400" />
+                  <CardTitle className="text-lg">Treasury Financing Interest</CardTitle>
+                  <Badge variant="outline" className="ml-auto gap-1.5 border-orange-500/20 bg-orange-500/10 text-orange-400">
+                    {(TREASURY_FINANCING_ANNUAL_RATE * 100).toFixed(0)}% p.a.
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <Metric label="Financed Principal" value={fmt0(financingPrincipal, account.currency)} tone="negative" />
+                  <Metric
+                    label="Annual Interest"
+                    value={`${(TREASURY_FINANCING_ANNUAL_RATE * 100).toFixed(0)}%`}
+                    sub={`${fmt0(financingPrincipal * TREASURY_FINANCING_ANNUAL_RATE, account.currency)} / year`}
+                  />
+                  <Metric label="Next Monthly Charge" value={fmt(financingMonthly, account.currency)} tone="negative" sub="3% ÷ 12" />
+                  <Metric label="Interest Accrued To Date" value={fmt(financingAccrued, account.currency)} tone="negative" />
+                </div>
+                <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-4 text-sm text-muted-foreground">
+                  <div className="mb-1 flex items-center gap-2 font-medium text-foreground">
+                    <AlertTriangle className="h-4 w-4 text-orange-400" />
+                    How the treasury financing interest is calculated
+                  </div>
+                  <p className="text-pretty">
+                    A debit interest of {(TREASURY_FINANCING_ANNUAL_RATE * 100).toFixed(0)}% per year is
+                    applied to the financed treasury principal of {fmt0(financingPrincipal, account.currency)}.
+                    It is charged monthly (÷12) as a debit on your master account at each calendar month-end,
+                    accruing from the financing date{financingSince ? ` (${fmtDate(financingSince)})` : ""}, with
+                    the first month pro-rated to the financing day. Each charge is logged in your transaction
+                    history.
                   </p>
                 </div>
               </CardContent>
