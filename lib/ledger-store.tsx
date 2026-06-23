@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useEffect, useMemo, useState } from "react"
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react"
 import { persistMyLedgerEntry } from "@/app/actions/ledger"
 import { convertCurrency } from "@/lib/fx"
 
@@ -114,45 +114,61 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
 
   // Record a new entry: optimistically prepend it to the live view, then persist
   // it to the durable server ledger so it survives reloads and appears on every
-  // device. No localStorage is involved.
-  const recordEntry = (entry: LedgerEntry) => {
+  // device. No localStorage is involved. Memoized with a stable identity (it only
+  // uses the stable `setEntries` setter and a module-level action) so consumers
+  // that depend on it in effects — notably FundingCapitalReconciler — do not
+  // re-run on every provider render.
+  const recordEntry = useCallback((entry: LedgerEntry) => {
     setEntries((prev) =>
       [entry, ...prev].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
     )
     void persistMyLedgerEntry(entry).catch(() => {
       // best-effort; a failed persist still shows locally until the next refresh
     })
-  }
+  }, [])
 
-  const addReceipt = (entry: Omit<LedgerEntry, "direction">) => {
-    const full: LedgerEntry = { ...entry, direction: "credit" }
-    recordEntry(full)
-    return full
-  }
+  const addReceipt = useCallback(
+    (entry: Omit<LedgerEntry, "direction">) => {
+      const full: LedgerEntry = { ...entry, direction: "credit" }
+      recordEntry(full)
+      return full
+    },
+    [recordEntry],
+  )
 
-  const addDebit = (entry: Omit<LedgerEntry, "direction">) => {
-    const full: LedgerEntry = { ...entry, direction: "debit" }
-    recordEntry(full)
-    return full
-  }
+  const addDebit = useCallback(
+    (entry: Omit<LedgerEntry, "direction">) => {
+      const full: LedgerEntry = { ...entry, direction: "debit" }
+      recordEntry(full)
+      return full
+    },
+    [recordEntry],
+  )
 
   // Funds currently reserved/blocked: held debits (e.g. an approved commodity
   // deal earmarking funds to settle the supplier). Held credits are ignored —
-  // incoming pending money is not yet available either way.
-  const reservedFor = (currency: string) =>
-    entries
-      .filter((e) => e.currency === currency && e.status === "hold" && e.direction === "debit")
-      .reduce((sum, e) => sum + e.amount, 0)
+  // incoming pending money is not yet available either way. Memoized on
+  // `entries` so its identity is stable between data changes.
+  const reservedFor = useCallback(
+    (currency: string) =>
+      entries
+        .filter((e) => e.currency === currency && e.status === "hold" && e.direction === "debit")
+        .reduce((sum, e) => sum + e.amount, 0),
+    [entries],
+  )
 
   // Available (spendable) balance: settled credits minus settled debits, minus
   // anything currently on hold. Reserved funds cannot be spent, so they reduce
   // the available balance everywhere it is read (send, payments, exchange…).
-  const balanceFor = (currency: string) => {
-    const settled = entries
-      .filter((e) => e.currency === currency && e.status === "completed")
-      .reduce((sum, e) => sum + (e.direction === "credit" ? e.amount : -e.amount), 0)
-    return settled - reservedFor(currency)
-  }
+  const balanceFor = useCallback(
+    (currency: string) => {
+      const settled = entries
+        .filter((e) => e.currency === currency && e.status === "completed")
+        .reduce((sum, e) => sum + (e.direction === "credit" ? e.amount : -e.amount), 0)
+      return settled - reservedFor(currency)
+    },
+    [entries, reservedFor],
+  )
 
   const currencies = useMemo(
     () => Array.from(new Set(entries.map((e) => e.currency))),
@@ -160,13 +176,16 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   )
 
   // Sum every currency's net balance, converted into the target currency.
-  const totalIn = (currency: string) =>
-    currencies.reduce((sum, cur) => sum + convertCurrency(balanceFor(cur), cur, currency), 0)
+  const totalIn = useCallback(
+    (currency: string) =>
+      currencies.reduce((sum, cur) => sum + convertCurrency(balanceFor(cur), cur, currency), 0),
+    [currencies, balanceFor],
+  )
 
   // Re-pull the authoritative server ledger. Used after an out-of-band write
   // (e.g. an administrator editing the signed-in account's ledger, or an instant
   // transfer) so the live view reflects the change without a reload.
-  const refresh = () => {
+  const refresh = useCallback(() => {
     void fetchLedgerEntries().then((serverEntries) => {
       if (!serverEntries) return
       setEntries(
@@ -175,15 +194,18 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
         ),
       )
     })
-  }
+  }, [])
 
-  return (
-    <LedgerContext.Provider
-      value={{ entries, addReceipt, addDebit, balanceFor, reservedFor, totalIn, currencies, refresh, hydrated }}
-    >
-      {children}
-    </LedgerContext.Provider>
+  // Memoize the context value so it only changes when the underlying data or a
+  // (now stable) callback changes — never on every render. This prevents the
+  // whole dashboard's ledger consumers from re-rendering in lockstep and stops
+  // any consumer effect keyed on these callbacks from re-firing spuriously.
+  const value = useMemo(
+    () => ({ entries, addReceipt, addDebit, balanceFor, reservedFor, totalIn, currencies, refresh, hydrated }),
+    [entries, addReceipt, addDebit, balanceFor, reservedFor, totalIn, currencies, refresh, hydrated],
   )
+
+  return <LedgerContext.Provider value={value}>{children}</LedgerContext.Provider>
 }
 
 export function useLedger() {
