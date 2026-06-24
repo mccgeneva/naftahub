@@ -67,6 +67,47 @@ async function ensureTables(): Promise<void> {
     }
   }
 
+  // One-time migration for EXISTING databases that were seeded with the earlier
+  // fabricated fleet (whose IMO numbers don't resolve on MarineTraffic). Runs
+  // exactly once per database, guarded by a schema_migrations marker, and only
+  // touches seed-sourced rows so manually-added or API-imported vessels and any
+  // admin edits are preserved.
+  await query(
+    `CREATE TABLE IF NOT EXISTS schema_migrations (
+       name        text PRIMARY KEY,
+       applied_at  timestamptz NOT NULL DEFAULT now()
+     )`,
+  )
+  const marker = await query<{ name: string }>(
+    `INSERT INTO schema_migrations (name) VALUES ('vessels_real_imo_v1')
+     ON CONFLICT (name) DO NOTHING
+     RETURNING name`,
+  )
+  if (marker.rows.length > 0) {
+    const realImos = VESSEL_SEED.map((v) => v.imo)
+    // Remove every previously-seeded (fabricated) vessel that isn't part of the
+    // new real fleet.
+    await query(`DELETE FROM vessels WHERE source = 'seed' AND imo <> ALL($1::text[])`, [realImos])
+    // Insert the real fleet, leaving any vessel an admin already added untouched.
+    const now = new Date().toISOString()
+    for (const v of VESSEL_SEED) {
+      const vessel: Vessel = { ...v, source: "seed", updatedAt: now }
+      await query(
+        `INSERT INTO vessels (imo, name, type, status, location, cargo, source, payload, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT (imo) DO NOTHING`,
+        [vessel.imo, vessel.name, vessel.type, vessel.status, vessel.location, vessel.cargo ?? null, vessel.source, JSON.stringify(vessel), now],
+      )
+    }
+    // Drop any spot deals that pointed at a now-removed fabricated vessel, so the
+    // board only ever shows offers against real, verifiable ships.
+    await query(
+      `DELETE FROM spot_deals
+        WHERE vessel_imo IS NOT NULL
+          AND vessel_imo NOT IN (SELECT imo FROM vessels)`,
+    )
+  }
+
   ensured = true
 }
 
