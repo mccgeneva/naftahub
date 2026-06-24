@@ -65,7 +65,6 @@ import { SwiftGpiTracker } from "@/components/swift-gpi-tracker"
 import { CommodityQuotations } from "@/components/dashboard/commodity-quotations"
 import { SpotDealsBoard } from "@/components/dashboard/spot-deals-board"
 import { type SpotDeal } from "@/lib/spot-deals-shared"
-import { recordSpotDealInterest } from "@/app/actions/spot-deals"
 import {
   useCommodityDeals,
   DEAL_STAGES,
@@ -432,9 +431,8 @@ export default function CommodityTradingPage() {
     setSendingBicValid(false)
     setReceivingBicValid(false)
     setTab("workflow")
-    // Record the formal acceptance for the audit trail (engagement was already
-    // logged on click inside the board).
-    recordSpotDealInterest(deal.id, "accepted").catch(() => {})
+    // The board records the correct interest (accepted vs. engaged) and, for an
+    // acceptance, claims the cargo before this pre-fill runs.
     if (typeof window !== "undefined") {
       requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }))
     }

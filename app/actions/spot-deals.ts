@@ -33,6 +33,7 @@ import {
   getDeal,
   saveDeal,
   appendInterest,
+  claimDeal,
 } from "@/lib/spot-deals-db"
 import {
   computeTotalValue,
@@ -502,5 +503,85 @@ export async function recordSpotDealInterest(
   } catch (err) {
     console.log("[v0] recordSpotDealInterest failed:", (err as Error).message)
     return { ok: false, error: "Could not record your interest. Please try again." }
+  }
+}
+
+/**
+ * Client accepts (reserves) a published spot offer. This atomically claims the
+ * cargo — flipping the deal published → engaged so it leaves the public board
+ * for everyone and cannot be double-sold — then notifies the trading desk and
+ * writes the audit trail. The actual commodity deal still runs through the
+ * normal admin-approval workflow on the client side; nothing executes or moves
+ * funds here. Identity comes from the authoritative session only.
+ */
+export async function acceptSpotDeal(dealId: string): Promise<DealResult> {
+  try {
+    const session = await resolveCurrentSession()
+    if (!session) return { ok: false, error: "Not authenticated." }
+    const before = await getDeal(dealId)
+    if (!before) return { ok: false, error: "Spot deal not found." }
+
+    const label = session.profile.fullName || session.profile.shortName || session.id
+    const claimed = await claimDeal(dealId, {
+      userId: session.id,
+      userLabel: label,
+      action: "accepted",
+      at: new Date().toISOString(),
+    })
+    if (!claimed) {
+      return {
+        ok: false,
+        error: "This offer was just taken or has expired — it is no longer available.",
+      }
+    }
+
+    await logActivity({
+      action: `Client accepted spot deal ${dealId}`,
+      category: "Commodity Trading",
+      details: {
+        summary: `${label} accepted (reserved) the limited-time spot deal ${dealId}: ${claimed.quantity.toLocaleString("en-US")} ${claimed.unit} ${claimed.product} aboard ${claimed.vesselName} (IMO ${claimed.vesselImo}) at ${formatMoney(claimed.spotPrice, claimed.currency)}/${claimed.unit}, total ${formatMoney(claimed.totalValue, claimed.currency)}. The cargo has been removed from the public board and a commodity deal has been initiated for Administrator review — nothing executes automatically.`,
+        referenceId: dealId,
+        vessel: `${claimed.vesselName} (IMO ${claimed.vesselImo})`,
+        product: claimed.product,
+        totalValue: formatMoney(claimed.totalValue, claimed.currency),
+      },
+    })
+
+    // Notify the trading desk (Bankeka) that a client reserved the cargo.
+    try {
+      const body = [
+        `SPOT DEAL ACCEPTED — ${claimed.product}`,
+        ``,
+        `${label} accepted limited-time spot deal ${claimed.id}.`,
+        `Vessel: ${claimed.vesselName} (IMO ${claimed.vesselImo})`,
+        `Quantity: ${claimed.quantity.toLocaleString("en-US")} ${claimed.unit}`,
+        `Total value: ${formatMoney(claimed.totalValue, claimed.currency)}`,
+        ``,
+        `The cargo is now reserved and off the public board. A commodity deal has been initiated for your review.`,
+      ].join("\n")
+      const row = await insertMessage({
+        senderId: BANKEKA_ADMIN_ID,
+        recipientId: session.id,
+        body,
+        kind: "direct",
+        broadcastId: undefined,
+      })
+      await recordAudit({
+        actorId: session.id,
+        actorLabel: label,
+        action: "message",
+        recipientId: BANKEKA_ADMIN_ID,
+        messageId: row.id,
+        charCount: body.length,
+      })
+    } catch (notifyErr) {
+      // Notification is best-effort; the claim already succeeded.
+      console.log("[v0] acceptSpotDeal notify failed:", (notifyErr as Error).message)
+    }
+
+    return { ok: true, deal: claimed }
+  } catch (err) {
+    console.log("[v0] acceptSpotDeal failed:", (err as Error).message)
+    return { ok: false, error: "Could not accept this offer. Please try again." }
   }
 }
