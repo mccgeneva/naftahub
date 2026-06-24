@@ -37,7 +37,19 @@ import {
   saveTreasuryRecordAdmin,
   postTreasuryTxnAdmin,
   deleteTreasuryTxnAdmin,
+  deleteTreasuryRecordAdmin,
 } from "@/app/actions/treasury"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 
 const fmt0 = (value: number, currency = TREASURY_CURRENCY) =>
   `${currency} ${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`
@@ -69,6 +81,7 @@ export function TreasuryManager() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [posting, setPosting] = useState(false)
+  const [removing, setRemoving] = useState(false)
   // Every client account (including the seeded core accounts) is a database
   // record, loaded once on mount via the passcode-gated admin action.
   const [clients, setClients] = useState<SelectableClient[]>([])
@@ -186,6 +199,31 @@ export function TreasuryManager() {
       description: `${getProfile(profile).label} · ${targetUser.fullName}. Treasury received ${fmt0(secured)}${
         shortfall > 0 ? ` · shortfall ${fmt0(shortfall)}` : " · fully secured"
       }.`,
+    })
+  }
+
+  // Fully remove the client's treasury facility. Resets the editor back to an
+  // empty PRO record so the admin sees the cleared state, and the client's
+  // Treasury page reverts to "No treasury account established" on next refresh.
+  const handleRemoveRecord = async () => {
+    setRemoving(true)
+    const res = await deleteTreasuryRecordAdmin(ADMIN_PASSCODE, targetUserId)
+    setRemoving(false)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    const empty = res.account
+    setStored(empty)
+    setProfile(empty.profile)
+    setRequiredDeposit(String(getProfile(empty.profile).requiredDeposit))
+    setContribution("0")
+    setLeverageEnabled(false)
+    setTransactionExposure("0")
+    setStatus("pending")
+    setNote("")
+    toast.success("Treasury facility removed", {
+      description: `${targetUser.fullName}'s treasury record was deleted. Their Treasury page now shows no active facility.`,
     })
   }
 
@@ -422,10 +460,46 @@ export function TreasuryManager() {
           </div>
         </div>
 
-        <Button onClick={handleSaveRecord} disabled={saving || loading} className="w-full sm:w-auto">
-          {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-          Save treasury record
-        </Button>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <Button onClick={handleSaveRecord} disabled={saving || loading || removing} className="w-full sm:w-auto">
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            Save treasury record
+          </Button>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                disabled={loading || removing || saving || stored.status === "none"}
+                className="w-full border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-400 sm:w-auto"
+              >
+                {removing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                Remove treasury facility
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Remove treasury facility?</AlertDialogTitle>
+                <AlertDialogDescription className="text-pretty">
+                  This permanently deletes {targetUser.fullName}&apos;s treasury record — the security
+                  deposit, any leverage facility, debit exposure and all treasury transactions. Their
+                  Treasury page will revert to &quot;No treasury account established&quot;. This cannot be
+                  undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleRemoveRecord}
+                  disabled={removing}
+                  className="bg-red-500 text-white hover:bg-red-600"
+                >
+                  {removing ? "Removing…" : "Remove facility"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
 
         {/* Post a transaction */}
         <div className="space-y-3 border-t border-border pt-5">

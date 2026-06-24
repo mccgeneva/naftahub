@@ -342,6 +342,55 @@ export async function deleteTreasuryTxnAdmin(
   }
 }
 
+/**
+ * Admin: completely remove a client's treasury facility.
+ *
+ * Deleting the row is what makes the removal actually "stick": the customer's
+ * `getMyTreasury` / `/api/treasury` read falls back to `emptyAccount()` (status
+ * "none"), so the client's Treasury page shows the "No treasury account
+ * established" empty state on their next load/refresh — not a stale "Fully
+ * Secured" deposit. Returns the empty account so the admin editor resets too.
+ */
+export async function deleteTreasuryRecordAdmin(
+  passcode: string,
+  userId: string,
+): Promise<AdminTreasuryResult> {
+  let admin: UserProfile
+  try {
+    admin = await requireAdmin(passcode)
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+
+  try {
+    const prev = await readAccount(userId)
+    if (prev.status === "none") {
+      // Nothing on record — treat as already removed (idempotent).
+      return { ok: true, account: emptyAccount() }
+    }
+
+    await query(`DELETE FROM treasury_accounts WHERE user_id = $1`, [userId])
+
+    const target = await resolveAccountProfileById(userId)
+    await logActivity({
+      action: `Administrator removed the treasury facility for ${target.fullName}`,
+      category: "Administration",
+      user: `${admin.fullName} (${admin.company})`,
+      details: {
+        targetAccount: `${target.fullName} — ${target.email}`,
+        removedDeposit: `EUR ${prev.requiredDeposit.toLocaleString("en-US")}`,
+        removedContribution: `EUR ${prev.customerContribution.toLocaleString("en-US")}`,
+        priorStatus: prev.status,
+      },
+    })
+
+    return { ok: true, account: emptyAccount() }
+  } catch (err) {
+    console.log("[v0] deleteTreasuryRecordAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The treasury facility could not be removed. Please try again." }
+  }
+}
+
 // --- SKR collateral → treasury balance --------------------------------------
 //
 // When the custody desk credits a Safe Keeping Receipt to a client's treasury,
