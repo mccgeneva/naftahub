@@ -7,6 +7,7 @@ import {
   SESSION_COOKIE,
   SESSION_META_COOKIE,
   SESSION_MAX_AGE,
+  IMPERSONATION_COOKIE,
   sessionCookieOptions,
   sessionMetaCookieOptions,
   freshLoginCookieOptions,
@@ -68,7 +69,16 @@ async function clearAllSessionCookies() {
   // name that WINS over this one, and an attribute-less clear cannot remove a
   // `SameSite=None; Secure` cookie — which would leave the session alive and
   // make logout appear to do nothing (the proxy re-authenticates on redirect).
-  for (const name of [SESSION_COOKIE, SESSION_META_COOKIE, USER_COOKIE, FRESH_LOGIN_COOKIE]) {
+  // IMPERSONATION_COOKIE is included so logging out (or any forced session clear)
+  // never leaves a stale "act as client" cookie behind that would resurrect an
+  // impersonated identity on the next visit.
+  for (const name of [
+    SESSION_COOKIE,
+    SESSION_META_COOKIE,
+    USER_COOKIE,
+    FRESH_LOGIN_COOKIE,
+    IMPERSONATION_COOKIE,
+  ]) {
     cookieStore.set(name, "", expiredCookieOptions)
   }
 }
@@ -134,6 +144,9 @@ async function establishSession(matchedUser: AuthMatch, email: string): Promise<
   })
   cookieStore.set(SESSION_META_COOKIE, metaToken, sessionMetaCookieOptions)
   cookieStore.set(FRESH_LOGIN_COOKIE, "1", freshLoginCookieOptions)
+  // A genuine login is always a clean, non-impersonated session — clear any
+  // lingering impersonation marker so the new session resolves to this account.
+  cookieStore.set(IMPERSONATION_COOKIE, "", expiredCookieOptions)
 
   await logActivity({
     action: "Login successful",

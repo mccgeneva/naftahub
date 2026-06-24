@@ -108,6 +108,75 @@ export async function verifySessionMeta(value: string | undefined | null): Promi
   }
 }
 
+// ---------------------------------------------------------------------------
+// Impersonation token ("act as client" maintenance session).
+//
+// Signed with the SAME HMAC key as the session metadata so the client cannot
+// forge or tamper with it. Carries the original admin identity + session token
+// (to restore in one click) and the impersonated target id. The `exp` is a hard
+// cap independent of the session metadata cookie.
+// ---------------------------------------------------------------------------
+
+export interface ImpersonationToken {
+  /** The original administrator's user id. */
+  adminId: string
+  /** The original administrator's per-user session token (to restore on return). */
+  adminToken: string
+  /** The original administrator's display name (for the banner / audit). */
+  adminName: string
+  /** The impersonated target account's user id. */
+  targetId: string
+  /** The impersonated target's display name (for the banner / audit). */
+  targetName: string
+  /** Issued-at (ms since epoch). */
+  iat: number
+  /** Absolute expiry (ms since epoch). */
+  exp: number
+}
+
+/** Create a signed impersonation token: `base64url(payload).base64url(hmac)`. */
+export async function signImpersonation(data: ImpersonationToken): Promise<string> {
+  const payloadBytes = encoder.encode(JSON.stringify(data))
+  const key = await getKey()
+  const sig = new Uint8Array(await globalThis.crypto.subtle.sign("HMAC", key, payloadBytes))
+  return `${bytesToBase64Url(payloadBytes)}.${bytesToBase64Url(sig)}`
+}
+
+/**
+ * Verify a signed impersonation token and return its payload, or `null` if the
+ * signature is invalid/missing/malformed (fails closed). Does NOT check expiry —
+ * callers compare `exp` against the current time so they can clear the cookie
+ * and log the precise reason.
+ */
+export async function verifyImpersonation(value: string | undefined | null): Promise<ImpersonationToken | null> {
+  if (!value) return null
+  const dot = value.indexOf(".")
+  if (dot <= 0 || dot === value.length - 1) return null
+
+  try {
+    const payloadPart = value.slice(0, dot)
+    const sigPart = value.slice(dot + 1)
+    const payloadBytes = base64UrlToBytes(payloadPart)
+    const sigBytes = base64UrlToBytes(sigPart)
+    const key = await getKey()
+    const ok = await globalThis.crypto.subtle.verify("HMAC", key, sigBytes, payloadBytes)
+    if (!ok) return null
+
+    const data = JSON.parse(new TextDecoder().decode(payloadBytes)) as ImpersonationToken
+    if (
+      typeof data?.adminId !== "string" ||
+      typeof data?.adminToken !== "string" ||
+      typeof data?.targetId !== "string" ||
+      typeof data?.exp !== "number"
+    ) {
+      return null
+    }
+    return data
+  } catch {
+    return null
+  }
+}
+
 export type SessionValidity = "valid" | "expired" | "idle" | "invalid"
 
 /**

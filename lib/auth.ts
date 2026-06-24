@@ -16,6 +16,15 @@ export const SESSION_META_COOKIE = "mcc_sess_meta"
 // fresh login. Consumed once by the SessionGuard, then cleared.
 export const FRESH_LOGIN_COOKIE = "mcc_fresh"
 
+// httpOnly, HMAC-signed cookie set when an administrator "signs in as" a client
+// for maintenance (impersonation). It records the ORIGINAL admin's id + session
+// token (so the admin session can be restored in one click) and the impersonated
+// target id. Because it is signed, the client cannot forge it; the server-side
+// session resolver reads it to (a) resolve the session to the TARGET account —
+// regardless of its status, so suspended/inactive accounts can be serviced — and
+// (b) surface a "Return to admin" banner. See lib/session-token.ts.
+export const IMPERSONATION_COOKIE = "mcc_imp"
+
 // Absolute session lifetime in seconds (8 hours) — a hard cap that is never
 // extended, even for an actively-used session.
 export const SESSION_MAX_AGE = 60 * 60 * 8
@@ -70,6 +79,19 @@ export const freshLoginCookieOptions = {
   sameSite: "none",
   path: "/",
   maxAge: 60,
+} as const
+
+// httpOnly options for the signed impersonation cookie. Given the full absolute
+// session lifetime (8h) rather than the idle window, so a long maintenance
+// session is never silently dropped while still inside the 8h cap. The idle /
+// absolute-expiry rules are still enforced independently by the session-metadata
+// cookie, and this cookie is always cleared on logout / fresh login / return.
+export const impersonationCookieOptions = {
+  httpOnly: true,
+  secure: true,
+  sameSite: "none",
+  path: "/",
+  maxAge: SESSION_MAX_AGE,
 } as const
 
 // Client-readable cookie holding the signed-in user's id. The client uses it to
