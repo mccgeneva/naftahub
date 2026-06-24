@@ -65,6 +65,7 @@ import { SwiftGpiTracker } from "@/components/swift-gpi-tracker"
 import { CommodityQuotations } from "@/components/dashboard/commodity-quotations"
 import { SpotDealsBoard } from "@/components/dashboard/spot-deals-board"
 import { type SpotDeal } from "@/lib/spot-deals-shared"
+import { useCurrentUser } from "@/lib/use-current-user"
 import {
   useCommodityDeals,
   DEAL_STAGES,
@@ -300,6 +301,19 @@ export default function CommodityTradingPage() {
     addNegotiationNote,
     hydrated,
   } = useCommodityDeals()
+  const user = useCurrentUser()
+
+  // Switch to the workflow tab and scroll a specific tracked deal into view.
+  const openTrackedDeal = (dealId: string) => {
+    setTab("workflow")
+    if (typeof window !== "undefined") {
+      requestAnimationFrame(() => {
+        const el = document.getElementById(`deal-${dealId}`)
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" })
+        else window.scrollTo({ top: 0, behavior: "smooth" })
+      })
+    }
+  }
 
   // Allow deep-linking to a specific tab, e.g. the dashboard spot-deal tile
   // links to /dashboard/commodity?tab=spot. Read from the URL in the lazy
@@ -403,7 +417,68 @@ export default function CommodityTradingPage() {
   // snapshot, switches to the Deal Workflow tab and scrolls it into view. The
   // user still reviews and submits — it then runs through the normal admin
   // approval + reserved-funds workflow. Nothing executes automatically.
-  const handleEngageSpotDeal = (deal: SpotDeal) => {
+  const handleEngageSpotDeal = (deal: SpotDeal, mode: "accepted" | "negotiate" = "negotiate") => {
+    const dealNotes = [
+      `${mode === "accepted" ? "Accepted (reserved)" : "Engaged"} limited-time spot deal ${deal.id} aboard ${deal.vesselName} (IMO ${deal.vesselImo}).`,
+      deal.loadPort ? `Route: ${deal.loadPort}${deal.dischargePort ? ` → ${deal.dischargePort}` : ""}.` : "",
+      deal.terms || "",
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .trim()
+
+    // ACCEPTED → auto-create a tracked commodity deal so the full workflow
+    // (payment / instruments, POF, POP, reserved-funds hold on approval, delivery)
+    // is immediately available. Idempotent: if a tracked deal already exists for
+    // this cargo, just jump to it instead of creating a duplicate.
+    if (mode === "accepted") {
+      const existing = deals.find((d) => d.spotDealId === deal.id)
+      if (existing) {
+        openTrackedDeal(existing.id)
+        return
+      }
+      const buyer = user.company?.trim() || user.fullName?.trim() || "Client account"
+      const created = addDeal({
+        spotDealId: deal.id,
+        title: `${deal.product} — ${deal.quantity.toLocaleString("en-US")} ${deal.unit} ${deal.incoterm} (Spot ${deal.id})`,
+        category: "Commodity Trade",
+        tradeStructure: "Spot",
+        commodity: deal.product,
+        quantity: `${deal.quantity.toLocaleString("en-US")} ${deal.unit.toUpperCase()}`,
+        approxValue: Math.round(deal.totalValue * 100) / 100,
+        currency: deal.currency,
+        buyerName: buyer,
+        sellerName: "MCC Capital — Spot Desk",
+        sendingBank: "",
+        sendingBankBic: "",
+        receivingBank: "",
+        receivingBankBic: "",
+        instrumentType: "Commodity",
+        originCountry: deal.loadPort,
+        destinationCountry: deal.dischargePort ?? "",
+        mt103Ref: "",
+        mt202Ref: "",
+        mt799Ref: "",
+        notes: dealNotes,
+      })
+      toast.success("Spot deal reserved — tracked deal created", {
+        description: `${created.id} is now in your workflow. Register payment, upload POF/POP and track it through to delivery. It is pending Administrator review — nothing executes automatically.`,
+      })
+      logActivity({
+        action: `Client accepted spot deal ${deal.id} → tracked commodity deal ${created.id}`,
+        category: "Commodity Trading",
+        details: {
+          summary: `Client accepted limited-time spot deal ${deal.id} (${deal.product}, ${deal.quantity.toLocaleString("en-US")} ${deal.unit} aboard ${deal.vesselName} IMO ${deal.vesselImo}) and a tracked commodity deal ${created.id} valued ~${formatCurrency(created.approxValue, created.currency)} was created for Administrator review. UETR ${created.uetr}.`,
+          referenceId: created.id,
+          uetr: created.uetr,
+          decision: "Pending",
+        },
+      })
+      openTrackedDeal(created.id)
+      return
+    }
+
+    // NEGOTIATE → pre-fill the deal form for the client to adjust terms and submit.
     const matched = deal.productId ? getCatalogProduct(deal.productId) : undefined
     setForm({
       ...emptyDeal,
@@ -419,20 +494,11 @@ export default function CommodityTradingPage() {
       instrumentType: "Commodity",
       originCountry: deal.loadPort,
       destinationCountry: deal.dischargePort ?? "",
-      notes: [
-        `Engaged limited-time spot deal ${deal.id} aboard ${deal.vesselName} (IMO ${deal.vesselImo}).`,
-        deal.loadPort ? `Route: ${deal.loadPort}${deal.dischargePort ? ` → ${deal.dischargePort}` : ""}.` : "",
-        deal.terms || "",
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .trim(),
+      notes: dealNotes,
     })
     setSendingBicValid(false)
     setReceivingBicValid(false)
     setTab("workflow")
-    // The board records the correct interest (accepted vs. engaged) and, for an
-    // acceptance, claims the cargo before this pre-fill runs.
     if (typeof window !== "undefined") {
       requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }))
     }
@@ -729,7 +795,7 @@ export default function CommodityTradingPage() {
 
         {/* SPOT DEALS TAB */}
         <TabsContent value="spot">
-          <SpotDealsBoard onEngage={handleEngageSpotDeal} />
+          <SpotDealsBoard onEngage={handleEngageSpotDeal} onOpenTrackedDeal={openTrackedDeal} />
         </TabsContent>
 
         {/* DEAL WORKFLOW TAB */}
@@ -1106,7 +1172,7 @@ export default function CommodityTradingPage() {
                   const popCount = deal.documents.filter((d) => d.module === "POP").length
                   const pofCount = deal.documents.filter((d) => d.module === "POF").length
                   return (
-                    <div key={deal.id} className="rounded-lg border border-border p-4">
+                    <div key={deal.id} id={`deal-${deal.id}`} className="scroll-mt-24 rounded-lg border border-border p-4">
                       <div className="flex flex-col gap-3">
                         <div className="flex flex-wrap items-center gap-2">
                           <StatusBadge status={deal.status} />
