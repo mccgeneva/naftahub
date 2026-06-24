@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useActivityLog } from "@/components/activity-tracker"
+import { ChangePassword } from "@/components/settings/change-password"
 
 export default function SettingsPage() {
   const [emailAlerts, setEmailAlerts] = useState(true)
@@ -97,25 +98,7 @@ export default function SettingsPage() {
             <Switch id="two-factor" checked={twoFactor} onCheckedChange={handleTwoFactor} />
           </div>
           <Separator />
-          <div className="rounded-lg border border-border bg-muted/40 p-4">
-            <div className="flex items-start gap-3">
-              <Mail className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-              <div className="space-y-1">
-                <Label>Password</Label>
-                <p className="text-xs text-muted-foreground">
-                  For your security, passwords cannot be changed from the platform. To request a
-                  password change, please contact your platform manager by email at{" "}
-                  <a
-                    href="mailto:Trader@mccgva.ch?subject=Password%20change%20request"
-                    className="font-medium text-primary underline underline-offset-2"
-                  >
-                    Trader@mccgva.ch
-                  </a>
-                  . Our team will verify your identity and assist you.
-                </p>
-              </div>
-            </div>
-          </div>
+          <ChangePassword />
         </CardContent>
       </Card>
 

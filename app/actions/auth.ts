@@ -16,7 +16,9 @@ import {
 } from "@/lib/auth"
 import { signSessionMeta } from "@/lib/session-token"
 import { USER_COOKIE } from "@/lib/user-scope"
-import { getDynamicUserByEmail, getDynamicUserById } from "@/lib/admin-users-db"
+import { getDynamicUserByEmail, getDynamicUserById, updateDynamicUserProfile } from "@/lib/admin-users-db"
+import { resolveCurrentSession } from "@/lib/session-user"
+import { DEMO_USER_ID } from "@/lib/users"
 import { logActivity } from "@/app/actions/log-activity"
 import {
   signChallenge,
@@ -311,6 +313,82 @@ export async function logout() {
     details: { result: "session ended" },
   })
   redirect("/login")
+}
+
+export type ChangePasswordResult = { ok: true } | { ok: false; error: string }
+
+/**
+ * Self-service password change for the signed-in client.
+ *
+ * Security model:
+ *  - Identity comes ONLY from the authoritative session (`resolveCurrentSession`),
+ *    never from client-supplied ids — a user can only ever change their OWN
+ *    password.
+ *  - The current password must be re-verified, so a hijacked but unlocked
+ *    session still can't silently rotate the password.
+ *  - The demo / showcase account (DEMO_USER_ID) is intentionally immutable so
+ *    the public demonstration login keeps working for everyone.
+ *  - Blocked while an administrator is impersonating ("Sign in as") a client —
+ *    admins rotate credentials through the dedicated admin reset tool instead,
+ *    so a maintenance session can't accidentally change a client's password.
+ */
+export async function changeMyPassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<ChangePasswordResult> {
+  const session = await resolveCurrentSession()
+  if (!session) {
+    return { ok: false, error: "Your session has expired. Please sign in again." }
+  }
+  if (session.impersonator) {
+    return {
+      ok: false,
+      error: "Password changes are disabled during a maintenance session. Use the admin reset tool instead.",
+    }
+  }
+  if (session.id === DEMO_USER_ID) {
+    return {
+      ok: false,
+      error: "This is a demonstration account — its password cannot be changed.",
+    }
+  }
+
+  const current = String(currentPassword || "")
+  const next = String(newPassword || "")
+  if (next.length < 8) {
+    return { ok: false, error: "Your new password must be at least 8 characters long." }
+  }
+  if (next === current) {
+    return { ok: false, error: "Your new password must be different from your current password." }
+  }
+
+  const rec = await getDynamicUserById(session.id)
+  if (!rec) {
+    return { ok: false, error: "We couldn't load your account. Please sign in again." }
+  }
+  if (current !== rec.password) {
+    await logActivity({
+      action: "Password change failed",
+      category: "Authentication / Security",
+      user: `${rec.profile.fullName || rec.email}`,
+      details: { email: rec.email, reason: "incorrect current password", result: "denied" },
+    })
+    return { ok: false, error: "Your current password is incorrect." }
+  }
+
+  const updated = await updateDynamicUserProfile(session.id, { password: next })
+  if (!updated) {
+    return { ok: false, error: "We couldn't update your password. Please try again." }
+  }
+
+  await logActivity({
+    action: "Password changed",
+    category: "Authentication / Security",
+    user: `${rec.profile.fullName || rec.email}`,
+    details: { email: rec.email, result: "password updated by account holder" },
+  })
+
+  return { ok: true }
 }
 
 // Reasons used for automatic session termination by the client-side SessionGuard.
