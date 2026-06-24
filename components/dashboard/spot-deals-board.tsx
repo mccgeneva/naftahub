@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { Ship, Clock, MapPin, Anchor, Flame, Droplet, Handshake, Loader2, Gauge, RefreshCw, MessageSquare } from "lucide-react"
+import { Ship, Clock, MapPin, Anchor, Flame, Droplet, Handshake, Loader2, Gauge, RefreshCw, MessageSquare, CheckCircle2, FileText } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import {
@@ -20,7 +20,7 @@ import {
   dealCountdown,
   VESSEL_TYPE_LABELS,
 } from "@/lib/spot-deals-shared"
-import { listLiveSpotDeals, recordSpotDealInterest, acceptSpotDeal } from "@/app/actions/spot-deals"
+import { listLiveSpotDeals, recordSpotDealInterest, acceptSpotDeal, listMyReservedSpotDeals } from "@/app/actions/spot-deals"
 
 const VESSEL_ICON: Record<VesselType, typeof Ship> = {
   crude: Droplet,
@@ -131,15 +131,91 @@ function SpotDealCard({
   )
 }
 
+/** A cargo the current user has reserved — theirs until delivery, off the public board. */
+function ReservedDealCard({ deal, onOpen }: { deal: SpotDeal; onOpen: (deal: SpotDeal) => void }) {
+  const Icon = VESSEL_ICON[deal.vesselType]
+  return (
+    <Card className="overflow-hidden border-primary/40 bg-primary/[0.03]">
+      <CardContent className="flex flex-col gap-4 p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Icon className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-pretty text-sm font-semibold leading-tight text-foreground">{deal.product}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{VESSEL_TYPE_LABELS[deal.vesselType]}</p>
+            </div>
+          </div>
+          <span className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
+            <CheckCircle2 className="h-3 w-3" />
+            Reserved by you
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border border-border bg-muted/40 p-3 text-xs">
+          <div className="col-span-2 flex items-center gap-1.5 text-foreground">
+            <Anchor className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate font-medium">{deal.vesselName}</span>
+            <span className="text-muted-foreground">IMO {deal.vesselImo}</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <MapPin className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{deal.loadPort}</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <Gauge className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{deal.incoterm}</span>
+          </div>
+        </div>
+
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Quantity</p>
+            <p className="text-sm font-semibold text-foreground">
+              {deal.quantity.toLocaleString("en-US")} {deal.unit}
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Spot price</p>
+            <p className="text-sm font-semibold text-foreground">
+              {formatMoney(deal.spotPrice, deal.currency)}
+              <span className="text-xs font-normal text-muted-foreground">/{deal.unit}</span>
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total value</p>
+            <p className="text-base font-bold text-primary">{formatMoney(deal.totalValue, deal.currency)}</p>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => onOpen(deal)} className="gap-1.5 bg-transparent">
+            <FileText className="h-4 w-4" />
+            Open deal
+          </Button>
+        </div>
+
+        <p className="text-pretty text-xs text-muted-foreground">
+          Reserved exclusively for you and removed from the public board. It remains open through the commodity-deal
+          workflow until delivery.
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
 export function SpotDealsBoard({ onEngage }: { onEngage: (deal: SpotDeal) => void }) {
   const [deals, setDeals] = useState<SpotDeal[]>([])
+  const [reserved, setReserved] = useState<SpotDeal[]>([])
   const [loading, setLoading] = useState(true)
   const [tick, setTick] = useState(() => Date.now())
 
   const load = useCallback(async () => {
     try {
-      const live = await listLiveSpotDeals()
+      const [live, mine] = await Promise.all([listLiveSpotDeals(), listMyReservedSpotDeals()])
       setDeals(live)
+      setReserved(mine)
     } finally {
       setLoading(false)
     }
@@ -181,12 +257,18 @@ export function SpotDealsBoard({ onEngage }: { onEngage: (deal: SpotDeal) => voi
         setSelected(null)
         return
       }
+      // Move it out of the public board and into the user's own reserved list.
       setDeals((prev) => prev.filter((d) => d.id !== selected.id))
+      setReserved((prev) =>
+        prev.some((d) => d.id === selected.id) ? prev : [{ ...selected, status: "engaged" }, ...prev],
+      )
       toast.success("Offer accepted and reserved", {
-        description: "It has been removed from the public board and pre-filled into the deal form for Administrator approval.",
+        description: "It's now yours under “Your reserved cargoes” and pre-filled into the deal form for Administrator approval.",
       })
       onEngage(selected)
       setSelected(null)
+      // Reconcile with the server so the reserved card reflects the stored record.
+      load()
     } finally {
       setAccepting(false)
     }
@@ -213,46 +295,30 @@ export function SpotDealsBoard({ onEngage }: { onEngage: (deal: SpotDeal) => voi
     )
   }
 
-  if (liveDeals.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card py-16 text-center">
-        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
-          <Ship className="h-6 w-6" />
-        </span>
+  // The user's reserved cargoes — always shown (when present), even if the public
+  // board is empty, so an accepted deal never "disappears" on its owner.
+  const reservedSection =
+    reserved.length > 0 ? (
+      <div className="space-y-3">
         <div>
-          <p className="text-sm font-medium text-foreground">No live spot deals right now</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Special limited-time cargoes published by the trading desk will appear here.
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+            <CheckCircle2 className="h-4 w-4 text-primary" />
+            Your reserved cargoes
+          </h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Spot deals you accepted. Reserved exclusively for you until delivery — others can no longer see them.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={load} className="gap-1.5 bg-transparent">
-          <RefreshCw className="h-4 w-4" />
-          Refresh
-        </Button>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {reserved.map((deal) => (
+            <ReservedDealCard key={deal.id} deal={deal} onOpen={onEngage} />
+          ))}
+        </div>
       </div>
-    )
-  }
+    ) : null
 
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          <span className="font-semibold text-foreground">{liveDeals.length}</span> limited-time spot{" "}
-          {liveDeals.length === 1 ? "offer" : "offers"} from the trading desk. Accepting pre-fills a deal for
-          Administrator approval — nothing executes automatically.
-        </p>
-        <Button variant="ghost" size="sm" onClick={load} className="gap-1.5">
-          <RefreshCw className="h-4 w-4" />
-          <span className="hidden sm:inline">Refresh</span>
-        </Button>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {liveDeals.map((deal) => (
-          <SpotDealCard key={deal.id} deal={deal} tick={tick} onSelect={handleSelect} />
-        ))}
-      </div>
-
-      <Dialog open={selected !== null} onOpenChange={(open) => !open && !accepting && setSelected(null)}>
+  const dialog = (
+    <Dialog open={selected !== null} onOpenChange={(open) => !open && !accepting && setSelected(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="text-pretty">{selected?.product}</DialogTitle>
@@ -297,6 +363,50 @@ export function SpotDealsBoard({ onEngage }: { onEngage: (deal: SpotDeal) => voi
           </DialogFooter>
         </DialogContent>
       </Dialog>
+  )
+
+  return (
+    <div className="space-y-8">
+      {reservedSection}
+
+      {liveDeals.length === 0 ? (
+        <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card py-16 text-center">
+          <span className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+            <Ship className="h-6 w-6" />
+          </span>
+          <div>
+            <p className="text-sm font-medium text-foreground">No live spot deals right now</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Special limited-time cargoes published by the trading desk will appear here.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={load} className="gap-1.5 bg-transparent">
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              <span className="font-semibold text-foreground">{liveDeals.length}</span> limited-time spot{" "}
+              {liveDeals.length === 1 ? "offer" : "offers"} from the trading desk. Accepting reserves the cargo for you
+              — nothing executes automatically.
+            </p>
+            <Button variant="ghost" size="sm" onClick={load} className="gap-1.5">
+              <RefreshCw className="h-4 w-4" />
+              <span className="hidden sm:inline">Refresh</span>
+            </Button>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {liveDeals.map((deal) => (
+              <SpotDealCard key={deal.id} deal={deal} tick={tick} onSelect={handleSelect} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {dialog}
     </div>
   )
 }

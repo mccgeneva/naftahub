@@ -34,6 +34,7 @@ import {
   saveDeal,
   appendInterest,
   claimDeal,
+  listReservedDealsForUser,
 } from "@/lib/spot-deals-db"
 import {
   computeTotalValue,
@@ -463,6 +464,22 @@ export async function listLiveSpotDeals(): Promise<SpotDeal[]> {
     return await listPublishedDeals()
   } catch (err) {
     console.log("[v0] listLiveSpotDeals failed:", (err as Error).message)
+    return []
+  }
+}
+
+/**
+ * The signed-in client's RESERVED spot deals — cargoes they accepted, which are
+ * now off the public board but remain theirs until delivery. Strictly scoped to
+ * the session user, so one client can never see another's reserved cargo.
+ */
+export async function listMyReservedSpotDeals(): Promise<SpotDeal[]> {
+  try {
+    const session = await resolveCurrentSession()
+    if (!session) return []
+    return await listReservedDealsForUser(session.id)
+  } catch (err) {
+    console.log("[v0] listMyReservedSpotDeals failed:", (err as Error).message)
     return []
   }
 }
