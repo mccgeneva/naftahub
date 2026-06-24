@@ -22,6 +22,8 @@ import {
   ShieldAlert,
   ShieldQuestion,
   RefreshCw,
+  Sparkles,
+  PackageSearch,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -55,7 +57,16 @@ import {
   PETROLEUM_PRODUCTS,
   COMMODITY_CATEGORIES,
   getCatalogProduct,
+  type CommodityUnit,
 } from "@/lib/petroleum-products"
+import {
+  compatibleVesselTypesForProduct,
+  suggestQuantity,
+  suggestSpotPrice,
+  findPortByLocation,
+  portsByRegion,
+} from "@/lib/spot-deal-autofill"
+import { PORTS } from "@/lib/commodity-quotations"
 import {
   VESSEL_TYPE_LABELS,
   VESSEL_TYPES,
@@ -842,15 +853,34 @@ const emptyDealForm = {
   vesselImo: "",
   productId: "",
   product: "",
-  unit: "bbl" as SpotDeal["unit"],
+  unit: "MT" as SpotDeal["unit"],
   quantity: "",
   spotPrice: "",
   currency: "USD",
   incoterm: "FOB",
+  loadPortId: "",
   loadPort: "",
   dischargePort: "",
   terms: "",
   expiresAt: "",
+  // Track which auto-filled fields the admin has manually overridden, so
+  // re-running the suggestion engine never clobbers a deliberate edit.
+  qtyTouched: false,
+  priceTouched: false,
+  loadPortTouched: false,
+}
+
+/** Small numbered step header for the guided create flow. */
+function StepHeader({ n, title, hint }: { n: number; title: string; hint?: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+        {n}
+      </span>
+      <span className="text-sm font-medium">{title}</span>
+      {hint ? <span className="text-xs text-muted-foreground">· {hint}</span> : null}
+    </div>
+  )
 }
 
 function CreateDeal({ vessels, onCreated }: { vessels: Vessel[]; onCreated: () => void }) {
@@ -862,9 +892,119 @@ function CreateDeal({ vessels, onCreated }: { vessels: Vessel[]; onCreated: () =
 
   const selectedVessel = useMemo(() => vessels.find((v) => v.imo === form.vesselImo), [vessels, form.vesselImo])
 
+  // Step 1 → Step 2 link: only tankers that can legally carry the chosen grade.
+  const compatibleTypes = useMemo(
+    () => (form.productId ? compatibleVesselTypesForProduct(form.productId) : VESSEL_TYPES),
+    [form.productId],
+  )
+  const compatibleVessels = useMemo(
+    () => vessels.filter((v) => compatibleTypes.includes(v.type)),
+    [vessels, compatibleTypes],
+  )
+
+  // Live suggestion shown beneath the price field (recomputed as product / port
+  // / incoterm change), so the admin always sees the desk's reference even after
+  // a manual override.
+  const suggestion = useMemo(
+    () =>
+      form.productId
+        ? suggestSpotPrice({ productId: form.productId, portId: form.loadPortId, incoterm: form.incoterm })
+        : null,
+    [form.productId, form.loadPortId, form.incoterm],
+  )
+
+  // Step 1: product drives the unit, filters vessels, and seeds a price.
   const handleProduct = (id: string) => {
     const product = getCatalogProduct(id)
-    if (product) setForm((p) => ({ ...p, productId: id, product: product.name, unit: product.unit }))
+    if (!product) return
+    setForm((p) => {
+      const types = compatibleVesselTypesForProduct(id)
+      const keepVessel = vessels.some((v) => v.imo === p.vesselImo && types.includes(v.type))
+      const next = {
+        ...p,
+        productId: id,
+        product: product.name,
+        unit: product.unit as SpotDeal["unit"],
+        vesselImo: keepVessel ? p.vesselImo : "",
+      }
+      if (!p.priceTouched) {
+        const s = suggestSpotPrice({ productId: id, portId: p.loadPortId, incoterm: p.incoterm })
+        if (s) next.spotPrice = String(s.price)
+      }
+      if (!p.qtyTouched && keepVessel) {
+        const q = suggestQuantity(selectedVessel, product.unit, id)
+        if (q) next.quantity = String(q)
+      } else if (!keepVessel) {
+        next.quantity = p.qtyTouched ? p.quantity : ""
+      }
+      return next
+    })
+  }
+
+  // Step 2: vessel seeds quantity available (from capacity) and the load port.
+  const handleVessel = (imo: string) => {
+    const v = vessels.find((x) => x.imo === imo)
+    setForm((p) => {
+      const next = { ...p, vesselImo: imo }
+      if (v && !p.qtyTouched) {
+        const q = suggestQuantity(v, p.unit as CommodityUnit, p.productId)
+        if (q) next.quantity = String(q)
+      }
+      if (v && !p.loadPortTouched) {
+        const port = findPortByLocation(v.location)
+        if (port) {
+          next.loadPortId = port.id
+          next.loadPort = port.name
+          if (!p.priceTouched) {
+            const s = suggestSpotPrice({ productId: p.productId, portId: port.id, incoterm: p.incoterm })
+            if (s) next.spotPrice = String(s.price)
+          }
+        }
+      }
+      return next
+    })
+  }
+
+  const handlePort = (portId: string) => {
+    const port = PORTS.find((x) => x.id === portId)
+    setForm((p) => {
+      const next = { ...p, loadPortId: portId, loadPort: port?.name ?? "", loadPortTouched: true }
+      if (!p.priceTouched) {
+        const s = suggestSpotPrice({ productId: p.productId, portId, incoterm: p.incoterm })
+        if (s) next.spotPrice = String(s.price)
+      }
+      return next
+    })
+  }
+
+  const handleIncoterm = (incoterm: string) => {
+    setForm((p) => {
+      const next = { ...p, incoterm }
+      if (!p.priceTouched) {
+        const s = suggestSpotPrice({ productId: p.productId, portId: p.loadPortId, incoterm })
+        if (s) next.spotPrice = String(s.price)
+      }
+      return next
+    })
+  }
+
+  const handleUnit = (unit: SpotDeal["unit"]) => {
+    setForm((p) => {
+      const next = { ...p, unit }
+      if (!p.priceTouched) {
+        const s = suggestSpotPrice({ productId: p.productId, portId: p.loadPortId, incoterm: p.incoterm })
+        if (s) next.spotPrice = String(s.price)
+      }
+      if (!p.qtyTouched && selectedVessel) {
+        const q = suggestQuantity(selectedVessel, unit as CommodityUnit, p.productId)
+        if (q) next.quantity = String(q)
+      }
+      return next
+    })
+  }
+
+  const applySuggestedPrice = () => {
+    if (suggestion) setForm((p) => ({ ...p, spotPrice: String(suggestion.price), priceTouched: false }))
   }
 
   // Default the expiry to 48h ahead the first time the form opens.
@@ -880,12 +1020,14 @@ function CreateDeal({ vessels, onCreated }: { vessels: Vessel[]; onCreated: () =
   const qty = Number.parseFloat(form.quantity.replace(/[, ]/g, ""))
   const price = Number.parseFloat(form.spotPrice.replace(/[, ]/g, ""))
   const total = computeTotalValue(Number.isFinite(qty) ? qty : 0, Number.isFinite(price) ? price : 0)
+  const priceOverridden = Boolean(suggestion && form.priceTouched && Number(form.spotPrice) !== suggestion.price)
 
   const submit = async (publish: boolean) => {
-    if (!form.vesselImo) return toast.error("Select a vessel.")
-    if (!form.product.trim()) return toast.error("Select a product.")
+    if (!form.product.trim()) return toast.error("Select a product first.")
+    if (!form.vesselImo) return toast.error("Select a compatible vessel.")
     if (!Number.isFinite(qty) || qty <= 0) return toast.error("Enter a valid quantity.")
     if (!Number.isFinite(price) || price <= 0) return toast.error("Enter a valid spot price.")
+    if (!form.loadPort.trim()) return toast.error("Select a load port.")
     if (!form.expiresAt) return toast.error("Set an expiry.")
     const expiresIso = new Date(form.expiresAt).toISOString()
     if (new Date(expiresIso).getTime() <= Date.now()) return toast.error("Expiry must be in the future.")
@@ -925,6 +1067,9 @@ function CreateDeal({ vessels, onCreated }: { vessels: Vessel[]; onCreated: () =
     }
   }
 
+  const regions = useMemo(() => portsByRegion(), [])
+  const productChosen = Boolean(form.productId)
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -933,174 +1078,234 @@ function CreateDeal({ vessels, onCreated }: { vessels: Vessel[]; onCreated: () =
           Create Spot Deal
         </CardTitle>
         <CardDescription>
-          Publish a limited-time offer against a vessel. Publishing broadcasts it to all active clients and lists it in
-          Commodity Trading.
+          Pick the product, choose a compatible vessel, then review the auto-filled terms. Publishing broadcasts the
+          offer to all active clients and lists it in Commodity Trading.
         </CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <Label className="text-xs">Vessel</Label>
-            <Select value={form.vesselImo} onValueChange={(v) => set("vesselImo", v)}>
-              <SelectTrigger className="mt-1">
-                <SelectValue placeholder="Select a vessel from the catalogue" />
-              </SelectTrigger>
-              <SelectContent>
-                {vessels.map((v) => (
+      <CardContent className="flex flex-col gap-5">
+        {/* Step 1 — Product */}
+        <div className="flex flex-col gap-2">
+          <StepHeader n={1} title="Product" hint="sets the unit and filters compatible vessels" />
+          <Select value={form.productId} onValueChange={handleProduct}>
+            <SelectTrigger>
+              <SelectValue placeholder="Select the product to offer" />
+            </SelectTrigger>
+            <SelectContent>
+              {COMMODITY_CATEGORIES.map((cat) => (
+                <SelectGroup key={cat}>
+                  <SelectLabel>{cat}</SelectLabel>
+                  {PETROLEUM_PRODUCTS.filter((p) => p.category === cat).map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
+          {productChosen && (
+            <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <PackageSearch className="h-3.5 w-3.5" />
+              Priced in <span className="font-medium text-foreground">{form.unit}</span> · compatible with{" "}
+              <span className="font-medium text-foreground">
+                {compatibleTypes.map((t) => VESSEL_TYPE_LABELS[t]).join(" / ")}
+              </span>
+            </p>
+          )}
+        </div>
+
+        {/* Step 2 — Vessel (filtered by product compatibility) */}
+        <div className="flex flex-col gap-2">
+          <StepHeader
+            n={2}
+            title="Vessel"
+            hint={productChosen ? `${compatibleVessels.length} compatible in catalogue` : "select a product first"}
+          />
+          <Select value={form.vesselImo} onValueChange={handleVessel} disabled={!productChosen}>
+            <SelectTrigger>
+              <SelectValue placeholder={productChosen ? "Select a compatible vessel" : "Choose a product to enable"} />
+            </SelectTrigger>
+            <SelectContent>
+              {compatibleVessels.length === 0 ? (
+                <div className="px-2 py-4 text-center text-xs text-muted-foreground">
+                  No compatible vessels in the catalogue for this product.
+                </div>
+              ) : (
+                compatibleVessels.map((v) => (
                   <SelectItem key={v.imo} value={v.imo}>
                     {v.name} — IMO {v.imo} ({VESSEL_TYPE_LABELS[v.type]})
                   </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selectedVessel && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                {selectedVessel.vesselClass || "—"} · {selectedVessel.capacity.toLocaleString("en-US")}{" "}
-                {selectedVessel.capacityUnit} · {VESSEL_STATUS_LABELS[selectedVessel.status]} ·{" "}
-                {selectedVessel.location || "—"}
-                {selectedVessel.cargo ? ` · carrying ${selectedVessel.cargo}` : ""}
-              </p>
-            )}
-          </div>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+          {selectedVessel && (
+            <p className="text-xs text-muted-foreground">
+              {selectedVessel.vesselClass || "—"} · {selectedVessel.capacity.toLocaleString("en-US")}{" "}
+              {selectedVessel.capacityUnit} · {VESSEL_STATUS_LABELS[selectedVessel.status]} ·{" "}
+              {selectedVessel.location || "—"}
+              {selectedVessel.cargo ? ` · carrying ${selectedVessel.cargo}` : ""}
+            </p>
+          )}
+        </div>
 
-          <div className="sm:col-span-2">
-            <Label className="text-xs">Product</Label>
-            <Select value={form.productId} onValueChange={handleProduct}>
-              <SelectTrigger className="mt-1">
-                <SelectValue placeholder="Select the transported product" />
-              </SelectTrigger>
-              <SelectContent>
-                {COMMODITY_CATEGORIES.map((cat) => (
-                  <SelectGroup key={cat}>
-                    <SelectLabel>{cat}</SelectLabel>
-                    {PETROLEUM_PRODUCTS.filter((p) => p.category === cat).map((p) => (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.name}
+        {/* Step 3 — Commercial terms (auto-filled, overridable) */}
+        <div className="flex flex-col gap-3">
+          <StepHeader n={3} title="Terms" hint="auto-filled — review and adjust" />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="d-qty" className="text-xs">
+                Quantity available
+              </Label>
+              <div className="mt-1 flex gap-2">
+                <Input
+                  id="d-qty"
+                  value={form.quantity}
+                  onChange={(e) => setForm((p) => ({ ...p, quantity: e.target.value, qtyTouched: true }))}
+                  placeholder="e.g. 1,000,000"
+                  inputMode="decimal"
+                />
+                <Select value={form.unit} onValueChange={(v) => handleUnit(v as SpotDeal["unit"])}>
+                  <SelectTrigger className="w-24">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="bbl">bbl</SelectItem>
+                    <SelectItem value="MT">MT</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {selectedVessel && !form.qtyTouched && form.quantity && (
+                <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <Sparkles className="h-3 w-3" /> From vessel capacity (~95% laden)
+                </p>
+              )}
+            </div>
+
+            <div>
+              <Label htmlFor="d-price" className="text-xs">
+                Spot price (per {form.unit})
+              </Label>
+              <div className="mt-1 flex gap-2">
+                <Select value={form.currency} onValueChange={(v) => set("currency", v)}>
+                  <SelectTrigger className="w-24">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CURRENCIES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
                       </SelectItem>
                     ))}
-                  </SelectGroup>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <Label htmlFor="d-qty" className="text-xs">
-              Quantity available
-            </Label>
-            <div className="mt-1 flex gap-2">
-              <Input
-                id="d-qty"
-                value={form.quantity}
-                onChange={(e) => set("quantity", e.target.value)}
-                placeholder="e.g. 1,000,000"
-                inputMode="decimal"
-              />
-              <Select value={form.unit} onValueChange={(v) => set("unit", v as SpotDeal["unit"])}>
-                <SelectTrigger className="w-24">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="bbl">bbl</SelectItem>
-                  <SelectItem value="MT">MT</SelectItem>
-                </SelectContent>
-              </Select>
+                  </SelectContent>
+                </Select>
+                <Input
+                  id="d-price"
+                  value={form.spotPrice}
+                  onChange={(e) => setForm((p) => ({ ...p, spotPrice: e.target.value, priceTouched: true }))}
+                  placeholder="Special spot price"
+                  inputMode="decimal"
+                />
+              </div>
+              {suggestion && (
+                <p className="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+                  <Sparkles className="h-3 w-3" /> Suggested {suggestion.currency}{" "}
+                  {suggestion.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} /{" "}
+                  {suggestion.unit} ({suggestion.basis} · market − desk discount)
+                  {priceOverridden && (
+                    <button
+                      type="button"
+                      onClick={applySuggestedPrice}
+                      className="font-medium text-primary underline underline-offset-2"
+                    >
+                      Use suggested
+                    </button>
+                  )}
+                </p>
+              )}
             </div>
-          </div>
 
-          <div>
-            <Label htmlFor="d-price" className="text-xs">
-              Spot price (per {form.unit})
-            </Label>
-            <div className="mt-1 flex gap-2">
-              <Select value={form.currency} onValueChange={(v) => set("currency", v)}>
-                <SelectTrigger className="w-24">
+            <div>
+              <Label className="text-xs">Incoterm</Label>
+              <Select value={form.incoterm} onValueChange={handleIncoterm}>
+                <SelectTrigger className="mt-1">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {CURRENCIES.map((c) => (
-                    <SelectItem key={c} value={c}>
-                      {c}
+                  {INCOTERMS.map((i) => (
+                    <SelectItem key={i} value={i}>
+                      {i}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+
+            <div>
+              <Label className="text-xs">Load port</Label>
+              <Select value={form.loadPortId} onValueChange={handlePort}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="Select a loading terminal" />
+                </SelectTrigger>
+                <SelectContent>
+                  {regions.map((g) => (
+                    <SelectGroup key={g.region}>
+                      <SelectLabel>{g.region}</SelectLabel>
+                      {g.ports.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name} — {p.country}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
+              </Select>
+              {form.loadPortId && !form.loadPortTouched && selectedVessel && (
+                <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <Sparkles className="h-3 w-3" /> Matched from vessel location
+                </p>
+              )}
+            </div>
+
+            <div>
+              <Label htmlFor="d-expiry" className="text-xs">
+                Offer expires (limited time)
+              </Label>
               <Input
-                id="d-price"
-                value={form.spotPrice}
-                onChange={(e) => set("spotPrice", e.target.value)}
-                placeholder="Special spot price"
-                inputMode="decimal"
+                id="d-expiry"
+                type="datetime-local"
+                value={form.expiresAt}
+                onChange={(e) => set("expiresAt", e.target.value)}
+                className="mt-1"
               />
             </div>
-          </div>
 
-          <div>
-            <Label className="text-xs">Incoterm</Label>
-            <Select value={form.incoterm} onValueChange={(v) => set("incoterm", v)}>
-              <SelectTrigger className="mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {INCOTERMS.map((i) => (
-                  <SelectItem key={i} value={i}>
-                    {i}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+            <div>
+              <Label htmlFor="d-disch" className="text-xs">
+                Discharge port (optional)
+              </Label>
+              <Input
+                id="d-disch"
+                value={form.dischargePort}
+                onChange={(e) => set("dischargePort", e.target.value)}
+                placeholder="e.g. Rotterdam"
+                className="mt-1"
+              />
+            </div>
 
-          <div>
-            <Label htmlFor="d-expiry" className="text-xs">
-              Offer expires (limited time)
-            </Label>
-            <Input
-              id="d-expiry"
-              type="datetime-local"
-              value={form.expiresAt}
-              onChange={(e) => set("expiresAt", e.target.value)}
-              className="mt-1"
-            />
-          </div>
-
-          <div>
-            <Label htmlFor="d-load" className="text-xs">
-              Load port
-            </Label>
-            <Input
-              id="d-load"
-              value={form.loadPort}
-              onChange={(e) => set("loadPort", e.target.value)}
-              placeholder="e.g. Ras Tanura"
-              className="mt-1"
-            />
-          </div>
-          <div>
-            <Label htmlFor="d-disch" className="text-xs">
-              Discharge port (optional)
-            </Label>
-            <Input
-              id="d-disch"
-              value={form.dischargePort}
-              onChange={(e) => set("dischargePort", e.target.value)}
-              placeholder="e.g. Rotterdam"
-              className="mt-1"
-            />
-          </div>
-
-          <div className="sm:col-span-2">
-            <Label htmlFor="d-terms" className="text-xs">
-              Other relevant terms
-            </Label>
-            <Textarea
-              id="d-terms"
-              value={form.terms}
-              onChange={(e) => set("terms", e.target.value)}
-              placeholder="Payment terms, inspection, laycan, performance bond, etc."
-              rows={3}
-              className="mt-1"
-            />
+            <div className="sm:col-span-2">
+              <Label htmlFor="d-terms" className="text-xs">
+                Other relevant terms
+              </Label>
+              <Textarea
+                id="d-terms"
+                value={form.terms}
+                onChange={(e) => set("terms", e.target.value)}
+                placeholder="Payment terms, inspection, laycan, performance bond, etc."
+                rows={3}
+                className="mt-1"
+              />
+            </div>
           </div>
         </div>
 
@@ -1115,7 +1320,7 @@ function CreateDeal({ vessels, onCreated }: { vessels: Vessel[]; onCreated: () =
             </Button>
             <Button onClick={() => submit(true)} disabled={submitting}>
               {submitting ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Megaphone className="mr-1.5 h-4 w-4" />}
-              Publish &amp; broadcast
+              Confirm &amp; Publish
             </Button>
           </div>
         </div>
