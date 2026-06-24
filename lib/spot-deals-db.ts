@@ -277,3 +277,22 @@ export async function claimDeal(id: string, interest: SpotDealInterest): Promise
   )
   return rows[0] ? rowToDeal(rows[0]) : null
 }
+
+/**
+ * Deals a specific client has RESERVED (accepted). Once a client accepts a deal
+ * it flips to `engaged` and leaves the public board for everyone — but the client
+ * who claimed it must keep seeing it (their reserved cargo) until delivery. A
+ * deal "belongs" to the user if its interests contain an `accepted` action by
+ * them. Scoped by userId via JSONB containment; newest reservation first.
+ */
+export async function listReservedDealsForUser(userId: string): Promise<SpotDeal[]> {
+  await ensureTables()
+  const { rows } = await query(
+    `SELECT * FROM spot_deals
+      WHERE status = 'engaged'
+        AND payload->'interests' @> $1::jsonb
+      ORDER BY created_at DESC`,
+    [JSON.stringify([{ userId, action: "accepted" }])],
+  )
+  return rows.map(rowToDeal)
+}
