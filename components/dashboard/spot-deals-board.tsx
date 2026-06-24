@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { Ship, Clock, MapPin, Anchor, Flame, Droplet, Handshake, Loader2, Gauge, RefreshCw, MessageSquare, CheckCircle2, FileText } from "lucide-react"
+import { Ship, Clock, MapPin, Anchor, Flame, Droplet, Handshake, Loader2, Gauge, RefreshCw, MessageSquare, CheckCircle2, FileText, ArrowRight } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import {
@@ -21,6 +21,7 @@ import {
   VESSEL_TYPE_LABELS,
 } from "@/lib/spot-deals-shared"
 import { listLiveSpotDeals, recordSpotDealInterest, acceptSpotDeal, listMyReservedSpotDeals } from "@/app/actions/spot-deals"
+import { useCommodityDeals, DEAL_STAGES, type CommodityDeal } from "@/lib/commodity-deals-store"
 
 const VESSEL_ICON: Record<VesselType, typeof Ship> = {
   crude: Droplet,
@@ -131,9 +132,35 @@ function SpotDealCard({
   )
 }
 
+// Status of the tracked commodity deal behind a reserved cargo.
+function trackedStatusLine(linked: CommodityDeal | undefined): { label: string; tone: string } {
+  if (!linked) return { label: "Setting up tracked deal…", tone: "text-muted-foreground" }
+  if (linked.delivered) return { label: "Delivered · deal performed", tone: "text-green-500" }
+  const stageLabel = DEAL_STAGES.find((s) => s.key === linked.stage)?.label ?? linked.stage
+  switch (linked.status) {
+    case "approved":
+      return { label: `Approved · ${stageLabel}`, tone: "text-green-500" }
+    case "rejected":
+      return { label: "Rejected by Administrator", tone: "text-destructive" }
+    case "cancelled":
+      return { label: "Revoked", tone: "text-muted-foreground" }
+    default:
+      return { label: `Pending review · ${stageLabel}`, tone: "text-primary" }
+  }
+}
+
 /** A cargo the current user has reserved — theirs until delivery, off the public board. */
-function ReservedDealCard({ deal, onOpen }: { deal: SpotDeal; onOpen: (deal: SpotDeal) => void }) {
+function ReservedDealCard({
+  deal,
+  linked,
+  onOpen,
+}: {
+  deal: SpotDeal
+  linked: CommodityDeal | undefined
+  onOpen: () => void
+}) {
   const Icon = VESSEL_ICON[deal.vesselType]
+  const status = trackedStatusLine(linked)
   return (
     <Card className="overflow-hidden border-primary/40 bg-primary/[0.03]">
       <CardContent className="flex flex-col gap-4 p-5">
@@ -151,6 +178,11 @@ function ReservedDealCard({ deal, onOpen }: { deal: SpotDeal; onOpen: (deal: Spo
             <CheckCircle2 className="h-3 w-3" />
             Reserved by you
           </span>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-2">
+          <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Tracked deal</span>
+          <span className={cn("text-xs font-semibold", status.tone)}>{status.label}</span>
         </div>
 
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border border-border bg-muted/40 p-3 text-xs">
@@ -190,22 +222,29 @@ function ReservedDealCard({ deal, onOpen }: { deal: SpotDeal; onOpen: (deal: Spo
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total value</p>
             <p className="text-base font-bold text-primary">{formatMoney(deal.totalValue, deal.currency)}</p>
           </div>
-          <Button size="sm" variant="outline" onClick={() => onOpen(deal)} className="gap-1.5 bg-transparent">
-            <FileText className="h-4 w-4" />
-            Open deal
+          <Button size="sm" onClick={onOpen} className="gap-1.5">
+            {linked ? <ArrowRight className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+            {linked ? "Manage deal" : "Open deal"}
           </Button>
         </div>
 
         <p className="text-pretty text-xs text-muted-foreground">
-          Reserved exclusively for you and removed from the public board. It remains open through the commodity-deal
-          workflow until delivery.
+          Reserved exclusively for you and removed from the public board. Manage payment, bank instruments, POF and POP
+          in the deal workflow — it stays open through to delivery.
         </p>
       </CardContent>
     </Card>
   )
 }
 
-export function SpotDealsBoard({ onEngage }: { onEngage: (deal: SpotDeal) => void }) {
+export function SpotDealsBoard({
+  onEngage,
+  onOpenTrackedDeal,
+}: {
+  onEngage: (deal: SpotDeal, mode: "accepted" | "negotiate") => void
+  onOpenTrackedDeal: (trackedDealId: string) => void
+}) {
+  const { deals: trackedDeals } = useCommodityDeals()
   const [deals, setDeals] = useState<SpotDeal[]>([])
   const [reserved, setReserved] = useState<SpotDeal[]>([])
   const [loading, setLoading] = useState(true)
@@ -243,8 +282,8 @@ export function SpotDealsBoard({ onEngage }: { onEngage: (deal: SpotDeal) => voi
   const handleSelect = useCallback((deal: SpotDeal) => setSelected(deal), [])
 
   // Accept = reserve the cargo. Claims it server-side (published → engaged) so it
-  // leaves the public board for everyone, then pre-fills the deal form. Optimistic
-  // removal gives immediate, unmistakable feedback.
+  // leaves the public board for everyone, then auto-creates the tracked commodity
+  // deal. Optimistic removal gives immediate, unmistakable feedback.
   const handleAccept = useCallback(async () => {
     if (!selected || accepting) return
     setAccepting(true)
@@ -262,10 +301,8 @@ export function SpotDealsBoard({ onEngage }: { onEngage: (deal: SpotDeal) => voi
       setReserved((prev) =>
         prev.some((d) => d.id === selected.id) ? prev : [{ ...selected, status: "engaged" }, ...prev],
       )
-      toast.success("Offer accepted and reserved", {
-        description: "It's now yours under “Your reserved cargoes” and pre-filled into the deal form for Administrator approval.",
-      })
-      onEngage(selected)
+      // Auto-create (and navigate to) the tracked commodity deal with full tooling.
+      onEngage(selected, "accepted")
       setSelected(null)
       // Reconcile with the server so the reserved card reflects the stored record.
       load()
@@ -279,7 +316,7 @@ export function SpotDealsBoard({ onEngage }: { onEngage: (deal: SpotDeal) => voi
   const handleNegotiate = useCallback(() => {
     if (!selected) return
     recordSpotDealInterest(selected.id, "engaged").catch(() => {})
-    onEngage(selected)
+    onEngage(selected, "negotiate")
     toast.success("Loaded into the deal form to negotiate", {
       description: "Adjust the terms and submit for Administrator approval. The offer stays open until accepted.",
     })
@@ -310,9 +347,19 @@ export function SpotDealsBoard({ onEngage }: { onEngage: (deal: SpotDeal) => voi
           </p>
         </div>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {reserved.map((deal) => (
-            <ReservedDealCard key={deal.id} deal={deal} onOpen={onEngage} />
-          ))}
+          {reserved.map((deal) => {
+            const linked = trackedDeals.find((d) => d.spotDealId === deal.id)
+            return (
+              <ReservedDealCard
+                key={deal.id}
+                deal={deal}
+                linked={linked}
+                // If the tracked deal already exists, jump straight to it; otherwise
+                // create it now (heals cargoes reserved before auto-create existed).
+                onOpen={() => (linked ? onOpenTrackedDeal(linked.id) : onEngage(deal, "accepted"))}
+              />
+            )
+          })}
         </div>
       </div>
     ) : null

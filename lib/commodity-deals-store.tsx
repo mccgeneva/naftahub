@@ -107,6 +107,8 @@ export interface CommodityDeal {
   id: string // platform reference, e.g. "DEAL-1A2B3C4D"
   /** DB approval id once mirrored, so admin decisions can be reconciled back. */
   approvalId?: string
+  /** Source spot deal id when this tracked deal was auto-created from a reserved spot cargo. */
+  spotDealId?: string
   uetr: string // SWIFT gpi Unique End-to-End Transaction Reference (UUID v4)
 
   // Deal identity
