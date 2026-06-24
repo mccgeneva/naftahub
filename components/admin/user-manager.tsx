@@ -19,6 +19,7 @@ import {
   Sparkles,
   FileText,
   X,
+  LogIn,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -57,6 +58,7 @@ import {
   type SelectableClient,
 } from "@/app/actions/admin-users"
 import { adminResetUserFace } from "@/app/actions/biometric"
+import { startImpersonation } from "@/app/actions/admin-impersonation"
 import type { UserStatus, AccountRelationship } from "@/lib/profile-types"
 import { RELATIONSHIP_OPTIONS, relationshipLabel, relationshipCode } from "@/lib/account-hierarchy"
 import { upload } from "@vercel/blob/client"
@@ -142,6 +144,9 @@ export function UserManager() {
   // Face ID reset confirm
   const [faceResetTarget, setFaceResetTarget] = useState<AdminUserView | null>(null)
   const [faceResetting, setFaceResetting] = useState(false)
+
+  // "Sign in as" (impersonation) — tracks the account currently being entered.
+  const [impersonatingId, setImpersonatingId] = useState<string | null>(null)
 
   const load = () => {
     setLoading(true)
@@ -506,6 +511,27 @@ export function UserManager() {
     })
   }
 
+  const handleSignInAs = async (u: AdminUserView) => {
+    setImpersonatingId(u.id)
+    logActivity({
+      action: `Administrator opened a maintenance session for ${u.fullName}`,
+      category: "Administration / Security",
+      details: {
+        summary: `Administrator signed in as ${u.fullName} (${u.company}) to perform account maintenance.`,
+        account: `${u.fullName} — ${u.email}`,
+        status: u.status,
+      },
+    })
+    // On success this server action establishes the client's session and
+    // redirects into the dashboard, so control never returns here. It only
+    // returns when something went wrong.
+    const res = await startImpersonation(ADMIN_PASSCODE, u.id)
+    if (res && !res.ok) {
+      toast.error(res.error)
+      setImpersonatingId(null)
+    }
+  }
+
   const copy = async (text: string, which: "email" | "password" | "both") => {
     try {
       await navigator.clipboard.writeText(text)
@@ -597,6 +623,21 @@ export function UserManager() {
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleSignInAs(u)}
+                      disabled={impersonatingId === u.id}
+                      className="text-primary hover:text-primary"
+                      title="Sign in as this client to perform maintenance"
+                    >
+                      {impersonatingId === u.id ? (
+                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <LogIn className="mr-1.5 h-3.5 w-3.5" />
+                      )}
+                      Sign in as
+                    </Button>
                     <Button variant="outline" size="sm" onClick={() => openReset(u)}>
                       <KeyRound className="mr-1.5 h-3.5 w-3.5" /> Reset
                     </Button>

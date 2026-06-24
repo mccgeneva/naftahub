@@ -8,6 +8,7 @@ import { ActivityTracker } from "@/components/activity-tracker"
 import { CurrentUserProvider } from "@/lib/use-current-user"
 import { PdfViewerProvider } from "@/lib/pdf-viewer"
 import { SessionGuard } from "@/components/session-guard"
+import { ImpersonationBanner } from "@/components/impersonation-banner"
 import { PointerEventsGuard } from "@/components/pointer-events-guard"
 import { DemoSeedGate } from "@/components/demo-seed-gate"
 import { FundingCapitalReconciler } from "@/components/funding-capital-reconciler"
@@ -71,19 +72,32 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <PointerEventsGuard />
       <FundingCapitalReconciler />
       <TreasuryFinancingReconciler />
-      <div className="flex h-screen overflow-hidden bg-background">
-        {/* Desktop Sidebar */}
-        <div className="hidden md:block">
-          <DashboardSidebar />
-        </div>
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
+        {/* Maintenance banner — only while an administrator is signed in as this client. */}
+        {identity.impersonator && (
+          <ImpersonationBanner
+            adminName={identity.impersonator.name}
+            targetName={
+              identity.kind === "dynamic"
+                ? identity.profile.fullName || identity.profile.company || "this client"
+                : "this client"
+            }
+          />
+        )}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Desktop Sidebar */}
+          <div className="hidden md:block">
+            <DashboardSidebar />
+          </div>
 
-        {/* Main Content */}
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <DashboardHeader />
-          <MarketTicker />
-          <main className="flex-1 overflow-y-auto p-4 pb-24 md:p-6 md:pb-24">{children}</main>
+          {/* Main Content */}
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <DashboardHeader />
+            <MarketTicker />
+            <main className="flex-1 overflow-y-auto p-4 pb-24 md:p-6 md:pb-24">{children}</main>
+          </div>
+          <BackToTop />
         </div>
-        <BackToTop />
       </div>
       </GatewayProvider>
       </TreasuryProvider>

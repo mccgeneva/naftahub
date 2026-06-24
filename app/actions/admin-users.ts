@@ -537,8 +537,13 @@ export async function getMyProfile(): Promise<SerializableUserProfile | null> {
  * OWN identity.
  */
 export type MyIdentity =
-  | { kind: "static"; id: string }
-  | { kind: "dynamic"; id: string; profile: SerializableUserProfile }
+  | { kind: "static"; id: string; impersonator?: { id: string; name: string } }
+  | {
+      kind: "dynamic"
+      id: string
+      profile: SerializableUserProfile
+      impersonator?: { id: string; name: string }
+    }
 
 export async function getMyIdentity(): Promise<MyIdentity | null> {
   try {
@@ -546,13 +551,13 @@ export async function getMyIdentity(): Promise<MyIdentity | null> {
     const session = await resolveCurrentSession()
     if (!session) return null
     if (session.kind === "static") {
-      return { kind: "static", id: session.id }
+      return { kind: "static", id: session.id, impersonator: session.impersonator }
     }
     const rec = await getDynamicUserById(session.id)
     if (!rec) return null
     // Coerce the stored badge so legacy/blank tiers resolve to PRO / Avant-garde.
     const profile = { ...rec.profile, accountBadge: normalizeAccountBadge(rec.profile.accountBadge) }
-    return { kind: "dynamic", id: session.id, profile }
+    return { kind: "dynamic", id: session.id, profile, impersonator: session.impersonator }
   } catch {
     return null
   }

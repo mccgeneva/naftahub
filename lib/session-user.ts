@@ -16,8 +16,8 @@
 
 import "server-only"
 import { cookies } from "next/headers"
-import { SESSION_COOKIE, SESSION_META_COOKIE, SESSION_IDLE_MAX_AGE } from "@/lib/auth"
-import { verifySessionMeta, evaluateSessionMeta } from "@/lib/session-token"
+import { SESSION_COOKIE, SESSION_META_COOKIE, SESSION_IDLE_MAX_AGE, IMPERSONATION_COOKIE } from "@/lib/auth"
+import { verifySessionMeta, evaluateSessionMeta, verifyImpersonation } from "@/lib/session-token"
 import { getUserById, type UserProfile } from "@/lib/users"
 import {
   getDynamicUserById,
@@ -50,6 +50,13 @@ export interface ResolvedSession {
    * everything else (KYC, beneficiaries, profile, etc.).
    */
   dataOwnerId: string
+  /**
+   * Set ONLY when an administrator is "signed in as" this account for
+   * maintenance. Records the original admin so the UI can show a "Return to
+   * admin" banner and the audit trail attributes actions correctly. Absent for
+   * normal (non-impersonated) sessions.
+   */
+  impersonator?: { id: string; name: string }
 }
 
 function dynamicToResolved(rec: DynamicUserRecord): ResolvedSession {
@@ -115,6 +122,26 @@ export async function resolveCurrentSession(): Promise<ResolvedSession | null> {
   // session even if it were somehow reached without passing the Edge proxy.
   const meta = await verifySessionMeta(cookieStore.get(SESSION_META_COOKIE)?.value)
   if (evaluateSessionMeta(meta, SESSION_IDLE_MAX_AGE * 1000) !== "valid") return null
+
+  // Admin "act as client" maintenance session. When a valid, signed
+  // impersonation cookie is present, the session resolves to the TARGET account
+  // so the entire dashboard (identity, ledger, instruments, KYC, …) operates as
+  // that client. The target is resolved by id rather than by session token, so
+  // it works even for suspended/inactive accounts that an admin needs to
+  // maintain (e.g. the client changed their own password or enrolled Face ID).
+  const imp = await verifyImpersonation(cookieStore.get(IMPERSONATION_COOKIE)?.value)
+  if (imp && Date.now() < imp.exp) {
+    try {
+      const rec = await getDynamicUserById(imp.targetId)
+      if (rec) {
+        const resolved = dynamicToResolved(rec)
+        resolved.impersonator = { id: imp.adminId, name: imp.adminName }
+        return resolved
+      }
+    } catch {
+      // DB unreachable — fall through to the normal token resolution below.
+    }
+  }
 
   return resolveSessionByToken(token)
 }
