@@ -1,10 +1,17 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { Ship, Clock, MapPin, Anchor, Flame, Droplet, Handshake, Loader2, Gauge, RefreshCw } from "lucide-react"
+import { Ship, Clock, MapPin, Anchor, Flame, Droplet, Handshake, Loader2, Gauge, RefreshCw, MessageSquare } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import {
@@ -13,7 +20,7 @@ import {
   dealCountdown,
   VESSEL_TYPE_LABELS,
 } from "@/lib/spot-deals-shared"
-import { listLiveSpotDeals, recordSpotDealInterest } from "@/app/actions/spot-deals"
+import { listLiveSpotDeals, recordSpotDealInterest, acceptSpotDeal } from "@/app/actions/spot-deals"
 
 const VESSEL_ICON: Record<VesselType, typeof Ship> = {
   crude: Droplet,
@@ -48,11 +55,11 @@ function CountdownChip({ expiresAt, tick }: { expiresAt: string; tick: number })
 function SpotDealCard({
   deal,
   tick,
-  onEngage,
+  onSelect,
 }: {
   deal: SpotDeal
   tick: number
-  onEngage: (deal: SpotDeal) => void
+  onSelect: (deal: SpotDeal) => void
 }) {
   const Icon = VESSEL_ICON[deal.vesselType]
   const cd = dealCountdown(deal.expiresAt, tick)
@@ -112,7 +119,7 @@ function SpotDealCard({
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total value</p>
             <p className="text-base font-bold text-primary">{formatMoney(deal.totalValue, deal.currency)}</p>
           </div>
-          <Button size="sm" disabled={cd.expired} onClick={() => onEngage(deal)} className="gap-1.5">
+          <Button size="sm" disabled={cd.expired} onClick={() => onSelect(deal)} className="gap-1.5">
             <Handshake className="h-4 w-4" />
             Accept / Negotiate
           </Button>
@@ -153,17 +160,49 @@ export function SpotDealsBoard({ onEngage }: { onEngage: (deal: SpotDeal) => voi
   // Drop deals the moment their countdown hits zero, without waiting for a poll.
   const liveDeals = deals.filter((d) => dealCountdown(d.expiresAt, tick).expired === false)
 
-  const handleEngage = useCallback(
-    (deal: SpotDeal) => {
-      // Fire-and-forget interest record; the parent handles the actual pre-fill.
-      recordSpotDealInterest(deal.id, "engaged").catch(() => {})
-      onEngage(deal)
-      toast.success("Spot offer loaded into the deal form below", {
-        description: "Review the pre-filled terms and submit for Administrator approval.",
+  // The deal whose Accept/Negotiate confirmation dialog is open, plus a busy flag.
+  const [selected, setSelected] = useState<SpotDeal | null>(null)
+  const [accepting, setAccepting] = useState(false)
+
+  const handleSelect = useCallback((deal: SpotDeal) => setSelected(deal), [])
+
+  // Accept = reserve the cargo. Claims it server-side (published → engaged) so it
+  // leaves the public board for everyone, then pre-fills the deal form. Optimistic
+  // removal gives immediate, unmistakable feedback.
+  const handleAccept = useCallback(async () => {
+    if (!selected || accepting) return
+    setAccepting(true)
+    try {
+      const res = await acceptSpotDeal(selected.id)
+      if (!res.ok) {
+        toast.error(res.error ?? "Could not accept this offer.")
+        // It may have just been taken — refresh so the board reflects reality.
+        load()
+        setSelected(null)
+        return
+      }
+      setDeals((prev) => prev.filter((d) => d.id !== selected.id))
+      toast.success("Offer accepted and reserved", {
+        description: "It has been removed from the public board and pre-filled into the deal form for Administrator approval.",
       })
-    },
-    [onEngage],
-  )
+      onEngage(selected)
+      setSelected(null)
+    } finally {
+      setAccepting(false)
+    }
+  }, [selected, accepting, onEngage, load])
+
+  // Negotiate = open the deal form to propose different terms WITHOUT reserving.
+  // The offer intentionally stays live on the board for others.
+  const handleNegotiate = useCallback(() => {
+    if (!selected) return
+    recordSpotDealInterest(selected.id, "engaged").catch(() => {})
+    onEngage(selected)
+    toast.success("Loaded into the deal form to negotiate", {
+      description: "Adjust the terms and submit for Administrator approval. The offer stays open until accepted.",
+    })
+    setSelected(null)
+  }, [selected, onEngage])
 
   if (loading) {
     return (
@@ -209,9 +248,55 @@ export function SpotDealsBoard({ onEngage }: { onEngage: (deal: SpotDeal) => voi
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {liveDeals.map((deal) => (
-          <SpotDealCard key={deal.id} deal={deal} tick={tick} onEngage={handleEngage} />
+          <SpotDealCard key={deal.id} deal={deal} tick={tick} onSelect={handleSelect} />
         ))}
       </div>
+
+      <Dialog open={selected !== null} onOpenChange={(open) => !open && !accepting && setSelected(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-pretty">{selected?.product}</DialogTitle>
+            <DialogDescription className="text-pretty">
+              {selected
+                ? `${selected.quantity.toLocaleString("en-US")} ${selected.unit} aboard ${selected.vesselName} (IMO ${selected.vesselImo}) — ${selected.incoterm}${selected.loadPort ? ` ${selected.loadPort}` : ""}.`
+                : null}
+            </DialogDescription>
+          </DialogHeader>
+
+          {selected ? (
+            <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Spot price</span>
+                <span className="font-semibold">
+                  {formatMoney(selected.spotPrice, selected.currency)}/{selected.unit}
+                </span>
+              </div>
+              <div className="mt-1 flex items-center justify-between">
+                <span className="text-muted-foreground">Total value</span>
+                <span className="font-bold text-primary">{formatMoney(selected.totalValue, selected.currency)}</span>
+              </div>
+            </div>
+          ) : null}
+
+          <p className="text-xs text-muted-foreground text-pretty">
+            <span className="font-medium text-foreground">Accept &amp; reserve</span> claims this cargo and removes it
+            from the public board, then pre-fills a deal for Administrator approval.{" "}
+            <span className="font-medium text-foreground">Negotiate</span> opens the deal form to propose different
+            terms while leaving the offer open. Nothing executes or moves funds automatically.
+          </p>
+
+          <DialogFooter className="flex-col gap-2 sm:flex-col">
+            <Button onClick={handleAccept} disabled={accepting} className="w-full gap-1.5">
+              {accepting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Handshake className="h-4 w-4" />}
+              Accept &amp; reserve cargo
+            </Button>
+            <Button variant="outline" onClick={handleNegotiate} disabled={accepting} className="w-full gap-1.5">
+              <MessageSquare className="h-4 w-4" />
+              Negotiate terms
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

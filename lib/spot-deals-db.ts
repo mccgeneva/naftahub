@@ -252,3 +252,28 @@ export async function appendInterest(id: string, interest: SpotDealInterest): Pr
   const updated: SpotDeal = { ...deal, interests }
   return saveDeal(updated)
 }
+
+/**
+ * Atomically claim a live deal for a client: flips status published → engaged
+ * and appends the acceptance interest, but ONLY if the deal is still published
+ * and unexpired. The guarded UPDATE makes this race-safe — if two clients accept
+ * the same cargo at once, exactly one wins and the loser gets `null` (already
+ * taken / expired). An engaged deal drops off the public board immediately
+ * because `listPublishedDeals` only returns `status = 'published'`.
+ */
+export async function claimDeal(id: string, interest: SpotDealInterest): Promise<SpotDeal | null> {
+  await ensureTables()
+  await sweepExpired()
+  const existing = await getDeal(id)
+  if (!existing) return null
+  const interests = [...(existing.interests ?? []), interest]
+  const payload: SpotDeal = { ...existing, status: "engaged", interests }
+  const { rows } = await query(
+    `UPDATE spot_deals
+        SET status = 'engaged', payload = $2
+      WHERE id = $1 AND status = 'published' AND (expires_at IS NULL OR expires_at > now())
+      RETURNING *`,
+    [id, JSON.stringify(payload)],
+  )
+  return rows[0] ? rowToDeal(rows[0]) : null
+}

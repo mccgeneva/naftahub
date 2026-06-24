@@ -1426,7 +1426,7 @@ function DealsList({ refreshKey, onChanged }: { refreshKey: number; onChanged: (
               </p>
             )}
             <div className="flex flex-wrap gap-2">
-              {(d.status === "draft" || d.status === "withdrawn") && !cd.expired && (
+              {(d.status === "draft" || d.status === "withdrawn" || d.status === "engaged") && !cd.expired && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -1434,7 +1434,7 @@ function DealsList({ refreshKey, onChanged }: { refreshKey: number; onChanged: (
                   onClick={() => act(() => publishSpotDealAdmin(ADMIN_PASSCODE, d.id), d.id, "Spot deal published")}
                 >
                   <Megaphone className="mr-1.5 h-3.5 w-3.5" />
-                  Publish
+                  {d.status === "engaged" ? "Re-publish" : "Publish"}
                 </Button>
               )}
               {d.status === "published" && (
@@ -1503,7 +1503,9 @@ export function SpotDealManager() {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Spot Deals</CardTitle>
-            <CardDescription>Published, draft, withdrawn and expired offers with their countdowns.</CardDescription>
+            <CardDescription>
+            Published, draft, engaged (accepted), withdrawn and expired offers with their countdowns.
+          </CardDescription>
           </CardHeader>
           <CardContent>
             <DealsList refreshKey={refreshKey} onChanged={bump} />
