@@ -1256,6 +1256,7 @@ interface AmendmentTerms {
   approxValue: number
   quantity: string
   tradeStructure: string
+  unitPrice?: number
 }
 
 /**
@@ -1281,7 +1282,15 @@ async function applyApprovedAmendment(amendment: ApprovalRequest): Promise<void>
   const payload = (deal.payload ?? {}) as { record?: Record<string, unknown>; [k: string]: unknown }
   const record = (payload.record ?? {}) as Record<string, unknown>
 
-  const newValue = Math.round(Number(proposed.approxValue) * 100) / 100
+  // Defense-in-depth: the authoritative total is unit price × quantity. If a
+  // unit price travelled with the amendment, recompute from it so the deal can
+  // never inherit a stale client's raw per-unit price as its total value.
+  const applyQty = parseQuantityString(proposed.quantity)
+  const applyUnit = Number(proposed.unitPrice)
+  const newValue =
+    Number.isFinite(applyUnit) && applyUnit > 0 && applyQty
+      ? Math.round(applyUnit * applyQty.amount * 100) / 100
+      : Math.round(Number(proposed.approxValue) * 100) / 100
   const currency = deal.currency ?? (record.currency as string) ?? "USD"
   const sellerName = (record.sellerName as string) || "Commodity supplier"
   const uetr = (record.uetr as string) || (record.id as string) || deal.id
@@ -1297,9 +1306,17 @@ async function applyApprovedAmendment(amendment: ApprovalRequest): Promise<void>
     ? (record.amendmentHistory as Record<string, unknown>[])
     : []
 
+  const newUnitPrice =
+    Number.isFinite(applyUnit) && applyUnit > 0
+      ? Math.round(applyUnit * 100) / 100
+      : applyQty && newValue > 0
+        ? Math.round((newValue / applyQty.amount) * 100) / 100
+        : (record.unitPrice as number | undefined)
+
   const newRecord = {
     ...record,
     approxValue: newValue,
+    unitPrice: newUnitPrice,
     quantity: proposed.quantity,
     tradeStructure: proposed.tradeStructure,
     pendingAmendment: undefined,

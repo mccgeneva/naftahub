@@ -75,6 +75,10 @@ export interface DealTerms {
   approxValue: number
   quantity: string
   tradeStructure: TradeStructure
+  /** The renegotiated PER-UNIT price (per MT/BBL). The server recomputes the
+   * authoritative total as unitPrice × quantity from this, so a stale client
+   * can never persist a raw per-unit price as the total deal value. */
+  unitPrice?: number
 }
 
 // A single entry in a deal's negotiation log (client or admin authored).
