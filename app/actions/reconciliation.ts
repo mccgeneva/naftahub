@@ -525,6 +525,259 @@ export async function backfillGatewayDepositsForUser(ownerUserId: string): Promi
   }
 }
 
+// ===========================================================================
+// Registered external account auto-match
+// ---------------------------------------------------------------------------
+// Same automatic IBAN matching as the gateway flow above, but the match targets
+// are the clients' APPROVED *registered external bank accounts* (kind
+// "bank_account") instead of Collect-funds gateway accounts. When an approved
+// outgoing payment is addressed to a registered account's IBAN, the receiving
+// owner's Master Account is credited automatically and the credit is attributed
+// to that specific bank (so the per-bank sub-balance updates too).
+// ===========================================================================
+
+interface RegisteredExternalAccount {
+  approvalId: string
+  ownerUserId: string
+  iban: string
+  currency: string
+  bankName: string
+}
+
+/** Read every client's APPROVED registered external bank accounts (match targets). */
+async function readApprovedRegisteredAccounts(): Promise<RegisteredExternalAccount[]> {
+  const { rows } = await query<{
+    id: string
+    user_id: string
+    iban: string | null
+    currency: string | null
+    bank: string | null
+  }>(
+    `SELECT id, user_id,
+            payload->>'iban'     AS iban,
+            payload->>'currency' AS currency,
+            payload->>'bankName' AS bank
+       FROM approval_requests
+      WHERE kind = 'bank_account' AND status = 'approved'`,
+  )
+  return rows
+    .map((r) => ({
+      approvalId: r.id,
+      ownerUserId: r.user_id,
+      iban: r.iban ?? "",
+      currency: (r.currency ?? "EUR").toUpperCase(),
+      bankName: r.bank ?? "Registered account",
+    }))
+    .filter((a) => normalizeIban(a.iban).length > 0)
+}
+
+/**
+ * When an outgoing payment is approved, if its beneficiary IBAN matches a single
+ * approved registered external account, credit that account owner's Master
+ * Account and tag the credit with the receiving IBAN so the per-bank sub-balance
+ * reflects it. Mirrors recordGatewayDepositForApproval:
+ *  - takes ONLY an approval id; every monetary value comes from the server-
+ *    stored, already-approved record (never client input).
+ *  - idempotent on a deterministic ledger entry id `RAD-<approvalId>`.
+ *  - automatic FX conversion (with the same spread) on a currency mismatch.
+ *  - recalled payments never (re)fund.
+ *  - a payment to your OWN Master's registered account is a wash and is skipped.
+ */
+export async function recordRegisteredAccountDepositForApproval(
+  approvalId: string,
+): Promise<{ matched: boolean }> {
+  try {
+    const approval = await getApprovalById(approvalId)
+    if (!approval || approval.kind !== "payment" || approval.status !== "approved") {
+      return { matched: false }
+    }
+
+    const payload = (approval.payload ?? {}) as {
+      iban?: string
+      recalled?: boolean
+      recallStatus?: string
+      record?: { iban?: string; amount?: number; beneficiary?: string; reference?: string }
+    }
+    if (payload.recalled === true || payload.recallStatus === "recalled") {
+      return { matched: false }
+    }
+    const record = payload.record ?? {}
+    const beneficiaryIban = normalizeIban(payload.iban ?? record.iban)
+    if (!beneficiaryIban) return { matched: false }
+
+    // PRINCIPAL sent (excludes the 2% platform fee, which the payee never receives).
+    const sentAmount = Number(record.amount ?? approval.amount ?? 0)
+    if (!Number.isFinite(sentAmount) || sentAmount <= 0) return { matched: false }
+    const sentCurrency = (approval.currency ?? "").toUpperCase()
+    if (!sentCurrency) return { matched: false }
+
+    const accounts = await readApprovedRegisteredAccounts()
+    const matches = accounts.filter((a) => normalizeIban(a.iban) === beneficiaryIban)
+    // Require a single unambiguous match before moving money.
+    if (matches.length !== 1) return { matched: false }
+    const account = matches[0]
+    const accountCurrency = account.currency.toUpperCase()
+
+    // Crediting a registered account that settles to the SAME Master as the payer
+    // would just move money from a balance to itself — skip it.
+    const payerOwnerId = await resolveDataOwnerIdFor(approval.userId)
+    const recipientOwnerId = await resolveDataOwnerIdFor(account.ownerUserId)
+    if (payerOwnerId === recipientOwnerId) return { matched: false }
+
+    const ledgerEntryId = `RAD-${approval.id}`
+
+    // --- Automatic FX conversion on currency mismatch (mirrors gateway) ------
+    const isFx = sentCurrency !== accountCurrency
+    const grossConverted = isFx ? convertCurrency(sentAmount, sentCurrency, accountCurrency) : sentAmount
+    const fxRate = isFx ? grossConverted / sentAmount : 1
+    const fxFee = isFx ? round2(grossConverted * GATEWAY_FX_FEE_RATE) : 0
+    const amount = round2(grossConverted - fxFee)
+    if (!Number.isFinite(amount) || amount <= 0) return { matched: false }
+
+    const sender = await resolveAccountProfileById(approval.userId)
+    const reference = record.reference?.trim() || account.approvalId
+    const fxNote = isFx
+      ? ` Received ${sentCurrency} ${sentAmount.toLocaleString("en-US")}, converted to ${accountCurrency} at ${fxRate.toFixed(6)} (FX fee ${accountCurrency} ${fxFee.toLocaleString("en-US")}), net credited ${accountCurrency} ${amount.toLocaleString("en-US")}.`
+      : ""
+
+    // Has this credit already been posted? (decide whether to also log.)
+    const existing = await query(`SELECT 1 FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [
+      recipientOwnerId,
+      ledgerEntryId,
+    ])
+    const alreadyPosted = existing.rows.length > 0
+
+    await query(
+      `INSERT INTO ledger_entries
+         (user_id, entry_id, direction, amount, currency, status, entry_date,
+          counterparty, account, bank, reference, comment, category, received_account)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (user_id, entry_id) DO NOTHING`,
+      [
+        recipientOwnerId,
+        ledgerEntryId,
+        "credit",
+        amount,
+        account.currency,
+        "completed",
+        new Date().toISOString(),
+        sender.fullName,
+        account.iban,
+        account.bankName,
+        reference,
+        `Inbound transfer from ${sender.fullName} (approved payment ${approval.id}, reference ${reference}) auto-matched by IBAN to registered account ${account.bankName} (${account.iban}) and credited to the Master Account.${fxNote}`,
+        isFx ? "Reconciled Collection (FX)" : "Reconciled Collection",
+        account.iban,
+      ],
+    )
+
+    if (!alreadyPosted) {
+      await logActivity({
+        action: `Approved payment ${approval.id} auto-matched by IBAN and credited ${account.currency} ${amount.toLocaleString("en-US")} to registered account ${account.bankName}${isFx ? ` (FX from ${sentCurrency})` : ""}`,
+        category: "Administration",
+        details: {
+          summary: `Outgoing payment ${approval.id} from ${sender.fullName} was matched by beneficiary IBAN to ${account.bankName} (${account.iban}) and credited to the receiving owner's Master Account under ledger reference ${ledgerEntryId}.${fxNote}`,
+          referenceId: approval.id,
+          amount: `${account.currency} ${amount.toLocaleString("en-US")}`,
+          ...(isFx
+            ? {
+                originalAmount: `${sentCurrency} ${sentAmount.toLocaleString("en-US")}`,
+                fxRate: fxRate.toFixed(6),
+                fxFee: `${account.currency} ${fxFee.toLocaleString("en-US")}`,
+              }
+            : {}),
+          ledgerReference: ledgerEntryId,
+          decision: isFx ? "Auto-matched by IBAN with FX conversion" : "Auto-matched by IBAN",
+        },
+      })
+    }
+
+    return { matched: true }
+  } catch (err) {
+    console.log("[v0] recordRegisteredAccountDepositForApproval failed:", (err as Error).message)
+    return { matched: false }
+  }
+}
+
+/**
+ * REVERSE a registered-account deposit when its source payment is recalled.
+ * Deletes the `RAD-<approvalId>` credit from the receiving owner's ledger so the
+ * Master Account (and the per-bank sub-balance) unwind exactly. Idempotent; a
+ * no-op when the payment never matched a registered account.
+ */
+export async function reverseRegisteredAccountDepositForApproval(
+  originalApprovalId: string,
+): Promise<{ reversed: boolean }> {
+  try {
+    const ledgerEntryId = `RAD-${originalApprovalId}`
+    const approval = await getApprovalById(originalApprovalId)
+    if (!approval) return { reversed: false }
+    const payload = (approval.payload ?? {}) as { iban?: string; record?: { iban?: string } }
+    const beneficiaryIban = normalizeIban(payload.iban ?? payload.record?.iban)
+    if (!beneficiaryIban) return { reversed: false }
+
+    const accounts = await readApprovedRegisteredAccounts()
+    const match = accounts.find((a) => normalizeIban(a.iban) === beneficiaryIban)
+    if (!match) return { reversed: false }
+
+    const recipientOwnerId = await resolveDataOwnerIdFor(match.ownerUserId)
+    try {
+      await deleteLedgerEntry(recipientOwnerId, ledgerEntryId)
+    } catch (err) {
+      console.log("[v0] reverse registered credit delete failed:", (err as Error).message)
+    }
+
+    await logActivity({
+      action: `Recalled payment reversed registered-account credit ${ledgerEntryId}`,
+      category: "Administration",
+      details: {
+        summary: `The credit ${ledgerEntryId} previously auto-matched to registered account ${match.bankName} (${match.iban}) was reversed because its source payment ${originalApprovalId} was recalled.`,
+        referenceId: originalApprovalId,
+        ledgerReference: ledgerEntryId,
+        decision: "Reversed on recall",
+      },
+    })
+    return { reversed: true }
+  } catch (err) {
+    console.log("[v0] reverseRegisteredAccountDepositForApproval failed:", (err as Error).message)
+    return { reversed: false }
+  }
+}
+
+/**
+ * Back-fill sweep for a registered-account OWNER: ensure every APPROVED payment
+ * addressed to one of this owner's approved registered account IBANs — sent by
+ * ANY user — has been credited. Idempotent (`RAD-<approvalId>`), safe on every
+ * dashboard load. Catches payments approved before the on-approval hook existed.
+ */
+export async function backfillRegisteredAccountDepositsForUser(ownerUserId: string): Promise<void> {
+  try {
+    const ownerIbans = new Set(
+      (await readApprovedRegisteredAccounts())
+        .filter((a) => a.ownerUserId === ownerUserId)
+        .map((a) => normalizeIban(a.iban))
+        .filter(Boolean),
+    )
+    if (ownerIbans.size === 0) return
+
+    const { rows } = await query<{ id: string; iban: string | null; rec_iban: string | null }>(
+      `SELECT id,
+              payload->>'iban' AS iban,
+              payload->'record'->>'iban' AS rec_iban
+         FROM approval_requests
+        WHERE kind = 'payment' AND status = 'approved'`,
+    )
+    for (const row of rows) {
+      const dest = normalizeIban(row.iban ?? row.rec_iban)
+      if (dest && ownerIbans.has(dest)) {
+        await recordRegisteredAccountDepositForApproval(row.id)
+      }
+    }
+  } catch (err) {
+    console.log("[v0] backfillRegisteredAccountDepositsForUser failed:", (err as Error).message)
+  }
+}
+
 function genId() {
   return `RCN-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 5).toUpperCase()}`
 }

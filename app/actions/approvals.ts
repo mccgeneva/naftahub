@@ -42,6 +42,9 @@ import {
   recordGatewayDepositForApproval,
   backfillGatewayDepositsForUser,
   reverseGatewayDepositForApproval,
+  recordRegisteredAccountDepositForApproval,
+  backfillRegisteredAccountDepositsForUser,
+  reverseRegisteredAccountDepositForApproval,
 } from "@/app/actions/reconciliation"
 import { MASTER_CONSENT_KINDS } from "@/lib/account-hierarchy"
 
@@ -1000,6 +1003,11 @@ export async function reconcileMyApprovedCredits(): Promise<{ ok: boolean; appli
   // Idempotent (keyed on GWD-<approvalId>), so it never double-credits.
   await backfillGatewayDepositsForUser(session.id).catch(() => {})
 
+  // Same sweep for registered external bank accounts: any approved payment
+  // addressed to one of this user's registered account IBANs is credited to
+  // their Master Account (and per-bank sub-balance). Idempotent (RAD-<id>).
+  await backfillRegisteredAccountDepositsForUser(session.id).catch(() => {})
+
   const mine = await listApprovalsForUser(session.id)
   const approved = mine.filter((r) => r.status === "approved")
     let applied = 0
@@ -1135,10 +1143,23 @@ export async function adminDecideApproval(
       // gateway IBAN, record it as a received deposit on that account and credit
       // the gateway owner's Master Account. Idempotent and self-validating.
       if (updated.kind === "payment") {
+        let matchedGateway = false
         try {
-          await recordGatewayDepositForApproval(updated.id)
+          const res = await recordGatewayDepositForApproval(updated.id)
+          matchedGateway = res.matched
         } catch (err) {
           console.log("[v0] gateway IBAN auto-match failed:", (err as Error).message)
+        }
+        // Otherwise, if the beneficiary IBAN matches a client's registered
+        // external bank account, auto-credit that owner's Master Account (and
+        // the per-bank sub-balance). Only when no gateway matched, so a given
+        // IBAN can never be credited twice. Idempotent on `RAD-<id>`.
+        if (!matchedGateway) {
+          try {
+            await recordRegisteredAccountDepositForApproval(updated.id)
+          } catch (err) {
+            console.log("[v0] registered-account IBAN auto-match failed:", (err as Error).message)
+          }
         }
       }
 
@@ -1155,6 +1176,11 @@ export async function adminDecideApproval(
             await reverseGatewayDepositForApproval(originalApprovalId)
           } catch (err) {
             console.log("[v0] recall recipient reversal failed:", (err as Error).message)
+          }
+          try {
+            await reverseRegisteredAccountDepositForApproval(originalApprovalId)
+          } catch (err) {
+            console.log("[v0] recall registered-account reversal failed:", (err as Error).message)
           }
           try {
             const original = await getApprovalById(originalApprovalId)
