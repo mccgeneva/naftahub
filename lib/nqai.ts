@@ -22,8 +22,12 @@ export const NQAI_SUGGESTIONS: { label: string; prompt: string }[] = [
     prompt: "Explain the practical difference between CIF and FOB pricing for a crude oil cargo, with a worked example.",
   },
   {
-    label: "VLCC freight basics",
-    prompt: "Summarise how VLCC freight rates (Worldscale) are quoted and what moves them.",
+    label: "Find crude into Rotterdam",
+    prompt: "Find vessels approaching Rotterdam with crude oil capacity, and any live spot deals delivering crude there.",
+  },
+  {
+    label: "Verify a vessel by IMO",
+    prompt: "Verify vessel IMO 9782522 — confirm its identity, capacity and OFAC compliance status.",
   },
   {
     label: "Structure an SKR",

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport, type UIMessage } from "ai"
 import { Streamdown } from "streamdown"
-import { Cpu, ArrowUp, Square, AlertTriangle, Sparkles, User, RotateCcw } from "lucide-react"
+import { Cpu, ArrowUp, Square, AlertTriangle, Sparkles, User, RotateCcw, Ship, Radar, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { NQAI_WELCOME, NQAI_TAGLINE, NQAI_SUGGESTIONS } from "@/lib/nqai"
@@ -17,6 +17,36 @@ function messageText(message: UIMessage): string {
     .filter((p): p is { type: "text"; text: string } => p.type === "text")
     .map((p) => p.text)
     .join("")
+}
+
+/** Human labels for NQAi's live data tools, shown as activity chips. */
+const TOOL_LABELS: Record<string, string> = {
+  "tool-verifyVessel": "Verifying vessel",
+  "tool-searchVessels": "Searching vessel catalogue",
+  "tool-listSpotDeals": "Scanning spot-deal board",
+  "tool-discoverOilDeals": "Matching vessels & oil deals",
+  "tool-vesselDataProviderStatus": "Checking AIS provider",
+}
+
+interface ToolActivity {
+  key: string
+  label: string
+  done: boolean
+}
+
+/** Collect tool invocations from a message's parts for the activity strip. */
+function toolActivity(message: UIMessage): ToolActivity[] {
+  if (!message.parts) return []
+  const out: ToolActivity[] = []
+  message.parts.forEach((p, i) => {
+    const type = (p as { type?: string }).type ?? ""
+    if (!type.startsWith("tool-")) return
+    const label = TOOL_LABELS[type]
+    if (!label) return
+    const state = (p as { state?: string }).state ?? ""
+    out.push({ key: `${type}-${i}`, label, done: state === "output-available" || state === "output-error" })
+  })
+  return out
 }
 
 function NqaiAvatar({ className }: { className?: string }) {
@@ -197,6 +227,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
         {messages.map((message) => {
           const text = messageText(message)
           const isUser = message.role === "user"
+          const activity = isUser ? [] : toolActivity(message)
           return (
             <div key={message.id} className={cn("flex gap-3", isUser && "flex-row-reverse")}>
               {isUser ? (
@@ -214,6 +245,32 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                     : "border-border bg-card text-foreground/90",
                 )}
               >
+                {activity.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-1.5">
+                    {activity.map((a) => (
+                      <span
+                        key={a.key}
+                        className={cn(
+                          "inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider",
+                          a.done
+                            ? "border-primary/30 bg-primary/10 text-primary"
+                            : "border-warning/30 bg-warning/10 text-warning",
+                        )}
+                      >
+                        {a.done ? (
+                          a.label.includes("vessel") || a.label.includes("AIS") ? (
+                            <Ship className="h-3 w-3" />
+                          ) : (
+                            <Radar className="h-3 w-3" />
+                          )
+                        ) : (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        )}
+                        <span>{a.label}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {text ? (
                   isUser ? (
                     <p className="whitespace-pre-wrap text-pretty">{text}</p>

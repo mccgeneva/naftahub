@@ -4,6 +4,7 @@ import { buildNqaiContext } from "@/lib/nqai-context"
 import { resolveCurrentSession } from "@/lib/session-user"
 import { getNqaiUserSnapshot, renderUserContextBlock } from "@/lib/nqai-user-context"
 import { loadNqaiChat, saveNqaiChat } from "@/lib/nqai-chat-db"
+import { nqaiTools } from "@/lib/nqai-tools"
 
 // NQAi runs live through the Anthropic Claude account configured via the
 // ANTHROPIC_API_KEY secret (forinoht@gmail.com). The @ai-sdk/anthropic provider
@@ -35,9 +36,17 @@ DOMAIN & PURPOSE:
 - You assist with: petroleum & commodity trading (crude, refined products, gas), CIF/FOB quotations, spot deals, marine vessel logistics and tanker operations, SKR / POP / POF structuring, SWIFT and trade-finance instruments, FX and market analysis, and general financial-markets reasoning.
 - You give precise, professional, desk-grade answers. Be concise and structured. Use tables or bullet points for comparative data. Show figures with appropriate units (USD/bbl, USD/MT, DWT, CBM).
 
+LIVE VESSEL & DEAL TOOLS (use them — do not guess when you can verify):
+- verifyVessel(imo): verify/identify a ship by IMO — returns master data (name, class, capacity, flag, year), last-known position/status and an OFAC sanctions + IMO-validity verdict. ALWAYS use this when a user supplies an IMO or asks you to verify/identify a vessel. Surface the compliance verdict; if a vessel is FLAGGED, refuse to facilitate and say so.
+- searchVessels(query, type): find vessels in the platform catalogue by name/cargo/location/class or tanker family (crude / product / gas).
+- listSpotDeals(product, port, vesselType): the live limited-time spot-deal board.
+- discoverOilDeals(targetPort, product, minQuantity): SMART DISCOVERY — match a delivery port + desired oil/product to live spot deals routing there AND to candidate vessels whose cargo capability and position make them routable. Use for natural-language requests like "find vessels approaching Rotterdam with crude oil capacity" or "what crude can I get to Singapore?".
+- vesselDataProviderStatus(): report whether a live AIS provider is linked.
+- Tool guidance: parse the user's natural-language intent into the right tool call(s); you may chain tools (e.g. discoverOilDeals then verifyVessel on a promising IMO). Present results as a tight, scannable summary (tables/bullets) with IMOs, capacities, ports, prices and expiry countdowns. Always note that positions/ETA are last-known unless a provider is linked, and that nothing executes automatically — clients accept/negotiate via the desk.
+
 CONDUCT:
 - Be accurate and measured. When you give indicative prices or market levels, clearly label them as indicative and advise confirming firm pricing with the desk before execution.
-- Never give unlawful sanctions-evasion guidance. Respect compliance and OFAC screening.
+- Never give unlawful sanctions-evasion guidance. Respect compliance and OFAC screening. Never help transact with an OFAC-flagged vessel.
 - You are professional, confident, and efficient — a Bloomberg-terminal-grade co-pilot.
 - You have access to the signed-in client's own private account context and your shared memory of prior sessions. Use them to personalize proactively, but never disclose another client's information.`
 
@@ -130,7 +139,10 @@ export async function POST(req: Request) {
     model: anthropic(NQAI_MODEL),
     system,
     messages: await convertToModelMessages(recentMessages),
-    stopWhen: stepCountIs(4),
+    tools: nqaiTools,
+    // Allow several tool round-trips (e.g. discover deals → verify a vessel →
+    // answer) within a single turn before the model must produce its reply.
+    stopWhen: stepCountIs(6),
     temperature: 0.6,
   })
 
