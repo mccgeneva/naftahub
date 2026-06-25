@@ -210,35 +210,46 @@ export default function AccountDetailPage() {
                     </div>
                   </div>
 
-                  <div className="border-t border-border pt-4">
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="min-w-0 text-center p-3 rounded-lg bg-secondary">
-                        <p className="text-xs text-muted-foreground mb-1">Total Balance</p>
-                        <p className="text-sm sm:text-base lg:text-lg font-bold text-foreground leading-tight break-words tabular-nums">
-                          {formatCurrency(account.balance, account.currency)}
-                        </p>
+                  {(() => {
+                    const isRegistered = !account.id.startsWith("ACC-")
+                    const total = isRegistered ? (account.trackedBalance ?? 0) : account.balance
+                    const available = isRegistered ? (account.trackedAvailable ?? 0) : account.availableBalance
+                    const reserved = isRegistered ? (account.trackedReserved ?? 0) : account.reservedBalance
+                    return (
+                      <div className="border-t border-border pt-4">
+                        <div className="grid grid-cols-3 gap-3">
+                          <div className="min-w-0 text-center p-3 rounded-lg bg-secondary">
+                            <p className="text-xs text-muted-foreground mb-1">
+                              {isRegistered ? "Received Here" : "Total Balance"}
+                            </p>
+                            <p className="text-sm sm:text-base lg:text-lg font-bold text-foreground leading-tight break-words tabular-nums">
+                              {formatCurrency(total, account.currency)}
+                            </p>
+                          </div>
+                          <div className="min-w-0 text-center p-3 rounded-lg bg-secondary">
+                            <p className="text-xs text-muted-foreground mb-1">Available</p>
+                            <p className="text-sm sm:text-base lg:text-lg font-bold text-emerald-400 leading-tight break-words tabular-nums">
+                              {formatCurrency(available, account.currency)}
+                            </p>
+                          </div>
+                          <div className="min-w-0 text-center p-3 rounded-lg bg-secondary">
+                            <p className="text-xs text-muted-foreground mb-1">Reserved</p>
+                            <p className="text-sm sm:text-base lg:text-lg font-bold text-amber-400 leading-tight break-words tabular-nums">
+                              {formatCurrency(reserved, account.currency)}
+                            </p>
+                          </div>
+                        </div>
+                        {isRegistered && (
+                          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                            This is a registered external account. The figures above track funds received at this
+                            specific bank. The same funds also settle into your{" "}
+                            <span className="font-medium text-foreground">{account.currency} Settlement Account</span>,
+                            so they are reflected in your master balance and transaction history.
+                          </p>
+                        )}
                       </div>
-                      <div className="min-w-0 text-center p-3 rounded-lg bg-secondary">
-                        <p className="text-xs text-muted-foreground mb-1">Available</p>
-                        <p className="text-sm sm:text-base lg:text-lg font-bold text-emerald-400 leading-tight break-words tabular-nums">
-                          {formatCurrency(account.availableBalance, account.currency)}
-                        </p>
-                      </div>
-                      <div className="min-w-0 text-center p-3 rounded-lg bg-secondary">
-                        <p className="text-xs text-muted-foreground mb-1">Reserved</p>
-                        <p className="text-sm sm:text-base lg:text-lg font-bold text-amber-400 leading-tight break-words tabular-nums">
-                          {formatCurrency(account.reservedBalance, account.currency)}
-                        </p>
-                      </div>
-                    </div>
-                    {!account.id.startsWith("ACC-") && (
-                      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-                        This is a registered external account. Incoming wires received here settle to your{" "}
-                        <span className="font-medium text-foreground">{account.currency} Settlement Account</span> — the
-                        funds below reflect that pooled settlement balance and transaction history.
-                      </p>
-                    )}
-                  </div>
+                    )
+                  })()}
 
                   <div className="border-t border-border pt-4">
                     <div className="grid grid-cols-2 gap-4">

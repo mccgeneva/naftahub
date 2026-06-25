@@ -32,6 +32,9 @@ async function ensureLedgerTable(): Promise<void> {
        PRIMARY KEY (user_id, entry_id)
      )`,
   )
+  // Additive migration (idempotent): the client's own receiving account (IBAN)
+  // this payment landed in, for per-bank attribution.
+  await query(`ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS received_account text`)
   ensured = true
 }
 
@@ -40,7 +43,7 @@ export async function readLedgerEntries(userId: string): Promise<LedgerEntry[]> 
   await ensureLedgerTable()
   const { rows } = await query(
     `SELECT entry_id, direction, amount, currency, status, entry_date,
-            counterparty, account, bank, reference, comment, category
+            counterparty, account, bank, reference, comment, category, received_account
        FROM ledger_entries WHERE user_id = $1 ORDER BY entry_date DESC`,
     [userId],
   )
@@ -54,6 +57,7 @@ export async function readLedgerEntries(userId: string): Promise<LedgerEntry[]> 
     counterparty: String(r.counterparty ?? ""),
     account: (r.account as string) ?? undefined,
     bank: (r.bank as string) ?? undefined,
+    receivedAccount: (r.received_account as string) ?? undefined,
     reference: (r.reference as string) ?? undefined,
     comment: (r.comment as string) ?? undefined,
     category: (r.category as string) ?? undefined,
@@ -120,8 +124,8 @@ export async function upsertLedgerEntry(userId: string, entry: LedgerEntry): Pro
   await query(
     `INSERT INTO ledger_entries
        (user_id, entry_id, direction, amount, currency, status, entry_date,
-        counterparty, account, bank, reference, comment, category)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        counterparty, account, bank, reference, comment, category, received_account)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      ON CONFLICT (user_id, entry_id) DO UPDATE SET
        direction = EXCLUDED.direction,
        amount = EXCLUDED.amount,
@@ -133,7 +137,8 @@ export async function upsertLedgerEntry(userId: string, entry: LedgerEntry): Pro
        bank = EXCLUDED.bank,
        reference = EXCLUDED.reference,
        comment = EXCLUDED.comment,
-       category = EXCLUDED.category`,
+       category = EXCLUDED.category,
+       received_account = EXCLUDED.received_account`,
     [
       userId,
       entry.id,
@@ -148,6 +153,7 @@ export async function upsertLedgerEntry(userId: string, entry: LedgerEntry): Pro
       entry.reference ?? null,
       entry.comment ?? null,
       entry.category ?? null,
+      entry.receivedAccount ?? null,
     ],
   )
 }

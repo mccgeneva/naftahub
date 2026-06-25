@@ -32,6 +32,8 @@ import {
   removeLedgerEntryForUserAdmin,
   updateLedgerEntryForUserAdmin,
   reverseLedgerEntryForUserAdmin,
+  listRegisteredAccountsForUserAdmin,
+  type RegisteredAccountOption,
 } from "@/app/actions/ledger"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
@@ -99,6 +101,10 @@ export function BalanceManager() {
   const [date, setDate] = useState(todayISO())
   const [counterparty, setCounterparty] = useState("")
   const [account, setAccount] = useState("")
+  // The client's OWN receiving account (registered external IBAN) this incoming
+  // payment landed in, so it surfaces as a per-bank sub-balance for the client.
+  const [receivedAccount, setReceivedAccount] = useState("")
+  const [registeredAccounts, setRegisteredAccounts] = useState<RegisteredAccountOption[]>([])
   // Bank details — auto-resolved from the IBAN above, each manually overridable.
   const [swift, setSwift] = useState("")
   const [bankName, setBankName] = useState("")
@@ -161,6 +167,24 @@ export function BalanceManager() {
     }
   }, [targetUserId])
 
+  // Load the client's registered (external) accounts so an incoming payment can
+  // be attributed to the specific bank it arrived in. Reset any prior choice.
+  useEffect(() => {
+    setReceivedAccount("")
+    if (!targetUserId) {
+      setRegisteredAccounts([])
+      return
+    }
+    let active = true
+    listRegisteredAccountsForUserAdmin(ADMIN_PASSCODE, targetUserId).then((res) => {
+      if (!active) return
+      setRegisteredAccounts(res.ok ? res.accounts : [])
+    })
+    return () => {
+      active = false
+    }
+  }, [targetUserId])
+
   const balances = useMemo(() => {
     const map = new Map<string, number>()
     for (const e of entries) {
@@ -196,6 +220,7 @@ export function BalanceManager() {
     setAmount("")
     setCounterparty("")
     setAccount("")
+    setReceivedAccount("")
     setSwift("")
     setBankName("")
     setBankAddress("")
@@ -250,6 +275,9 @@ export function BalanceManager() {
       counterparty: counterparty.trim(),
       account: account.trim() || undefined,
       bank: composedBank || undefined,
+      // Attribute incoming funds to the client's chosen receiving bank so it
+      // shows as a per-bank sub-balance; only meaningful for credits.
+      receivedAccount: isIncoming && receivedAccount.trim() ? receivedAccount.trim() : undefined,
       reference: id,
       comment: description.trim() || undefined,
       category: isIncoming ? "Incoming Payment" : "Outgoing Payment",
@@ -552,6 +580,45 @@ export function BalanceManager() {
             placeholder="e.g. DE77202208000056457149"
           />
         </div>
+
+        {/* Received-into account — attributes an incoming payment to one of the
+            client's registered banks so they see a per-bank sub-balance. Only
+            relevant for credits and only when the client has registered banks. */}
+        {isIncoming && registeredAccounts.length > 0 && (
+          <div className="space-y-2 rounded-lg border border-border bg-secondary/30 p-3">
+            <Label htmlFor="bm-received-account">Received into account</Label>
+            <Select
+              value={receivedAccount || "none"}
+              onValueChange={(value) => {
+                if (value === "none") {
+                  setReceivedAccount("")
+                  return
+                }
+                const acct = registeredAccounts.find((a) => a.iban === value)
+                if (acct) {
+                  setReceivedAccount(acct.iban)
+                  setCurrency(acct.currency)
+                }
+              }}
+            >
+              <SelectTrigger id="bm-received-account">
+                <SelectValue placeholder="Master Settlement Account (default)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Master Settlement Account (default)</SelectItem>
+                {registeredAccounts.map((a) => (
+                  <SelectItem key={a.id} value={a.iban}>
+                    {a.bankName} — {a.iban} ({a.currency})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Optional. Attributes this payment to one of the client&apos;s registered banks so it shows as a per-bank
+              balance. The funds still settle into the master {currency} balance.
+            </p>
+          </div>
+        )}
 
         {/* Bank details — auto-resolved from the IBAN above, each overridable. */}
         <div className="space-y-3 rounded-lg border border-border bg-secondary/30 p-3">
