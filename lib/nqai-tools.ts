@@ -24,7 +24,6 @@ import { fetchVesselByImo, providerStatus, screenVesselImo } from "@/lib/vessel-
 import { listLiveSpotDeals } from "@/app/actions/spot-deals"
 import { searchResearch, lookupInstitution, exploreConcept } from "@/lib/nqai-knowledge"
 import { sendOutboundEmail, sendOutboundSms } from "@/lib/nqai-messaging"
-import { resolveCurrentSession } from "@/lib/session-user"
 import {
   isValidImo,
   dealCountdown,
@@ -151,7 +150,21 @@ function cacheSet(key: string, value: unknown): void {
 
 // --- tools ------------------------------------------------------------------
 
-export const nqaiTools = {
+/** Per-request context injected into the tools at request scope. */
+export interface NqaiToolContext {
+  /** Display name for the email footer, e.g. "Jane Doe — Acme Ltd". */
+  senderName?: string
+}
+
+/**
+ * Build the NQAi tool belt for a single request. Any data that must be read in
+ * the request scope (e.g. the signed-in client's identity via cookies) is
+ * resolved by the caller and passed in via `ctx` — tools NEVER call cookies()
+ * themselves, because their `execute` runs during the streamed response (outside
+ * the request scope) where cookies() would throw and abort the whole stream.
+ */
+export function createNqaiTools(ctx: NqaiToolContext = {}) {
+  return {
   /**
    * Verify a vessel by IMO. Runs the official IMO check-digit validation, the
    * free OFAC sanctions screen, and (if an AIS provider is linked) live master
@@ -519,11 +532,10 @@ export const nqaiTools = {
         .describe("The full email body in plain text. Use line breaks for paragraphs. Sign off as NQAi / MCC Capital."),
     }),
     execute: async ({ to, subject, body }) => {
-      const session = await resolveCurrentSession()
-      const senderName = session?.profile
-        ? [session.profile.fullName, session.profile.company].filter(Boolean).join(" — ") || undefined
-        : undefined
-      const result = await sendOutboundEmail({ to, subject, body, senderName })
+      // senderName is resolved once in the request scope (see createNqaiTools);
+      // we must NOT call cookies()/resolveCurrentSession() here because tool
+      // execute runs during the streamed response, outside the request scope.
+      const result = await sendOutboundEmail({ to, subject, body, senderName: ctx.senderName })
       if (!result.ok) {
         return { ok: false, channel: "email", error: result.error }
       }
@@ -561,4 +573,5 @@ export const nqaiTools = {
       }
     },
   }),
+  } as const
 }
