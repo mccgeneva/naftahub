@@ -64,6 +64,7 @@ import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { toast } from "sonner"
 import { useInstrumentRequests, type Instrument } from "@/lib/instrument-requests-store"
+import { InstrumentMarketplace } from "@/components/dashboard/instrument-marketplace"
 import { resolveTransferRecipient } from "@/app/actions/transfers"
 import type { TransferDirectoryEntry } from "@/lib/users"
 import { useLeverageRequests } from "@/lib/leverage-requests-store"
@@ -700,6 +701,13 @@ export default function InstrumentsPage() {
         </div>
       </div>
 
+      <Tabs defaultValue="portfolio" className="space-y-6">
+        <TabsList>
+          <TabsTrigger value="portfolio">My Portfolio</TabsTrigger>
+          <TabsTrigger value="marketplace">Marketplace</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="portfolio" className="space-y-6">
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => (
@@ -1180,6 +1188,12 @@ export default function InstrumentsPage() {
           </Tabs>
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="marketplace">
+          <InstrumentMarketplace />
+        </TabsContent>
+      </Tabs>
 
       {/* View Details dialog */}
       <Dialog open={!!viewTarget} onOpenChange={(open) => !open && setViewTarget(null)}>
