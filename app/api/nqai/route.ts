@@ -4,7 +4,7 @@ import { buildNqaiContext } from "@/lib/nqai-context"
 import { resolveCurrentSession } from "@/lib/session-user"
 import { getNqaiUserSnapshot, renderUserContextBlock } from "@/lib/nqai-user-context"
 import { loadNqaiChat, saveNqaiChat } from "@/lib/nqai-chat-db"
-import { nqaiTools } from "@/lib/nqai-tools"
+import { createNqaiTools } from "@/lib/nqai-tools"
 
 // NQAi runs live through the Anthropic Claude account configured via the
 // ANTHROPIC_API_KEY secret (forinoht@gmail.com). The @ai-sdk/anthropic provider
@@ -113,9 +113,14 @@ export async function POST(req: Request) {
     })
   }
 
-  // Identify the signed-in client (server-side, authoritative).
+  // Identify the signed-in client (server-side, authoritative). Resolve this
+  // ONCE here in the request scope — never inside a tool's execute, where
+  // cookies() would run outside the request scope and abort the stream.
   const session = await resolveCurrentSession()
   const userId = session?.id ?? ""
+  const senderName = session?.profile
+    ? [session.profile.fullName, session.profile.company].filter(Boolean).join(" — ") || undefined
+    : undefined
 
   // Build context in parallel: live platform snapshot, the client's private
   // account context, and their stored rolling memory. All best-effort.
@@ -150,7 +155,7 @@ export async function POST(req: Request) {
     model: anthropic(NQAI_MODEL),
     system,
     messages: await convertToModelMessages(recentMessages),
-    tools: nqaiTools,
+    tools: createNqaiTools({ senderName }),
     // Allow several tool round-trips (e.g. discover deals → verify a vessel →
     // answer) within a single turn before the model must produce its reply.
     stopWhen: stepCountIs(6),
