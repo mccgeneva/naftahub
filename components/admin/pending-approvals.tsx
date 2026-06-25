@@ -86,6 +86,7 @@ interface AmendmentTerms {
   approxValue?: number
   quantity?: string
   tradeStructure?: string
+  unitPrice?: number
 }
 
 // Renders the old → new diff and reason for a commodity_amendment request so the
@@ -106,6 +107,14 @@ function AmendmentDiff({ payload }: { payload?: ApprovalRequest["payload"] }) {
     typeof v === "number" ? v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"
 
   const rows = [
+    {
+      label: "Unit price",
+      from: money(previous.unitPrice),
+      to: money(proposed.unitPrice),
+      changed:
+        typeof proposed.unitPrice === "number" &&
+        Math.round((previous.unitPrice ?? 0) * 100) !== Math.round((proposed.unitPrice ?? 0) * 100),
+    },
     {
       label: "Value",
       from: money(previous.approxValue),
