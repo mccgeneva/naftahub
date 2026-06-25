@@ -18,6 +18,7 @@ import {
   BookOpen,
   Maximize2,
   Minimize2,
+  Send,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -43,16 +44,21 @@ const TOOL_LABELS: Record<string, string> = {
   "tool-searchResearch": "Searching global research",
   "tool-lookupInstitution": "Looking up institution",
   "tool-exploreConcept": "Mapping research field",
+  "tool-sendEmail": "Sending email",
+  "tool-sendSms": "Sending SMS",
 }
 
 /** Tool keys that belong to the knowledge/research layer (book icon). */
 const KNOWLEDGE_TOOLS = new Set(["tool-searchResearch", "tool-lookupInstitution", "tool-exploreConcept"])
 
+/** Tool keys that send an outbound message (send icon). */
+const MESSAGING_TOOLS = new Set(["tool-sendEmail", "tool-sendSms"])
+
 interface ToolActivity {
   key: string
   label: string
   done: boolean
-  kind: "vessel" | "knowledge"
+  kind: "vessel" | "knowledge" | "messaging"
 }
 
 /** Collect tool invocations from a message's parts for the activity strip. */
@@ -69,7 +75,7 @@ function toolActivity(message: UIMessage): ToolActivity[] {
       key: `${type}-${i}`,
       label,
       done: state === "output-available" || state === "output-error",
-      kind: KNOWLEDGE_TOOLS.has(type) ? "knowledge" : "vessel",
+      kind: KNOWLEDGE_TOOLS.has(type) ? "knowledge" : MESSAGING_TOOLS.has(type) ? "messaging" : "vessel",
     })
   })
   return out
@@ -330,6 +336,8 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                         {a.done ? (
                           a.kind === "knowledge" ? (
                             <BookOpen className="h-3 w-3" />
+                          ) : a.kind === "messaging" ? (
+                            <Send className="h-3 w-3" />
                           ) : a.label.includes("vessel") || a.label.includes("AIS") ? (
                             <Ship className="h-3 w-3" />
                           ) : (

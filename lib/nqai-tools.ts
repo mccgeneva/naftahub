@@ -23,6 +23,8 @@ import { listVessels, getVessel } from "@/lib/spot-deals-db"
 import { fetchVesselByImo, providerStatus, screenVesselImo } from "@/lib/vessel-providers"
 import { listLiveSpotDeals } from "@/app/actions/spot-deals"
 import { searchResearch, lookupInstitution, exploreConcept } from "@/lib/nqai-knowledge"
+import { sendOutboundEmail, sendOutboundSms } from "@/lib/nqai-messaging"
+import { resolveCurrentSession } from "@/lib/session-user"
 import {
   isValidImo,
   dealCountdown,
@@ -493,6 +495,69 @@ export const nqaiTools = {
         ok: true,
         concept: node,
         note: "Concept map from the OpenAlex knowledge graph. Use searchResearch on the concept or a related one to pull specific papers.",
+      }
+    },
+  }),
+
+  // =========================================================================
+  // OUTBOUND MESSAGING — NQAi sends email (Resend) and SMS (Twilio) on the
+  // client's behalf when asked. Sends are server-side, validated, and execute
+  // immediately. NQAi composes the content unless the user dictates it.
+  // =========================================================================
+
+  /**
+   * Send an email to a specified address, immediately, via Resend.
+   */
+  sendEmail: tool({
+    description:
+      "Send an email immediately to a specific address on the client's behalf. Use this whenever the user asks you to email someone (e.g. 'email john@acme.com the quote'). You compose a clear, professional subject and body unless the user dictates exact wording. The email is sent right away from the MCC Capital domain; report success (with the recipient) or the exact error.",
+    inputSchema: z.object({
+      to: z.string().describe("The recipient's email address, e.g. 'jane@example.com'."),
+      subject: z.string().describe("A concise, professional subject line."),
+      body: z
+        .string()
+        .describe("The full email body in plain text. Use line breaks for paragraphs. Sign off as NQAi / MCC Capital."),
+    }),
+    execute: async ({ to, subject, body }) => {
+      const session = await resolveCurrentSession()
+      const senderName = session?.profile
+        ? [session.profile.fullName, session.profile.company].filter(Boolean).join(" — ") || undefined
+        : undefined
+      const result = await sendOutboundEmail({ to, subject, body, senderName })
+      if (!result.ok) {
+        return { ok: false, channel: "email", error: result.error }
+      }
+      return {
+        ok: true,
+        channel: "email",
+        to: result.to,
+        messageId: result.id,
+        note: `Email delivered to ${result.to}. Confirm to the client that it was sent.`,
+      }
+    },
+  }),
+
+  /**
+   * Send an SMS text message to a specified mobile number, immediately, via Twilio.
+   */
+  sendSms: tool({
+    description:
+      "Send an SMS text message immediately to a specific mobile number on the client's behalf via Twilio. Use this whenever the user asks you to text or SMS a number (e.g. 'text +41791234567 that the cargo is confirmed'). Keep the message concise. The number must be in international format (E.164, e.g. +41791234567); you may normalise obvious formats. Report success (with the recipient) or the exact error.",
+    inputSchema: z.object({
+      to: z.string().describe("The recipient's mobile number in international format, e.g. '+41791234567'."),
+      body: z.string().describe("The SMS message text. Keep it concise and clear."),
+    }),
+    execute: async ({ to, body }) => {
+      const result = await sendOutboundSms({ to, body })
+      if (!result.ok) {
+        return { ok: false, channel: "sms", error: result.error }
+      }
+      return {
+        ok: true,
+        channel: "sms",
+        to: result.to,
+        messageId: result.id,
+        note: `SMS delivered to ${result.to}. Confirm to the client that it was sent.`,
       }
     },
   }),
