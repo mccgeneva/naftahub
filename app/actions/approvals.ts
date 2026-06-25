@@ -36,6 +36,7 @@ import {
   type LedgerEffect,
 } from "@/lib/approvals-db"
 import { KIND_LABELS, KIND_HREF, type ApprovalKind } from "@/lib/approval-kinds"
+import { parseQuantityString } from "@/lib/petroleum-products"
 import { getDynamicUserByEmail } from "@/lib/admin-users-db"
 import {
   recordGatewayDepositForApproval,
@@ -427,9 +428,17 @@ export async function requestPaymentRecall(
 
 /** The negotiable subset of a deal's terms, proposed by the client. */
 export interface ProposedDealTerms {
+  /**
+   * The total deal value the client computed (unit price × quantity). This is
+   * advisory only — when `unitPrice` is supplied the server recomputes the
+   * authoritative total itself so a stale/buggy client can never persist a raw
+   * per-unit price as the deal's total value.
+   */
   approxValue: number
   quantity: string
   tradeStructure: string
+  /** The renegotiated PER-UNIT price (per MT/BBL) — the figure traders edit. */
+  unitPrice?: number
 }
 
 /**
@@ -472,7 +481,23 @@ export async function requestDealAmendment(
       return { ok: false, error: "An amendment is already pending approval for this deal." }
     }
 
-    const newValue = Math.round(Number(proposed.approxValue) * 100) / 100
+    // The total deal value is ALWAYS unit price × quantity. When the client
+    // supplies the renegotiated per-unit price (the figure traders actually
+    // edit), the server recomputes the authoritative total from it and the
+    // proposed quantity — never trusting the client's `approxValue`, which a
+    // stale/buggy bundle could send as the raw per-unit price (the historical
+    // "USD 138M → USD 685" corruption). When no unit price is given (legacy
+    // clients) we fall back to the client total.
+    const proposedUnitPrice = Number(proposed.unitPrice)
+    const proposedQty = parseQuantityString(proposed.quantity)
+    let newValue: number
+    let unitPrice: number | null = null
+    if (Number.isFinite(proposedUnitPrice) && proposedUnitPrice > 0 && proposedQty) {
+      unitPrice = Math.round(proposedUnitPrice * 100) / 100
+      newValue = Math.round(proposedUnitPrice * proposedQty.amount * 100) / 100
+    } else {
+      newValue = Math.round(Number(proposed.approxValue) * 100) / 100
+    }
     if (!Number.isFinite(newValue) || newValue <= 0) {
       return { ok: false, error: "Enter a valid amended value." }
     }
@@ -481,10 +506,14 @@ export async function requestDealAmendment(
     }
 
     const currency = original.currency ?? (record.currency as string) ?? "USD"
+    const prevValue = Number(original.amount ?? (record.approxValue as number) ?? 0)
+    const prevQty = parseQuantityString((record.quantity as string) ?? "")
     const previous = {
-      approxValue: Number(original.amount ?? (record.approxValue as number) ?? 0),
+      approxValue: prevValue,
       quantity: (record.quantity as string) ?? "",
       tradeStructure: (record.tradeStructure as string) ?? "FOB",
+      unitPrice:
+        prevQty && prevValue > 0 ? Math.round((prevValue / prevQty.amount) * 100) / 100 : undefined,
     }
     const amendmentId = `AMD-${Math.random().toString(16).slice(2, 10).toUpperCase()}`
     const commodity = (record.commodity as string) ?? original.title
@@ -504,7 +533,12 @@ export async function requestDealAmendment(
         commodity,
         reason: reason.trim(),
         previous,
-        proposed: { approxValue: newValue, quantity: proposed.quantity, tradeStructure: proposed.tradeStructure },
+        proposed: {
+          approxValue: newValue,
+          quantity: proposed.quantity,
+          tradeStructure: proposed.tradeStructure,
+          unitPrice: unitPrice ?? undefined,
+        },
       },
       ledgerEffect: null,
     })
@@ -517,7 +551,12 @@ export async function requestDealAmendment(
       status: "pending" as const,
       reason: reason.trim(),
       previous,
-      proposed: { approxValue: newValue, quantity: proposed.quantity, tradeStructure: proposed.tradeStructure },
+      proposed: {
+        approxValue: newValue,
+        quantity: proposed.quantity,
+        tradeStructure: proposed.tradeStructure,
+        unitPrice: unitPrice ?? undefined,
+      },
       requestedAt: new Date().toISOString(),
     }
     try {
@@ -1227,6 +1266,7 @@ interface AmendmentTerms {
   approxValue: number
   quantity: string
   tradeStructure: string
+  unitPrice?: number
 }
 
 /**
@@ -1252,7 +1292,15 @@ async function applyApprovedAmendment(amendment: ApprovalRequest): Promise<void>
   const payload = (deal.payload ?? {}) as { record?: Record<string, unknown>; [k: string]: unknown }
   const record = (payload.record ?? {}) as Record<string, unknown>
 
-  const newValue = Math.round(Number(proposed.approxValue) * 100) / 100
+  // Defense-in-depth: the authoritative total is unit price × quantity. If a
+  // unit price travelled with the amendment, recompute from it so the deal can
+  // never inherit a stale client's raw per-unit price as its total value.
+  const applyQty = parseQuantityString(proposed.quantity)
+  const applyUnit = Number(proposed.unitPrice)
+  const newValue =
+    Number.isFinite(applyUnit) && applyUnit > 0 && applyQty
+      ? Math.round(applyUnit * applyQty.amount * 100) / 100
+      : Math.round(Number(proposed.approxValue) * 100) / 100
   const currency = deal.currency ?? (record.currency as string) ?? "USD"
   const sellerName = (record.sellerName as string) || "Commodity supplier"
   const uetr = (record.uetr as string) || (record.id as string) || deal.id
@@ -1268,9 +1316,17 @@ async function applyApprovedAmendment(amendment: ApprovalRequest): Promise<void>
     ? (record.amendmentHistory as Record<string, unknown>[])
     : []
 
+  const newUnitPrice =
+    Number.isFinite(applyUnit) && applyUnit > 0
+      ? Math.round(applyUnit * 100) / 100
+      : applyQty && newValue > 0
+        ? Math.round((newValue / applyQty.amount) * 100) / 100
+        : (record.unitPrice as number | undefined)
+
   const newRecord = {
     ...record,
     approxValue: newValue,
+    unitPrice: newUnitPrice,
     quantity: proposed.quantity,
     tradeStructure: proposed.tradeStructure,
     pendingAmendment: undefined,

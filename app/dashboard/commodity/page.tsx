@@ -663,6 +663,7 @@ export default function CommodityTradingPage() {
       approxValue: value,
       quantity: amendForm.quantity.trim(),
       tradeStructure: amendForm.tradeStructure,
+      unitPrice,
     }
     setAmending(true)
     const res = await requestAmendment(deal.id, proposed, amendForm.reason.trim())
