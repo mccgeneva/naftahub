@@ -33,6 +33,10 @@ export interface LedgerEntry {
   counterparty: string // sender (for credits) or beneficiary (for debits)
   account?: string // counterparty account number
   bank?: string // counterparty bank
+  /** The CLIENT's own receiving account (IBAN) this payment landed in, used to
+   *  attribute incoming funds to a specific registered bank so the client can
+   *  see a per-bank sub-balance. Distinct from `account` (the counterparty). */
+  receivedAccount?: string
   reference?: string
   comment?: string
   category?: string

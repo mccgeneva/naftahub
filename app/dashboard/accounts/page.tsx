@@ -560,11 +560,30 @@ export default function BankAccountsPage() {
                   )}
                 </div>
               ) : (
-                <div className="rounded-md border border-zinc-800 bg-zinc-900/60 p-3">
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    Registered external account. Incoming wires received here settle to your{" "}
-                    <span className="font-medium text-foreground">{account.currency} Settlement Account</span>, where the
-                    funds appear in your available balance and transaction history.
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-muted-foreground shrink-0">Received at this account</span>
+                    <span className="text-sm font-semibold text-foreground tabular-nums text-right min-w-0 [overflow-wrap:anywhere]">
+                      {formatCurrency(account.trackedBalance ?? 0, account.currency)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-muted-foreground shrink-0">Available</span>
+                    <span className="text-sm text-emerald-400 tabular-nums text-right min-w-0 [overflow-wrap:anywhere]">
+                      {formatCurrency(account.trackedAvailable ?? 0, account.currency)}
+                    </span>
+                  </div>
+                  {(account.trackedReserved ?? 0) > 0 && (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground shrink-0">Reserved</span>
+                      <span className="text-sm text-amber-400 tabular-nums text-right min-w-0 [overflow-wrap:anywhere]">
+                        {formatCurrency(account.trackedReserved ?? 0, account.currency)}
+                      </span>
+                    </div>
+                  )}
+                  <p className="text-[11px] leading-relaxed text-muted-foreground pt-1">
+                    Registered external account. Funds received here also settle into your{" "}
+                    <span className="font-medium text-foreground">{account.currency} Settlement Account</span>.
                   </p>
                 </div>
               )}

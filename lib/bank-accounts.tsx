@@ -44,6 +44,16 @@ export type BankAccount = {
   bsb?: string
   branchCode?: string
   escrowDetails?: string
+  /**
+   * Per-account tracked balance for REGISTERED external accounts only, derived
+   * from ledger entries whose `account` (IBAN) matches this account. Lets a
+   * client see how much has landed at THIS specific bank. These figures are a
+   * subset of the matching currency Settlement Account, so they are NEVER added
+   * into the per-currency totals (that would double-count the master balance).
+   */
+  trackedBalance?: number
+  trackedAvailable?: number
+  trackedReserved?: number
 }
 
 export const baseBankAccounts: BankAccount[] = [
@@ -284,8 +294,39 @@ function bankAccountFromApproval(rec: ApprovalRecord): BankAccount | null {
  * the client registered via "Add Bank Account" (and the admin approved) are
  * folded in from the DB-backed approvals backbone so they actually appear here.
  */
+/** Normalise an IBAN/account string for comparison: strip non-alphanumerics,
+ *  uppercase. So "CH57 0024 03OJ …" matches a ledger entry tagged "CH5700240..". */
+function normalizeAccountRef(value: string | undefined | null): string {
+  return (value ?? "").replace(/[^a-z0-9]/gi, "").toUpperCase()
+}
+
 export function useBankAccounts(): BankAccount[] {
-  const { balanceFor, reservedFor, currencies } = useLedger()
+  const { balanceFor, reservedFor, currencies, entries } = useLedger()
+
+  // Per-registered-account tracked balance: sum the ledger entries whose
+  // counterparty `account` (IBAN) matches the registered account. Completed
+  // credits add, completed debits subtract, held debits reserve. This is the
+  // "money received at THIS bank" view; the same entries also feed the currency
+  // Settlement Account, so the master balance reflects them automatically.
+  const trackedFor = (iban: string, currency: string) => {
+    const target = normalizeAccountRef(iban)
+    if (!target) return { balance: 0, available: 0, reserved: 0 }
+    const mine = entries.filter((e) => {
+      if (e.currency !== currency) return false
+      // Prefer the explicit receiving-account tag. Fall back to the legacy
+      // `account` field for entries posted before per-bank attribution existed
+      // (where the receiving IBAN was stored there).
+      if (e.receivedAccount) return normalizeAccountRef(e.receivedAccount) === target
+      return normalizeAccountRef(e.account) === target
+    })
+    const settled = mine
+      .filter((e) => e.status === "completed")
+      .reduce((sum, e) => sum + (e.direction === "credit" ? e.amount : -e.amount), 0)
+    const reserved = mine
+      .filter((e) => e.status === "hold" && e.direction === "debit")
+      .reduce((sum, e) => sum + e.amount, 0)
+    return { balance: settled, available: settled - reserved, reserved }
+  }
   // The signed-in client's own bank-account registrations, sourced from Neon
   // (approved → active, pending → in review). Scoped to this user by the
   // approvals API, polled/refreshed like every other request list.
@@ -352,7 +393,20 @@ export function useBankAccounts(): BankAccount[] {
     ...liveBaseAccounts.map((a) => a.id),
     ...extraCurrencyAccounts.map((a) => a.id),
   ])
-  const registered = registeredAccounts.filter((a) => !existingIds.has(a.id))
+  const registered = registeredAccounts
+    .filter((a) => !existingIds.has(a.id))
+    .map((a) => {
+      // Overlay the per-account tracked balance (kept on dedicated `tracked*`
+      // fields so balance/availableBalance stay 0 and the currency totals never
+      // double-count the Settlement Account that holds the same funds).
+      const t = trackedFor(a.iban, a.currency)
+      return {
+        ...a,
+        trackedBalance: t.balance,
+        trackedAvailable: t.available,
+        trackedReserved: t.reserved,
+      }
+    })
 
   return [...liveBaseAccounts, ...extraCurrencyAccounts, ...registered]
 }

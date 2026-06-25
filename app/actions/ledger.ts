@@ -5,6 +5,7 @@ import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { type UserProfile } from "@/lib/users"
 import { resolveAccountProfileById, resolveCurrentSession, resolveDataOwnerIdFor } from "@/lib/session-user"
 import { getDynamicUserByEmail } from "@/lib/admin-users-db"
+import { listApprovalsForUser } from "@/lib/approvals-db"
 import { logActivity } from "@/app/actions/log-activity"
 import type { LedgerEntry } from "@/lib/ledger-store"
 
@@ -65,6 +66,9 @@ async function ensureTable(): Promise<void> {
        PRIMARY KEY (user_id, entry_id)
      )`,
   )
+  // Additive migration for databases created before per-bank attribution: the
+  // client's own receiving account (IBAN) the funds landed in. Idempotent.
+  await query(`ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS received_account text`)
   ensured = true
 }
 
@@ -81,6 +85,7 @@ function rowToEntry(row: Record<string, unknown>): LedgerEntry {
     counterparty: (row.counterparty as string) ?? "",
     account: (row.account as string) ?? undefined,
     bank: (row.bank as string) ?? undefined,
+    receivedAccount: (row.received_account as string) ?? undefined,
     reference: (row.reference as string) ?? undefined,
     comment: (row.comment as string) ?? undefined,
     category: (row.category as string) ?? undefined,
@@ -101,8 +106,8 @@ async function upsertEntry(userId: string, entry: LedgerEntry): Promise<void> {
   await query(
     `INSERT INTO ledger_entries
        (user_id, entry_id, direction, amount, currency, status, entry_date,
-        counterparty, account, bank, reference, comment, category)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        counterparty, account, bank, reference, comment, category, received_account)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      ON CONFLICT (user_id, entry_id) DO UPDATE SET
        direction = EXCLUDED.direction,
        amount = EXCLUDED.amount,
@@ -114,7 +119,8 @@ async function upsertEntry(userId: string, entry: LedgerEntry): Promise<void> {
        bank = EXCLUDED.bank,
        reference = EXCLUDED.reference,
        comment = EXCLUDED.comment,
-       category = EXCLUDED.category`,
+       category = EXCLUDED.category,
+       received_account = EXCLUDED.received_account`,
     [
       userId,
       entry.id,
@@ -129,6 +135,7 @@ async function upsertEntry(userId: string, entry: LedgerEntry): Promise<void> {
       entry.reference ?? null,
       entry.comment ?? null,
       entry.category ?? null,
+      entry.receivedAccount ?? null,
     ],
   )
 }
@@ -378,6 +385,56 @@ export async function addLedgerEntryForUserAdmin(
   } catch (err) {
     console.log("[v0] addLedgerEntryForUserAdmin failed:", (err as Error).message)
     return { ok: false, error: "The entry could not be posted. Please try again." }
+  }
+}
+
+/** A registered receiving account the admin can attribute an incoming payment
+ *  to, so it surfaces as a per-bank sub-balance on the client's accounts page. */
+export interface RegisteredAccountOption {
+  id: string
+  bankName: string
+  iban: string
+  currency: string
+}
+
+export type RegisteredAccountsResult =
+  | { ok: true; accounts: RegisteredAccountOption[] }
+  | { ok: false; error: string }
+
+/**
+ * Admin: list a client's APPROVED registered (external) bank accounts so an
+ * incoming payment can be attributed to the specific bank it landed in. The
+ * resulting `receivedAccount` IBAN is what the client's accounts page matches
+ * to show a per-bank sub-balance (while the funds also feed the master
+ * Settlement Account, never double-counted).
+ */
+export async function listRegisteredAccountsForUserAdmin(
+  passcode: string,
+  userId: string,
+): Promise<RegisteredAccountsResult> {
+  try {
+    await requireAdmin(passcode)
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+  try {
+    const approvals = await listApprovalsForUser(userId, "bank_account")
+    const accounts = approvals
+      .filter((a) => a.status === "approved")
+      .map((a) => {
+        const p = (a.payload ?? {}) as { bankName?: string; iban?: string; currency?: string }
+        return {
+          id: a.id,
+          bankName: p.bankName ?? "Registered account",
+          iban: p.iban ?? "",
+          currency: p.currency ?? "EUR",
+        }
+      })
+      .filter((a) => a.iban.trim().length > 0)
+    return { ok: true, accounts }
+  } catch (err) {
+    console.log("[v0] listRegisteredAccountsForUserAdmin failed:", (err as Error).message)
+    return { ok: false, error: "Could not load the client's registered accounts." }
   }
 }
 
