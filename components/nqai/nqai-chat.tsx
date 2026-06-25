@@ -35,6 +35,7 @@ function messageText(message: UIMessage): string {
 }
 
 /** Human labels for NQAi's live data tools, shown as activity chips. */
+// Present-tense labels shown while a tool is still running.
 const TOOL_LABELS: Record<string, string> = {
   "tool-verifyVessel": "Verifying vessel",
   "tool-searchVessels": "Searching vessel catalogue",
@@ -48,6 +49,28 @@ const TOOL_LABELS: Record<string, string> = {
   "tool-sendSms": "Sending SMS",
 }
 
+// Past-tense labels shown once a tool has finished successfully, so a completed
+// chip never looks like it is perpetually "Sending…".
+const TOOL_DONE_LABELS: Record<string, string> = {
+  "tool-verifyVessel": "Vessel verified",
+  "tool-searchVessels": "Catalogue searched",
+  "tool-listSpotDeals": "Spot-deal board scanned",
+  "tool-discoverOilDeals": "Vessels & deals matched",
+  "tool-vesselDataProviderStatus": "AIS provider checked",
+  "tool-searchResearch": "Research retrieved",
+  "tool-lookupInstitution": "Institution found",
+  "tool-exploreConcept": "Field mapped",
+  "tool-sendEmail": "Email sent",
+  "tool-sendSms": "SMS sent",
+}
+
+// Labels shown when a tool finished but reported a failure (e.g. email not
+// configured, invalid recipient, provider error).
+const TOOL_FAIL_LABELS: Record<string, string> = {
+  "tool-sendEmail": "Email failed",
+  "tool-sendSms": "SMS failed",
+}
+
 /** Tool keys that belong to the knowledge/research layer (book icon). */
 const KNOWLEDGE_TOOLS = new Set(["tool-searchResearch", "tool-lookupInstitution", "tool-exploreConcept"])
 
@@ -58,6 +81,7 @@ interface ToolActivity {
   key: string
   label: string
   done: boolean
+  failed: boolean
   kind: "vessel" | "knowledge" | "messaging"
 }
 
@@ -68,13 +92,24 @@ function toolActivity(message: UIMessage): ToolActivity[] {
   message.parts.forEach((p, i) => {
     const type = (p as { type?: string }).type ?? ""
     if (!type.startsWith("tool-")) return
-    const label = TOOL_LABELS[type]
-    if (!label) return
+    if (!(type in TOOL_LABELS)) return
     const state = (p as { state?: string }).state ?? ""
+    const done = state === "output-available" || state === "output-error"
+    // A tool can finish "successfully" (output-available) yet still report a
+    // logical failure via `{ ok: false }` in its output (e.g. email not
+    // configured). Treat both as a failed chip so the user sees it plainly.
+    const output = (p as { output?: { ok?: boolean } }).output
+    const failed = done && (state === "output-error" || output?.ok === false)
+    const label = failed
+      ? TOOL_FAIL_LABELS[type] ?? `${TOOL_LABELS[type]} — failed`
+      : done
+        ? TOOL_DONE_LABELS[type] ?? TOOL_LABELS[type]
+        : TOOL_LABELS[type]
     out.push({
       key: `${type}-${i}`,
       label,
-      done: state === "output-available" || state === "output-error",
+      done,
+      failed,
       kind: KNOWLEDGE_TOOLS.has(type) ? "knowledge" : MESSAGING_TOOLS.has(type) ? "messaging" : "vessel",
     })
   })
@@ -328,23 +363,25 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                         key={a.key}
                         className={cn(
                           "inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider",
-                          a.done
-                            ? "border-primary/30 bg-primary/10 text-primary"
-                            : "border-warning/30 bg-warning/10 text-warning",
+                          a.failed
+                            ? "border-destructive/40 bg-destructive/10 text-destructive"
+                            : a.done
+                              ? "border-primary/30 bg-primary/10 text-primary"
+                              : "border-warning/30 bg-warning/10 text-warning",
                         )}
                       >
-                        {a.done ? (
-                          a.kind === "knowledge" ? (
-                            <BookOpen className="h-3 w-3" />
-                          ) : a.kind === "messaging" ? (
-                            <Send className="h-3 w-3" />
-                          ) : a.label.includes("vessel") || a.label.includes("AIS") ? (
-                            <Ship className="h-3 w-3" />
-                          ) : (
-                            <Radar className="h-3 w-3" />
-                          )
-                        ) : (
+                        {!a.done ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : a.failed ? (
+                          <AlertTriangle className="h-3 w-3" />
+                        ) : a.kind === "knowledge" ? (
+                          <BookOpen className="h-3 w-3" />
+                        ) : a.kind === "messaging" ? (
+                          <Send className="h-3 w-3" />
+                        ) : a.label.includes("vessel") || a.label.includes("AIS") ? (
+                          <Ship className="h-3 w-3" />
+                        ) : (
+                          <Radar className="h-3 w-3" />
                         )}
                         <span>{a.label}</span>
                       </span>
