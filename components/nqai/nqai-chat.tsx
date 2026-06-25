@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport, type UIMessage } from "ai"
 import { Streamdown } from "streamdown"
@@ -16,6 +16,8 @@ import {
   Radar,
   Loader2,
   BookOpen,
+  Maximize2,
+  Minimize2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -92,13 +94,41 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
   const [greeting, setGreeting] = useState("")
   const [bootstrapped, setBootstrapped] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { messages, sendMessage, setMessages, status, error, stop } = useChat({
     transport: new DefaultChatTransport({ api: "/api/nqai" }),
   })
 
   const busy = status === "submitted" || status === "streaming"
   const hasConversation = messages.length > 0
+
+  // Auto-grow the composer: reset to a single row, then expand to fit content
+  // up to a comfortable max (after which it scrolls internally).
+  const resizeTextarea = useCallback(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = "auto"
+    const max = 220
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`
+    el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden"
+  }, [])
+
+  // Re-fit whenever the value changes (typing, paste, or reset after sending).
+  useEffect(() => {
+    resizeTextarea()
+  }, [input, resizeTextarea])
+
+  // Allow Esc to exit full-screen.
+  useEffect(() => {
+    if (!fullscreen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreen(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [fullscreen])
 
   // On mount, reload this user's prior conversation (session continuity) and
   // fetch their personalized greeting. Runs once.
@@ -150,7 +180,12 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div
+      className={cn(
+        "flex h-full min-h-0 flex-col bg-background",
+        fullscreen && "fixed inset-0 z-50 h-[100dvh]",
+      )}
+    >
       {/* Header */}
       <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-3">
         <div className="flex items-center gap-3">
@@ -191,17 +226,28 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
               {error ? "Fault" : busy ? "Reasoning" : "Online"}
             </span>
           </div>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={() => setFullscreen((v) => !v)}
+            className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+            aria-label={fullscreen ? "Exit full screen" : "Enter full screen"}
+            title={fullscreen ? "Exit full screen (Esc)" : "Full screen"}
+          >
+            {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </Button>
         </div>
       </div>
 
       {/* Conversation */}
-      <div
-        ref={scrollRef}
-        className={cn(
-          "min-h-0 flex-1 overflow-y-auto px-4 py-4",
-          variant === "page" ? "space-y-5" : "space-y-4",
-        )}
-      >
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        <div
+          className={cn(
+            "mx-auto w-full",
+            variant === "page" ? "max-w-3xl space-y-5" : "space-y-4",
+          )}
+        >
         {/* Canonical welcome message — always shown on load */}
         <div className="flex gap-3">
           <NqaiAvatar />
@@ -341,51 +387,55 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
             </span>
           </div>
         )}
+        </div>
       </div>
 
       {/* Composer */}
       <form onSubmit={onSubmit} className="border-t border-border bg-card p-3">
-        <div className="flex items-end gap-2 rounded-sm border border-border bg-background px-3 py-2 focus-within:border-primary/50">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault()
-                submit(input)
-              }
-            }}
-            rows={1}
-            placeholder="Ask NQAi about markets, cargoes, vessels, instruments…"
-            className="max-h-32 min-h-[24px] flex-1 resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
-            aria-label="Message NQAi"
-          />
-          {busy ? (
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              onClick={() => stop()}
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
-              aria-label="Stop generating"
-            >
-              <Square className="h-4 w-4" />
-            </Button>
-          ) : (
-            <Button
-              type="submit"
-              size="icon"
-              disabled={!input.trim()}
-              className="h-8 w-8 shrink-0"
-              aria-label="Send message"
-            >
-              <ArrowUp className="h-4 w-4" />
-            </Button>
-          )}
+        <div className="mx-auto w-full max-w-3xl">
+          <div className="flex items-end gap-2 rounded-md border border-border bg-background px-3 py-2 transition-colors focus-within:border-primary/50">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  submit(input)
+                }
+              }}
+              rows={1}
+              placeholder="Ask NQAi about markets, cargoes, vessels, instruments…  (Shift + Enter for a new line)"
+              className="min-h-[24px] flex-1 resize-none bg-transparent text-sm leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none"
+              aria-label="Message NQAi"
+            />
+            {busy ? (
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={() => stop()}
+                className="h-8 w-8 shrink-0 self-end text-muted-foreground hover:text-foreground"
+                aria-label="Stop generating"
+              >
+                <Square className="h-4 w-4" />
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                size="icon"
+                disabled={!input.trim()}
+                className="h-8 w-8 shrink-0 self-end"
+                aria-label="Send message"
+              >
+                <ArrowUp className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+          <p className="mt-1.5 px-1 text-[10px] text-muted-foreground">
+            NQAi provides indicative analysis — confirm firm pricing and terms with the desk before execution.
+          </p>
         </div>
-        <p className="mt-1.5 px-1 text-[10px] text-muted-foreground">
-          NQAi provides indicative analysis — confirm firm pricing and terms with the desk before execution.
-        </p>
       </form>
     </div>
   )
