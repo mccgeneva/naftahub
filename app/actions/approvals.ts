@@ -533,7 +533,12 @@ export async function requestDealAmendment(
         commodity,
         reason: reason.trim(),
         previous,
-        proposed: { approxValue: newValue, quantity: proposed.quantity, tradeStructure: proposed.tradeStructure },
+        proposed: {
+          approxValue: newValue,
+          quantity: proposed.quantity,
+          tradeStructure: proposed.tradeStructure,
+          unitPrice: unitPrice ?? undefined,
+        },
       },
       ledgerEffect: null,
     })
@@ -546,7 +551,12 @@ export async function requestDealAmendment(
       status: "pending" as const,
       reason: reason.trim(),
       previous,
-      proposed: { approxValue: newValue, quantity: proposed.quantity, tradeStructure: proposed.tradeStructure },
+      proposed: {
+        approxValue: newValue,
+        quantity: proposed.quantity,
+        tradeStructure: proposed.tradeStructure,
+        unitPrice: unitPrice ?? undefined,
+      },
       requestedAt: new Date().toISOString(),
     }
     try {
