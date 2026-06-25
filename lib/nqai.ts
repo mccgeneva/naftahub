@@ -30,6 +30,10 @@ export const NQAI_SUGGESTIONS: { label: string; prompt: string }[] = [
     prompt: "Verify vessel IMO 9782522 — confirm its identity, capacity and OFAC compliance status.",
   },
   {
+    label: "Latest research: carbon capture",
+    prompt: "What does the latest peer-reviewed research say about the cost and viability of carbon capture? Cite the key papers.",
+  },
+  {
     label: "Structure an SKR",
     prompt: "Walk me through how a Safe Keeping Receipt (SKR) is typically structured for a commodity transaction.",
   },

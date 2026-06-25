@@ -4,7 +4,19 @@ import { useEffect, useRef, useState } from "react"
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport, type UIMessage } from "ai"
 import { Streamdown } from "streamdown"
-import { Cpu, ArrowUp, Square, AlertTriangle, Sparkles, User, RotateCcw, Ship, Radar, Loader2 } from "lucide-react"
+import {
+  Cpu,
+  ArrowUp,
+  Square,
+  AlertTriangle,
+  Sparkles,
+  User,
+  RotateCcw,
+  Ship,
+  Radar,
+  Loader2,
+  BookOpen,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { NQAI_WELCOME, NQAI_TAGLINE, NQAI_SUGGESTIONS } from "@/lib/nqai"
@@ -26,12 +38,19 @@ const TOOL_LABELS: Record<string, string> = {
   "tool-listSpotDeals": "Scanning spot-deal board",
   "tool-discoverOilDeals": "Matching vessels & oil deals",
   "tool-vesselDataProviderStatus": "Checking AIS provider",
+  "tool-searchResearch": "Searching global research",
+  "tool-lookupInstitution": "Looking up institution",
+  "tool-exploreConcept": "Mapping research field",
 }
+
+/** Tool keys that belong to the knowledge/research layer (book icon). */
+const KNOWLEDGE_TOOLS = new Set(["tool-searchResearch", "tool-lookupInstitution", "tool-exploreConcept"])
 
 interface ToolActivity {
   key: string
   label: string
   done: boolean
+  kind: "vessel" | "knowledge"
 }
 
 /** Collect tool invocations from a message's parts for the activity strip. */
@@ -44,7 +63,12 @@ function toolActivity(message: UIMessage): ToolActivity[] {
     const label = TOOL_LABELS[type]
     if (!label) return
     const state = (p as { state?: string }).state ?? ""
-    out.push({ key: `${type}-${i}`, label, done: state === "output-available" || state === "output-error" })
+    out.push({
+      key: `${type}-${i}`,
+      label,
+      done: state === "output-available" || state === "output-error",
+      kind: KNOWLEDGE_TOOLS.has(type) ? "knowledge" : "vessel",
+    })
   })
   return out
 }
@@ -258,7 +282,9 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                         )}
                       >
                         {a.done ? (
-                          a.label.includes("vessel") || a.label.includes("AIS") ? (
+                          a.kind === "knowledge" ? (
+                            <BookOpen className="h-3 w-3" />
+                          ) : a.label.includes("vessel") || a.label.includes("AIS") ? (
                             <Ship className="h-3 w-3" />
                           ) : (
                             <Radar className="h-3 w-3" />

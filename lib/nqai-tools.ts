@@ -22,6 +22,7 @@ import { z } from "zod"
 import { listVessels, getVessel } from "@/lib/spot-deals-db"
 import { fetchVesselByImo, providerStatus, screenVesselImo } from "@/lib/vessel-providers"
 import { listLiveSpotDeals } from "@/app/actions/spot-deals"
+import { searchResearch, lookupInstitution, exploreConcept } from "@/lib/nqai-knowledge"
 import {
   isValidImo,
   dealCountdown,
@@ -398,6 +399,100 @@ export const nqaiTools = {
         note: status.connected
           ? `Live vessel intelligence is active via ${status.active?.label}. Free OFAC sanctions + IMO-validity screening always runs.`
           : "No paid AIS provider is linked. Free OFAC sanctions screening, IMO validation, and public-registry lookups are always available; live real-time positions/ETA require connecting a provider API key.",
+      }
+    },
+  }),
+
+  // =========================================================================
+  // KNOWLEDGE LAYER — read-only research intelligence from open, key-free
+  // scholarly APIs (OpenAlex, arXiv, Crossref). This is the "Universities →
+  // Knowledge APIs → AI" pipeline: NQAi ingests peer-reviewed and preprint
+  // research on demand, then reasons over it with full source attribution.
+  // All calls are cached + rate-limited server-side in lib/nqai-knowledge.ts.
+  // =========================================================================
+
+  /**
+   * Search global scholarly literature (OpenAlex + arXiv + Crossref) for
+   * peer-reviewed papers and preprints relevant to a topic.
+   */
+  searchResearch: tool({
+    description:
+      "Search global academic research — peer-reviewed papers and preprints — across OpenAlex, arXiv and Crossref. Use for any question about science, technology, engineering, energy, markets methodology, climate, materials, or 'what does the latest research say about X'. Returns ranked works with titles, authors, year, venue, citation counts, open-access status and source links for attribution. Always cite the works you use.",
+    inputSchema: z.object({
+      query: z.string().describe("The research topic or question, e.g. 'carbon capture cost per tonne' or 'lithium iron phosphate degradation'."),
+      fromYear: z.number().int().nullable().describe("Optional earliest publication year to include (e.g. 2022). Null for no lower bound."),
+      openAccessOnly: z.boolean().nullable().describe("If true, only return open-access works the user can read in full. Null/false returns all."),
+    }),
+    execute: async ({ query, fromYear, openAccessOnly }) => {
+      const q = (query ?? "").trim()
+      if (!q) return { ok: false, error: "Provide a research topic or question to search." }
+      const result = await searchResearch({
+        query: q,
+        sources: ["openalex", "arxiv", "crossref"],
+        fromYear: fromYear ?? undefined,
+        openAccessOnly: openAccessOnly ?? undefined,
+      })
+      return {
+        ok: true,
+        query: q,
+        sourcesQueried: result.sources,
+        sourceErrors: result.errors,
+        works: result.works,
+        note:
+          result.works.length === 0
+            ? "No matching research found. Try broadening the query or removing the year/open-access filters."
+            : `Top ${result.works.length} works across ${result.sources.join(", ")}. Cite titles + links; label preprints (arXiv) as not yet peer-reviewed.`,
+      }
+    },
+  }),
+
+  /**
+   * Resolve a university / research institution to its open scholarly profile
+   * (OpenAlex): output, top fields, and identifiers.
+   */
+  lookupInstitution: tool({
+    description:
+      "Look up a university or research institution's scholarly profile (via OpenAlex): total works, citation impact, top research fields, country and homepage. Use when a user references a university, research lab, or asks 'who is doing research on X' at an institutional level.",
+    inputSchema: z.object({
+      name: z.string().describe("Institution name, e.g. 'ETH Zurich' or 'MIT'."),
+    }),
+    execute: async ({ name }) => {
+      const n = (name ?? "").trim()
+      if (!n) return { ok: false, error: "Provide an institution name." }
+      const matches = await lookupInstitution(n)
+      return {
+        ok: true,
+        query: n,
+        institutions: matches,
+        note:
+          matches.length === 0
+            ? "No matching institution found in the OpenAlex knowledge graph."
+            : `Found ${matches.length} institution match(es). Figures are open scholarly metadata (OpenAlex).`,
+      }
+    },
+  }),
+
+  /**
+   * Explore a research concept/field: its scale, related concepts, and the
+   * most-cited recent works — a knowledge-graph view of a subject.
+   */
+  exploreConcept: tool({
+    description:
+      "Explore a research concept or field as a knowledge graph (via OpenAlex): how large the field is, related/adjacent concepts, and the most influential recent works. Use to map an unfamiliar technical domain, find adjacent areas, or surface seminal papers before going deeper with searchResearch.",
+    inputSchema: z.object({
+      concept: z.string().describe("A field or concept, e.g. 'green hydrogen', 'maritime decarbonization', 'perovskite solar cells'."),
+    }),
+    execute: async ({ concept }) => {
+      const c = (concept ?? "").trim()
+      if (!c) return { ok: false, error: "Provide a concept or field to explore." }
+      const node = await exploreConcept(c)
+      if (!node) {
+        return { ok: false, error: `No concept matching "${c}" was found in the knowledge graph.` }
+      }
+      return {
+        ok: true,
+        concept: node,
+        note: "Concept map from the OpenAlex knowledge graph. Use searchResearch on the concept or a related one to pull specific papers.",
       }
     },
   }),
