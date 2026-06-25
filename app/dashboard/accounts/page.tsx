@@ -224,8 +224,10 @@ export default function BankAccountsPage() {
     return acc
   }, {} as Record<string, { total: number; available: number; reserved: number; count: number }>)
 
-  const uniqueCurrencies = [...new Set(bankAccounts.map((a) => a.currency))]
-  const uniqueCountries = [...new Set(bankAccounts.map((a) => a.countryCode))]
+  // Drop empty/undefined values: a Radix <SelectItem/> must never have an empty
+  // string value (it throws), and an account may carry a sparse currency/country.
+  const uniqueCurrencies = [...new Set(bankAccounts.map((a) => a.currency))].filter(Boolean)
+  const uniqueCountries = [...new Set(bankAccounts.map((a) => a.countryCode))].filter(Boolean)
 
   return (
     <div className="space-y-6">
