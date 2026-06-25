@@ -57,6 +57,7 @@ import {
   PETROLEUM_PRODUCTS,
   COMMODITY_CATEGORIES,
   getCatalogProduct,
+  bblPerMtFor,
   type CommodityUnit,
 } from "@/lib/petroleum-products"
 import {
@@ -913,6 +914,17 @@ function CreateDeal({ vessels, onCreated }: { vessels: Vessel[]; onCreated: () =
     [form.productId, form.loadPortId, form.incoterm],
   )
 
+  // The desk suggestion is computed in the grade's native unit; re-express it in
+  // the unit currently selected on the form so the reference, the "Use
+  // suggested" action and the override check all match the price field.
+  const suggestionInUnit = useMemo(() => {
+    if (!suggestion) return null
+    if (suggestion.unit === form.unit) return suggestion
+    const factor = bblPerMtFor(form.productId ? getCatalogProduct(form.productId) : undefined)
+    const price = suggestion.unit === "MT" ? suggestion.price / factor : suggestion.price * factor
+    return { ...suggestion, unit: form.unit, price: Math.round(price * 100) / 100 }
+  }, [suggestion, form.unit, form.productId])
+
   // Step 1: product drives the unit, filters vessels, and seeds a price.
   const handleProduct = (id: string) => {
     const product = getCatalogProduct(id)
@@ -990,21 +1002,36 @@ function CreateDeal({ vessels, onCreated }: { vessels: Vessel[]; onCreated: () =
 
   const handleUnit = (unit: SpotDeal["unit"]) => {
     setForm((p) => {
+      if (unit === p.unit) return p
       const next = { ...p, unit }
-      if (!p.priceTouched) {
-        const s = suggestSpotPrice({ productId: p.productId, portId: p.loadPortId, incoterm: p.incoterm })
-        if (s) next.spotPrice = String(s.price)
+      // Re-express the SAME cargo and the SAME per-unit value in the newly
+      // selected unit using the grade's density factor (MT × factor = bbl).
+      // This runs whether or not the admin has edited the fields, so the price
+      // never stays "stuck" at the previous unit's figure.
+      const factor = bblPerMtFor(p.productId ? getCatalogProduct(p.productId) : undefined)
+      const convert = (raw: string, mode: "price" | "qty"): string => {
+        const n = Number.parseFloat((raw || "").replace(/[, ]/g, ""))
+        if (!Number.isFinite(n) || n <= 0) return raw
+        // Quantity: MT→bbl multiplies, bbl→MT divides.
+        // Price (per unit): per-MT→per-bbl divides, per-bbl→per-MT multiplies.
+        const out =
+          mode === "qty"
+            ? unit === "bbl"
+              ? n * factor
+              : n / factor
+            : unit === "bbl"
+              ? n / factor
+              : n * factor
+        return mode === "price" ? String(Math.round(out * 100) / 100) : String(Math.round(out))
       }
-      if (!p.qtyTouched && selectedVessel) {
-        const q = suggestQuantity(selectedVessel, unit as CommodityUnit, p.productId)
-        if (q) next.quantity = String(q)
-      }
+      next.spotPrice = convert(p.spotPrice, "price")
+      next.quantity = convert(p.quantity, "qty")
       return next
     })
   }
 
   const applySuggestedPrice = () => {
-    if (suggestion) setForm((p) => ({ ...p, spotPrice: String(suggestion.price), priceTouched: false }))
+    if (suggestionInUnit) setForm((p) => ({ ...p, spotPrice: String(suggestionInUnit.price), priceTouched: false }))
   }
 
   // Default the expiry to 48h ahead the first time the form opens.
@@ -1020,7 +1047,9 @@ function CreateDeal({ vessels, onCreated }: { vessels: Vessel[]; onCreated: () =
   const qty = Number.parseFloat(form.quantity.replace(/[, ]/g, ""))
   const price = Number.parseFloat(form.spotPrice.replace(/[, ]/g, ""))
   const total = computeTotalValue(Number.isFinite(qty) ? qty : 0, Number.isFinite(price) ? price : 0)
-  const priceOverridden = Boolean(suggestion && form.priceTouched && Number(form.spotPrice) !== suggestion.price)
+  const priceOverridden = Boolean(
+    suggestionInUnit && form.priceTouched && Number(form.spotPrice) !== suggestionInUnit.price,
+  )
 
   const submit = async (publish: boolean) => {
     if (!form.product.trim()) return toast.error("Select a product first.")
@@ -1207,11 +1236,11 @@ function CreateDeal({ vessels, onCreated }: { vessels: Vessel[]; onCreated: () =
                   inputMode="decimal"
                 />
               </div>
-              {suggestion && (
+              {suggestionInUnit && (
                 <p className="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
-                  <Sparkles className="h-3 w-3" /> Suggested {suggestion.currency}{" "}
-                  {suggestion.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} /{" "}
-                  {suggestion.unit} ({suggestion.basis} · market − desk discount)
+                  <Sparkles className="h-3 w-3" /> Suggested {suggestionInUnit.currency}{" "}
+                  {suggestionInUnit.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                  / {suggestionInUnit.unit} ({suggestionInUnit.basis} · market − desk discount)
                   {priceOverridden && (
                     <button
                       type="button"
