@@ -119,6 +119,9 @@ export interface ConceptNode {
   ancestors: string[]
   source: "openalex"
   attribution: string
+  /** True when the field was derived from a works search rather than a direct
+   * concept match (e.g. multi-word terms not in the controlled vocabulary). */
+  derived?: boolean
 }
 
 // --- OpenAlex ---------------------------------------------------------------
@@ -258,21 +261,95 @@ export async function exploreConcept(concept: string): Promise<ConceptNode | nul
   const json = (await res.json()) as { results?: OpenAlexConcept[] }
   const c = (json.results ?? [])[0]
   if (!c) {
-    cacheSet(cacheKey, null)
-    return null
+    // Multi-word / emerging terms (e.g. "green hydrogen") often aren't in
+    // OpenAlex's controlled concept vocabulary. Degrade gracefully by deriving
+    // the field from the concept tags attached to the top matching works.
+    const derived = await deriveConceptFromWorks(concept)
+    cacheSet(cacheKey, derived)
+    return derived
+  }
+  const related = (c.related_concepts ?? []).map((r) => r.display_name ?? "").filter(Boolean).slice(0, 10)
+  const ancestors = (c.ancestors ?? []).map((a) => a.display_name ?? "").filter(Boolean).slice(0, 8)
+  // OpenAlex no longer returns related_concepts on the default concepts payload;
+  // when the direct match has no graph edges, enrich it from the works tags so
+  // the field map is never empty.
+  if (related.length === 0) {
+    const derived = await deriveConceptFromWorks(concept)
+    if (derived) {
+      const node: ConceptNode = {
+        ...derived,
+        name: c.display_name ?? concept,
+        level: c.level ?? null,
+        description: truncate(c.description ?? null, 400),
+        worksCount: c.works_count ?? derived.worksCount,
+        ancestors,
+      }
+      cacheSet(cacheKey, node)
+      return node
+    }
   }
   const node: ConceptNode = {
     name: c.display_name ?? concept,
     level: c.level ?? null,
     description: truncate(c.description ?? null, 400),
     worksCount: c.works_count ?? null,
-    related: (c.related_concepts ?? []).map((r) => r.display_name ?? "").filter(Boolean).slice(0, 10),
-    ancestors: (c.ancestors ?? []).map((a) => a.display_name ?? "").filter(Boolean).slice(0, 8),
+    related,
+    ancestors,
     source: "openalex",
     attribution: "Concept graph from OpenAlex (https://openalex.org), CC0.",
   }
   cacheSet(cacheKey, node)
   return node
+}
+
+/**
+ * Fallback concept mapper: aggregate the `concepts` tags OpenAlex attaches to
+ * the most relevant works for a free-text query, ranked by summed score. This
+ * yields a usable field map for terms outside the controlled vocabulary.
+ */
+async function deriveConceptFromWorks(concept: string): Promise<ConceptNode | null> {
+  const params = new URLSearchParams({
+    search: concept,
+    per_page: "25",
+    sort: "relevance_score:desc",
+    select: "concepts",
+    mailto: CONTACT,
+  })
+  const url = `https://api.openalex.org/works?${params.toString()}`
+  await throttle("openalex")
+  const res = await fetchWithTimeout(url, "application/json")
+  if (!res.ok) throw new Error(`OpenAlex works responded ${res.status}`)
+  const json = (await res.json()) as {
+    meta?: { count?: number }
+    results?: { concepts?: { display_name?: string; score?: number; level?: number }[] }[]
+  }
+  const results = json.results ?? []
+  if (results.length === 0) return null
+
+  const scores = new Map<string, { total: number; level: number | null }>()
+  for (const w of results) {
+    for (const con of w.concepts ?? []) {
+      const name = con.display_name
+      if (!name) continue
+      const prev = scores.get(name) ?? { total: 0, level: con.level ?? null }
+      prev.total += con.score ?? 0
+      scores.set(name, prev)
+    }
+  }
+  const ranked = [...scores.entries()].sort((a, b) => b[1].total - a[1].total)
+  if (ranked.length === 0) return null
+
+  return {
+    name: concept,
+    level: null,
+    description: null,
+    worksCount: json.meta?.count ?? null,
+    related: ranked.slice(0, 10).map(([name]) => name),
+    ancestors: [],
+    source: "openalex",
+    attribution: "Field map derived from OpenAlex work concept tags (https://openalex.org), CC0.",
+    derived: true,
+  }
 }
 
 // --- Crossref ---------------------------------------------------------------
