@@ -36,6 +36,7 @@ import {
   type LedgerEffect,
 } from "@/lib/approvals-db"
 import { KIND_LABELS, KIND_HREF, type ApprovalKind } from "@/lib/approval-kinds"
+import { parseQuantityString } from "@/lib/petroleum-products"
 import { getDynamicUserByEmail } from "@/lib/admin-users-db"
 import {
   recordGatewayDepositForApproval,
@@ -427,9 +428,17 @@ export async function requestPaymentRecall(
 
 /** The negotiable subset of a deal's terms, proposed by the client. */
 export interface ProposedDealTerms {
+  /**
+   * The total deal value the client computed (unit price × quantity). This is
+   * advisory only — when `unitPrice` is supplied the server recomputes the
+   * authoritative total itself so a stale/buggy client can never persist a raw
+   * per-unit price as the deal's total value.
+   */
   approxValue: number
   quantity: string
   tradeStructure: string
+  /** The renegotiated PER-UNIT price (per MT/BBL) — the figure traders edit. */
+  unitPrice?: number
 }
 
 /**
@@ -472,7 +481,23 @@ export async function requestDealAmendment(
       return { ok: false, error: "An amendment is already pending approval for this deal." }
     }
 
-    const newValue = Math.round(Number(proposed.approxValue) * 100) / 100
+    // The total deal value is ALWAYS unit price × quantity. When the client
+    // supplies the renegotiated per-unit price (the figure traders actually
+    // edit), the server recomputes the authoritative total from it and the
+    // proposed quantity — never trusting the client's `approxValue`, which a
+    // stale/buggy bundle could send as the raw per-unit price (the historical
+    // "USD 138M → USD 685" corruption). When no unit price is given (legacy
+    // clients) we fall back to the client total.
+    const proposedUnitPrice = Number(proposed.unitPrice)
+    const proposedQty = parseQuantityString(proposed.quantity)
+    let newValue: number
+    let unitPrice: number | null = null
+    if (Number.isFinite(proposedUnitPrice) && proposedUnitPrice > 0 && proposedQty) {
+      unitPrice = Math.round(proposedUnitPrice * 100) / 100
+      newValue = Math.round(proposedUnitPrice * proposedQty.amount * 100) / 100
+    } else {
+      newValue = Math.round(Number(proposed.approxValue) * 100) / 100
+    }
     if (!Number.isFinite(newValue) || newValue <= 0) {
       return { ok: false, error: "Enter a valid amended value." }
     }
@@ -481,10 +506,14 @@ export async function requestDealAmendment(
     }
 
     const currency = original.currency ?? (record.currency as string) ?? "USD"
+    const prevValue = Number(original.amount ?? (record.approxValue as number) ?? 0)
+    const prevQty = parseQuantityString((record.quantity as string) ?? "")
     const previous = {
-      approxValue: Number(original.amount ?? (record.approxValue as number) ?? 0),
+      approxValue: prevValue,
       quantity: (record.quantity as string) ?? "",
       tradeStructure: (record.tradeStructure as string) ?? "FOB",
+      unitPrice:
+        prevQty && prevValue > 0 ? Math.round((prevValue / prevQty.amount) * 100) / 100 : undefined,
     }
     const amendmentId = `AMD-${Math.random().toString(16).slice(2, 10).toUpperCase()}`
     const commodity = (record.commodity as string) ?? original.title
