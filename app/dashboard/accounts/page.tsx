@@ -536,28 +536,38 @@ export default function BankAccountsPage() {
                 <p className="text-xs text-muted-foreground">{account.accountType}</p>
               </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground shrink-0">Balance</span>
-                  <span className="text-sm font-semibold text-foreground tabular-nums text-right min-w-0 [overflow-wrap:anywhere]">
-                    {formatCurrency(account.balance, account.currency)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground shrink-0">Available</span>
-                  <span className="text-sm text-emerald-400 tabular-nums text-right min-w-0 [overflow-wrap:anywhere]">
-                    {formatCurrency(account.availableBalance, account.currency)}
-                  </span>
-                </div>
-                {account.reservedBalance > 0 && (
+              {account.id.startsWith("ACC-") ? (
+                <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs text-muted-foreground shrink-0">Reserved</span>
-                    <span className="text-sm text-amber-400 tabular-nums text-right min-w-0 [overflow-wrap:anywhere]">
-                      {formatCurrency(account.reservedBalance, account.currency)}
+                    <span className="text-xs text-muted-foreground shrink-0">Balance</span>
+                    <span className="text-sm font-semibold text-foreground tabular-nums text-right min-w-0 [overflow-wrap:anywhere]">
+                      {formatCurrency(account.balance, account.currency)}
                     </span>
                   </div>
-                )}
-              </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-muted-foreground shrink-0">Available</span>
+                    <span className="text-sm text-emerald-400 tabular-nums text-right min-w-0 [overflow-wrap:anywhere]">
+                      {formatCurrency(account.availableBalance, account.currency)}
+                    </span>
+                  </div>
+                  {account.reservedBalance > 0 && (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground shrink-0">Reserved</span>
+                      <span className="text-sm text-amber-400 tabular-nums text-right min-w-0 [overflow-wrap:anywhere]">
+                        {formatCurrency(account.reservedBalance, account.currency)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-md border border-zinc-800 bg-zinc-900/60 p-3">
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    Registered external account. Incoming wires received here settle to your{" "}
+                    <span className="font-medium text-foreground">{account.currency} Settlement Account</span>, where the
+                    funds appear in your available balance and transaction history.
+                  </p>
+                </div>
+              )}
 
               <div className="pt-2 border-t border-zinc-800 space-y-2">
                 <div className="flex items-center justify-between">

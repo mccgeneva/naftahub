@@ -231,6 +231,13 @@ export default function AccountDetailPage() {
                         </p>
                       </div>
                     </div>
+                    {!account.id.startsWith("ACC-") && (
+                      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                        This is a registered external account. Incoming wires received here settle to your{" "}
+                        <span className="font-medium text-foreground">{account.currency} Settlement Account</span> — the
+                        funds below reflect that pooled settlement balance and transaction history.
+                      </p>
+                    )}
                   </div>
 
                   <div className="border-t border-border pt-4">
