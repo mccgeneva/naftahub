@@ -11,7 +11,6 @@ import {
   AlertTriangle,
   Sparkles,
   User,
-  RotateCcw,
   Ship,
   Radar,
   Loader2,
@@ -25,11 +24,22 @@ import {
   ImageIcon,
   Download,
   X,
+  Plus,
+  History,
+  MessageSquare,
+  Trash2,
+  RotateCcw,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { NQAI_WELCOME, NQAI_TAGLINE, NQAI_SUGGESTIONS } from "@/lib/nqai"
-import { bootstrapNqai, resetNqaiConversation } from "@/app/actions/nqai"
+import {
+  bootstrapNqai,
+  listNqaiThreadsAction,
+  loadNqaiThreadAction,
+  deleteNqaiThreadAction,
+} from "@/app/actions/nqai"
+import type { NqaiThreadSummary } from "@/lib/nqai-chat-db"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { generateNqaiDocumentPdf } from "@/lib/nqai-document-pdf"
@@ -227,6 +237,121 @@ function toolActivity(message: UIMessage): ToolActivity[] {
   return out
 }
 
+/** Compact relative timestamp for history cards (e.g. "3h", "2d", "Just now"). */
+function relativeTime(iso: string): string {
+  if (!iso) return ""
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return ""
+  const diff = Date.now() - then
+  const min = Math.floor(diff / 60000)
+  if (min < 1) return "Just now"
+  if (min < 60) return `${min}m ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  const day = Math.floor(hr / 24)
+  if (day < 7) return `${day}d ago`
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+}
+
+/**
+ * The history panel: a "New chat" action plus a scrollable list of the user's
+ * stored conversation threads as cards. Used both as a persistent sidebar
+ * (desktop, page variant) and inside the mobile/panel drawer.
+ */
+function ThreadHistory({
+  threads,
+  activeThreadId,
+  loadingThreadId,
+  onNewChat,
+  onSelect,
+  onDelete,
+}: {
+  threads: NqaiThreadSummary[]
+  activeThreadId: string | null
+  loadingThreadId: string | null
+  onNewChat: () => void
+  onSelect: (id: string) => void
+  onDelete: (id: string) => void
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="border-b border-border p-3">
+        <Button
+          type="button"
+          size="sm"
+          onClick={onNewChat}
+          className="w-full justify-start gap-2"
+          aria-label="Start a new conversation"
+        >
+          <Plus className="h-4 w-4" />
+          New chat
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Conversation history
+        </p>
+        {threads.length === 0 ? (
+          <p className="px-2 py-3 text-xs leading-relaxed text-muted-foreground">
+            No saved conversations yet. Your chats are stored privately and will appear here.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {threads.map((t) => {
+              const isActive = t.id === activeThreadId
+              const isLoading = t.id === loadingThreadId
+              return (
+                <li key={t.id}>
+                  <div
+                    className={cn(
+                      "group flex items-start gap-2 rounded-sm border px-2.5 py-2 transition-colors",
+                      isActive
+                        ? "border-primary/40 bg-primary/10"
+                        : "border-transparent hover:border-border hover:bg-secondary/50",
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onSelect(t.id)}
+                      className="flex min-w-0 flex-1 items-start gap-2 text-left"
+                      aria-label={`Open conversation: ${t.title || "Untitled"}`}
+                    >
+                      {isLoading ? (
+                        <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+                      ) : (
+                        <MessageSquare
+                          className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground")}
+                        />
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-medium text-foreground">
+                          {t.title || "Untitled conversation"}
+                        </span>
+                        <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                          {relativeTime(t.updatedAt)} · {t.messageCount} {t.messageCount === 1 ? "message" : "messages"}
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDelete(t.id)}
+                      className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+                      aria-label={`Delete conversation: ${t.title || "Untitled"}`}
+                      title="Delete conversation"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function NqaiAvatar({ className }: { className?: string }) {
   return (
     <span
@@ -245,15 +370,32 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
   const [input, setInput] = useState("")
   const [greeting, setGreeting] = useState("")
   const [bootstrapped, setBootstrapped] = useState(false)
-  const [resetting, setResetting] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [dragOver, setDragOver] = useState(false)
+  // Multi-thread history state.
+  const [threads, setThreads] = useState<NqaiThreadSummary[]>([])
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null)
+  const [loadingThreadId, setLoadingThreadId] = useState<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // The active thread id is read inside the transport at send time, so keep a
+  // ref in sync with the state to avoid stale closures.
+  const activeThreadIdRef = useRef<string | null>(null)
+  // Build the transport once; inject the current thread id into every request.
+  const transportRef = useRef<DefaultChatTransport<UIMessage> | null>(null)
+  if (!transportRef.current) {
+    transportRef.current = new DefaultChatTransport<UIMessage>({
+      api: "/api/nqai",
+      prepareSendMessagesRequest: ({ body, messages, id }) => ({
+        body: { ...body, messages, id, threadId: activeThreadIdRef.current ?? "" },
+      }),
+    })
+  }
   const { messages, sendMessage, setMessages, status, error, stop, regenerate, clearError } = useChat({
-    transport: new DefaultChatTransport({ api: "/api/nqai" }),
+    transport: transportRef.current,
   })
   const pdf = usePdfViewer()
   const user = useCurrentUser()
@@ -364,15 +506,16 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
     return () => window.removeEventListener("keydown", onKey)
   }, [fullscreen])
 
-  // On mount, reload this user's prior conversation (session continuity) and
-  // fetch their personalized greeting. Runs once.
+  // On mount, fetch the personalized greeting and the user's thread history.
+  // The console ALWAYS opens clean — we never seed the live transcript; the
+  // user explicitly opens a thread from history to continue it.
   useEffect(() => {
     let active = true
     bootstrapNqai()
       .then((data) => {
         if (!active) return
-        if (data.messages?.length) setMessages(data.messages)
         if (data.greeting) setGreeting(data.greeting)
+        setThreads(data.threads ?? [])
       })
       .catch(() => {})
       .finally(() => {
@@ -381,7 +524,33 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
     return () => {
       active = false
     }
-  }, [setMessages])
+  }, [])
+
+  // Keep the thread-id ref in sync with state for the transport closure.
+  const setActiveThread = useCallback((id: string | null) => {
+    activeThreadIdRef.current = id
+    setActiveThreadId(id)
+  }, [])
+
+  // Refresh the history list (best-effort) — e.g. after a turn produces a title.
+  const refreshThreads = useCallback(async () => {
+    try {
+      const next = await listNqaiThreadsAction()
+      setThreads(next)
+    } catch {
+      /* best-effort */
+    }
+  }, [])
+
+  // After a streamed turn completes, refresh history so a freshly-created
+  // thread (and its generated title) appears in the panel.
+  const prevStatusRef = useRef(status)
+  useEffect(() => {
+    if ((prevStatusRef.current === "streaming" || prevStatusRef.current === "submitted") && status === "ready") {
+      void refreshThreads()
+    }
+    prevStatusRef.current = status
+  }, [status, refreshThreads])
 
   // Auto-scroll to the newest content as it streams in.
   useEffect(() => {
@@ -389,17 +558,61 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
   }, [messages, busy])
 
-  const startNewConversation = async () => {
-    if (busy || resetting) return
-    setResetting(true)
-    try {
-      await resetNqaiConversation()
-      setMessages([])
-      setInput("")
-    } finally {
-      setResetting(false)
-    }
-  }
+  // Clear the live transcript and start a fresh thread (clean welcome view).
+  // The next message will lazily create a new thread id.
+  const handleNewChat = useCallback(() => {
+    if (busy) stop()
+    setMessages([])
+    setActiveThread(null)
+    setInput("")
+    setAttachments([])
+    setHistoryOpen(false)
+    clearError()
+  }, [busy, stop, setMessages, setActiveThread, clearError])
+
+  // Switch into a stored thread: load its transcript and make it active.
+  const handleSelectThread = useCallback(
+    async (id: string) => {
+      if (loadingThreadId) return
+      if (id === activeThreadId) {
+        setHistoryOpen(false)
+        return
+      }
+      if (busy) stop()
+      setLoadingThreadId(id)
+      try {
+        const res = await loadNqaiThreadAction(id)
+        if (res.ok) {
+          setMessages(res.messages)
+          setActiveThread(id)
+          setInput("")
+          setAttachments([])
+          clearError()
+          setHistoryOpen(false)
+        }
+      } finally {
+        setLoadingThreadId(null)
+      }
+    },
+    [loadingThreadId, activeThreadId, busy, stop, setMessages, setActiveThread, clearError],
+  )
+
+  // Delete a stored thread; if it was the open one, fall back to a clean view.
+  const handleDeleteThread = useCallback(
+    async (id: string) => {
+      setThreads((prev) => prev.filter((t) => t.id !== id))
+      if (id === activeThreadId) {
+        setMessages([])
+        setActiveThread(null)
+      }
+      try {
+        await deleteNqaiThreadAction(id)
+      } finally {
+        void refreshThreads()
+      }
+    },
+    [activeThreadId, setMessages, setActiveThread, refreshThreads],
+  )
 
   const submit = (text: string) => {
     const value = text.trim()
@@ -407,6 +620,15 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
     // Need either text or at least one uploaded file; never send while a file
     // is still uploading.
     if ((!value && files.length === 0) || busy || uploadingFiles) return
+    // Lazily mint a thread id on the first message of a new conversation, and
+    // set the ref BEFORE sending so the transport tags this request correctly.
+    if (!activeThreadIdRef.current) {
+      const id =
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? `t-${crypto.randomUUID()}`
+          : `t-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      setActiveThread(id)
+    }
     const fileParts = files.map((a) => ({
       type: "file" as const,
       url: a.url as string,
@@ -429,10 +651,66 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
   return (
     <div
       className={cn(
-        "flex h-full min-h-0 flex-col bg-background",
+        "relative flex h-full min-h-0 bg-background",
         fullscreen && "fixed inset-0 z-50 h-[100dvh]",
       )}
     >
+      {/* Persistent history sidebar (page variant, large screens) */}
+      {variant === "page" && (
+        <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
+          <ThreadHistory
+            threads={threads}
+            activeThreadId={activeThreadId}
+            loadingThreadId={loadingThreadId}
+            onNewChat={handleNewChat}
+            onSelect={handleSelectThread}
+            onDelete={handleDeleteThread}
+          />
+        </aside>
+      )}
+
+      {/* History drawer (mobile, and the dockable panel variant) */}
+      {historyOpen && (
+        <div className={cn("absolute inset-0 z-40 flex", variant === "page" && "lg:hidden")}>
+          <button
+            type="button"
+            className="absolute inset-0 bg-foreground/40 backdrop-blur-sm"
+            aria-label="Close history"
+            onClick={() => setHistoryOpen(false)}
+          />
+          <aside className="relative flex h-full w-72 max-w-[85%] flex-col border-r border-border bg-card shadow-xl">
+            <div className="flex items-center justify-between border-b border-border px-3 py-2">
+              <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                <History className="h-3.5 w-3.5" />
+                History
+              </span>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={() => setHistoryOpen(false)}
+                className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                aria-label="Close history"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1">
+              <ThreadHistory
+                threads={threads}
+                activeThreadId={activeThreadId}
+                loadingThreadId={loadingThreadId}
+                onNewChat={handleNewChat}
+                onSelect={handleSelectThread}
+                onDelete={handleDeleteThread}
+              />
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* Main chat column */}
+      <div className="flex h-full min-h-0 flex-1 flex-col">
       {/* Header */}
       <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-3">
         <div className="flex items-center gap-3">
@@ -448,17 +726,36 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => setHistoryOpen(true)}
+            className={cn(
+              "h-7 gap-1.5 px-2 text-[11px] text-muted-foreground hover:text-foreground",
+              variant === "page" && "lg:hidden",
+            )}
+            aria-label="Open conversation history"
+          >
+            <History className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">History</span>
+            {threads.length > 0 && (
+              <span className="rounded-sm bg-primary/15 px-1 text-[10px] font-semibold text-primary">
+                {threads.length}
+              </span>
+            )}
+          </Button>
           {hasConversation && (
             <Button
               type="button"
               size="sm"
               variant="ghost"
-              onClick={startNewConversation}
-              disabled={busy || resetting}
+              onClick={handleNewChat}
+              disabled={busy}
               className="h-7 gap-1.5 px-2 text-[11px] text-muted-foreground hover:text-foreground"
               aria-label="Start a new conversation"
             >
-              <RotateCcw className={cn("h-3.5 w-3.5", resetting && "animate-spin")} />
+              <Plus className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">New</span>
             </Button>
           )}
@@ -844,6 +1141,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
           </p>
         </div>
       </form>
+      </div>
     </div>
   )
 }
