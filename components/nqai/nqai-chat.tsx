@@ -387,9 +387,22 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
 
   const submit = (text: string) => {
     const value = text.trim()
-    if (!value || busy) return
-    sendMessage({ text: value })
+    const files = attachments.filter((a) => a.status === "ready" && a.url)
+    // Need either text or at least one uploaded file; never send while a file
+    // is still uploading.
+    if ((!value && files.length === 0) || busy || uploadingFiles) return
+    const fileParts = files.map((a) => ({
+      type: "file" as const,
+      url: a.url as string,
+      mediaType: a.mediaType,
+      filename: a.name,
+    }))
+    sendMessage({
+      role: "user",
+      parts: [...fileParts, ...(value ? [{ type: "text" as const, text: value }] : [])],
+    })
     setInput("")
+    setAttachments([])
   }
 
   const onSubmit = (e: React.FormEvent) => {
@@ -516,6 +529,8 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
           const text = messageText(message)
           const isUser = message.role === "user"
           const activity = isUser ? [] : toolActivity(message)
+          const files = isUser ? messageFiles(message) : []
+          const docs = isUser ? [] : documentArtifacts(message)
           return (
             <div key={message.id} className={cn("flex gap-3", isUser && "flex-row-reverse")}>
               {isUser ? (
@@ -567,6 +582,27 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                     ))}
                   </div>
                 )}
+                {/* Attachments the client uploaded with this message */}
+                {files.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-1.5">
+                    {files.map((f, idx) => {
+                      const Icon = fileIcon(f.mediaType)
+                      return (
+                        <a
+                          key={`${f.url}-${idx}`}
+                          href={f.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex max-w-[200px] items-center gap-1.5 rounded-sm border border-border bg-background/60 px-2 py-1 text-xs text-foreground transition-colors hover:border-primary/40"
+                          title={f.name}
+                        >
+                          <Icon className="h-3.5 w-3.5 shrink-0 text-primary" />
+                          <span className="truncate">{f.name}</span>
+                        </a>
+                      )
+                    })}
+                  </div>
+                )}
                 {text ? (
                   isUser ? (
                     <p className="whitespace-pre-wrap text-pretty">{text}</p>
@@ -591,12 +627,42 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                       {text}
                     </Streamdown>
                   )
-                ) : (
+                ) : files.length === 0 && docs.length === 0 ? (
                   <span className="inline-flex items-center gap-1 text-muted-foreground">
                     <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.3s]" />
                     <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.15s]" />
                     <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary" />
                   </span>
+                ) : null}
+
+                {/* Downloadable documents NQAi authored in this turn */}
+                {docs.length > 0 && (
+                  <div className={cn("flex flex-col gap-2", text ? "mt-3" : "mt-0")}>
+                    {docs.map((doc) => (
+                      <div
+                        key={doc.key}
+                        className="flex items-center gap-3 rounded-sm border border-primary/30 bg-primary/5 p-3"
+                      >
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border border-primary/30 bg-background text-primary">
+                          <FileText className="h-4 w-4" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-foreground">{doc.title}</p>
+                          <p className="text-[11px] text-muted-foreground">PDF document · prepared by NQAi</p>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => downloadDocument(doc)}
+                          className="shrink-0 gap-1.5 border-primary/40 text-primary hover:bg-primary/10"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          Download
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
@@ -617,7 +683,88 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
       {/* Composer */}
       <form onSubmit={onSubmit} className="border-t border-border bg-card p-3">
         <div className="mx-auto w-full max-w-3xl">
-          <div className="flex items-end gap-2 rounded-md border border-border bg-background px-3 py-2 transition-colors focus-within:border-primary/50">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept={ACCEPTED_UPLOAD}
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files?.length) addFiles(e.target.files)
+              e.target.value = ""
+            }}
+          />
+          {/* Pending attachment chips */}
+          {attachments.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {attachments.map((a) => {
+                const Icon = fileIcon(a.mediaType)
+                return (
+                  <span
+                    key={a.id}
+                    className={cn(
+                      "inline-flex max-w-[220px] items-center gap-1.5 rounded-sm border px-2 py-1 text-xs",
+                      a.status === "error"
+                        ? "border-destructive/40 bg-destructive/10 text-destructive"
+                        : "border-border bg-background text-foreground",
+                    )}
+                    title={a.error ? `${a.name} — ${a.error}` : a.name}
+                  >
+                    {a.status === "uploading" ? (
+                      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+                    ) : a.status === "error" ? (
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    ) : (
+                      <Icon className="h-3.5 w-3.5 shrink-0 text-primary" />
+                    )}
+                    <span className="truncate">{a.name}</span>
+                    {a.status === "ready" && a.size > 0 && (
+                      <span className="shrink-0 text-[10px] text-muted-foreground">{formatBytes(a.size)}</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(a.id)}
+                      className="shrink-0 rounded-sm text-muted-foreground transition-colors hover:text-foreground"
+                      aria-label={`Remove ${a.name}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                )
+              })}
+            </div>
+          )}
+          <div
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault()
+              setDragOver(false)
+            }}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDragOver(false)
+              if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files)
+            }}
+            className={cn(
+              "flex items-end gap-2 rounded-md border border-border bg-background px-3 py-2 transition-colors focus-within:border-primary/50",
+              dragOver && "border-primary bg-primary/5",
+            )}
+          >
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy}
+              className="h-8 w-8 shrink-0 self-end text-muted-foreground hover:text-foreground"
+              aria-label="Attach document"
+              title="Attach a document for NQAi to analyze"
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
             <textarea
               ref={textareaRef}
               value={input}
@@ -628,8 +775,15 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                   submit(input)
                 }
               }}
+              onPaste={(e) => {
+                const pasted = Array.from(e.clipboardData.files)
+                if (pasted.length > 0) {
+                  e.preventDefault()
+                  addFiles(pasted)
+                }
+              }}
               rows={1}
-              placeholder="Ask NQAi about markets, cargoes, vessels, instruments…  (Shift + Enter for a new line)"
+              placeholder="Ask NQAi, or attach a document to analyze…  (Shift + Enter for a new line)"
               className="min-h-[24px] flex-1 resize-none bg-transparent text-sm leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none"
               aria-label="Message NQAi"
             />
@@ -648,7 +802,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
               <Button
                 type="submit"
                 size="icon"
-                disabled={!input.trim()}
+                disabled={!canSend}
                 className="h-8 w-8 shrink-0 self-end"
                 aria-label="Send message"
               >
@@ -657,7 +811,9 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
             )}
           </div>
           <p className="mt-1.5 px-1 text-[10px] text-muted-foreground">
-            NQAi provides indicative analysis — confirm firm pricing and terms with the desk before execution.
+            {uploadingFiles
+              ? "Uploading attachment…"
+              : "Attach PDFs, images, or text/CSV for analysis. NQAi can also prepare downloadable PDF documents."}
           </p>
         </div>
       </form>
