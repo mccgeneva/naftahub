@@ -22,6 +22,17 @@ export interface NqaiThreadSummary {
   id: string
   title: string
   messageCount: number
+  /** The folder this thread lives in, or null when it sits at the root. */
+  folderId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** A folder in the user's conversation tree (unlimited nesting via parentId). */
+export interface NqaiFolder {
+  id: string
+  parentId: string | null
+  name: string
   createdAt: string
   updatedAt: string
 }
@@ -61,14 +72,31 @@ async function ensureTables(): Promise<void> {
        title      text        NOT NULL DEFAULT '',
        messages   jsonb       NOT NULL DEFAULT '[]'::jsonb,
        summary    text        NOT NULL DEFAULT '',
+       folder_id  text,
        created_at timestamptz NOT NULL DEFAULT now(),
        updated_at timestamptz NOT NULL DEFAULT now()
      )`,
   )
+  // Folder placement for threads (null = root / "Unfiled"). Added for existing DBs.
+  await query(`ALTER TABLE nqai_threads ADD COLUMN IF NOT EXISTS folder_id text`)
   // Fast history listing: newest threads first, scoped by user.
   await query(
     `CREATE INDEX IF NOT EXISTS nqai_threads_user_updated_idx ON nqai_threads (user_id, updated_at DESC)`,
   )
+
+  // Folder tree: unlimited nesting via self-referencing parent_id (null = root).
+  // Strictly scoped by user_id like every other NQAi table.
+  await query(
+    `CREATE TABLE IF NOT EXISTS nqai_folders (
+       id         text        PRIMARY KEY,
+       user_id    text        NOT NULL,
+       parent_id  text,
+       name       text        NOT NULL DEFAULT 'New folder',
+       created_at timestamptz NOT NULL DEFAULT now(),
+       updated_at timestamptz NOT NULL DEFAULT now()
+     )`,
+  )
+  await query(`CREATE INDEX IF NOT EXISTS nqai_folders_user_parent_idx ON nqai_folders (user_id, parent_id)`)
   ensured = true
 }
 
@@ -107,7 +135,7 @@ export async function listNqaiThreads(userId: string): Promise<NqaiThreadSummary
   await ensureTables()
   await migrateLegacyChat(userId).catch(() => {})
   const { rows } = await query(
-    `SELECT id, title, jsonb_array_length(messages) AS message_count, created_at, updated_at
+    `SELECT id, title, jsonb_array_length(messages) AS message_count, folder_id, created_at, updated_at
        FROM nqai_threads
        WHERE user_id = $1
        ORDER BY updated_at DESC`,
@@ -119,6 +147,7 @@ export async function listNqaiThreads(userId: string): Promise<NqaiThreadSummary
       id: String(row.id),
       title: String(row.title ?? ""),
       messageCount: Number(row.message_count ?? 0),
+      folderId: row.folder_id ? String(row.folder_id) : null,
       createdAt: row.created_at ? new Date(row.created_at as string).toISOString() : "",
       updatedAt: row.updated_at ? new Date(row.updated_at as string).toISOString() : "",
     }
@@ -206,6 +235,149 @@ export function deriveThreadTitle(messages: UIMessage[]): string {
   if (!text) return "New conversation"
   const clean = text.replace(/\s+/g, " ")
   return clean.length > 60 ? `${clean.slice(0, 57)}…` : clean
+}
+
+/** Move a thread into a folder (or to the root when folderId is null). */
+export async function moveNqaiThread(
+  userId: string,
+  threadId: string,
+  folderId: string | null,
+): Promise<void> {
+  if (!userId || !threadId) return
+  await ensureTables()
+  // If targeting a folder, verify it belongs to the caller — otherwise drop to root.
+  let target: string | null = null
+  if (folderId) {
+    const { rows } = await query(`SELECT 1 FROM nqai_folders WHERE id = $1 AND user_id = $2`, [folderId, userId])
+    target = rows.length ? folderId : null
+  }
+  await query(`UPDATE nqai_threads SET folder_id = $3, updated_at = updated_at WHERE id = $1 AND user_id = $2`, [
+    threadId,
+    userId,
+    target,
+  ])
+}
+
+// ---------------------------------------------------------------------------
+// Folders (unlimited nesting, strictly per-user)
+// ---------------------------------------------------------------------------
+
+function mapFolder(row: Record<string, unknown>): NqaiFolder {
+  return {
+    id: String(row.id),
+    parentId: row.parent_id ? String(row.parent_id) : null,
+    name: String(row.name ?? ""),
+    createdAt: row.created_at ? new Date(row.created_at as string).toISOString() : "",
+    updatedAt: row.updated_at ? new Date(row.updated_at as string).toISOString() : "",
+  }
+}
+
+/** List all of a user's folders (the client builds the tree from parentId). */
+export async function listNqaiFolders(userId: string): Promise<NqaiFolder[]> {
+  if (!userId) return []
+  await ensureTables()
+  const { rows } = await query(
+    `SELECT id, parent_id, name, created_at, updated_at FROM nqai_folders WHERE user_id = $1 ORDER BY name ASC`,
+    [userId],
+  )
+  return rows.map((r) => mapFolder(r as Record<string, unknown>))
+}
+
+/** Create a folder. parentId, when given, must belong to the caller. */
+export async function createNqaiFolder(
+  userId: string,
+  name: string,
+  parentId: string | null,
+): Promise<NqaiFolder | null> {
+  if (!userId) return null
+  await ensureTables()
+  let parent: string | null = null
+  if (parentId) {
+    const { rows } = await query(`SELECT 1 FROM nqai_folders WHERE id = $1 AND user_id = $2`, [parentId, userId])
+    parent = rows.length ? parentId : null
+  }
+  const id = `f-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
+  const cleanName = (name || "New folder").trim().slice(0, 80) || "New folder"
+  const { rows } = await query(
+    `INSERT INTO nqai_folders (id, user_id, parent_id, name) VALUES ($1, $2, $3, $4)
+       RETURNING id, parent_id, name, created_at, updated_at`,
+    [id, userId, parent, cleanName],
+  )
+  return rows.length ? mapFolder(rows[0] as Record<string, unknown>) : null
+}
+
+/** Rename a folder, scoped to its owner. */
+export async function renameNqaiFolder(userId: string, folderId: string, name: string): Promise<void> {
+  if (!userId || !folderId) return
+  await ensureTables()
+  const cleanName = (name || "").trim().slice(0, 80)
+  if (!cleanName) return
+  await query(`UPDATE nqai_folders SET name = $3, updated_at = now() WHERE id = $1 AND user_id = $2`, [
+    folderId,
+    userId,
+    cleanName,
+  ])
+}
+
+/**
+ * Delete a folder WITHOUT destroying its contents: any threads and subfolders it
+ * directly contains are re-parented UP to the deleted folder's own parent (root
+ * if it had none). This makes deletion safe — chats are never lost, just lifted
+ * one level. Scoped to the owner throughout.
+ */
+export async function deleteNqaiFolder(userId: string, folderId: string): Promise<void> {
+  if (!userId || !folderId) return
+  await ensureTables()
+  const { rows } = await query(`SELECT parent_id FROM nqai_folders WHERE id = $1 AND user_id = $2`, [folderId, userId])
+  if (!rows.length) return
+  const parentId = (rows[0] as Record<string, unknown>).parent_id
+  const newParent = parentId ? String(parentId) : null
+  // Lift child folders and threads to the deleted folder's parent.
+  await query(`UPDATE nqai_folders SET parent_id = $3, updated_at = now() WHERE parent_id = $1 AND user_id = $2`, [
+    folderId,
+    userId,
+    newParent,
+  ])
+  await query(`UPDATE nqai_threads SET folder_id = $3 WHERE folder_id = $1 AND user_id = $2`, [
+    folderId,
+    userId,
+    newParent,
+  ])
+  await query(`DELETE FROM nqai_folders WHERE id = $1 AND user_id = $2`, [folderId, userId])
+}
+
+/**
+ * Re-parent a folder. Guards against cycles: the new parent may not be the
+ * folder itself or any of its descendants (which would detach a subtree).
+ */
+export async function moveNqaiFolder(
+  userId: string,
+  folderId: string,
+  newParentId: string | null,
+): Promise<{ ok: boolean }> {
+  if (!userId || !folderId) return { ok: false }
+  await ensureTables()
+  if (newParentId === folderId) return { ok: false }
+
+  const all = await listNqaiFolders(userId)
+  const byId = new Map(all.map((f) => [f.id, f]))
+  if (!byId.has(folderId)) return { ok: false }
+  if (newParentId && !byId.has(newParentId)) return { ok: false }
+
+  // Walk up from the proposed parent; if we reach folderId, it's a cycle.
+  let cursor: string | null = newParentId
+  let guard = 0
+  while (cursor && guard++ < 1000) {
+    if (cursor === folderId) return { ok: false }
+    cursor = byId.get(cursor)?.parentId ?? null
+  }
+
+  await query(`UPDATE nqai_folders SET parent_id = $3, updated_at = now() WHERE id = $1 AND user_id = $2`, [
+    folderId,
+    userId,
+    newParentId,
+  ])
+  return { ok: true }
 }
 
 // ---------------------------------------------------------------------------
