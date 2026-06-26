@@ -356,12 +356,12 @@ function NqaiAvatar({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border border-primary/40 bg-primary/10 text-primary",
+        "flex h-7 w-7 shrink-0 items-center justify-center rounded-sm border border-primary/40 bg-primary/10 text-primary",
         className,
       )}
       aria-hidden="true"
     >
-      <Cpu className="h-4 w-4" />
+      <Cpu className="h-3.5 w-3.5" />
     </span>
   )
 }
@@ -785,24 +785,24 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
       </div>
 
       {/* Conversation */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         <div
           className={cn(
             "mx-auto w-full",
-            variant === "page" ? "max-w-3xl space-y-5" : "space-y-4",
+            variant === "page" ? "max-w-3xl space-y-3" : "space-y-3",
           )}
         >
         {/* Canonical welcome message — always shown on load */}
-        <div className="flex gap-3">
+        <div className="flex gap-2.5">
           <NqaiAvatar />
           <div className="min-w-0 flex-1">
-            <div className="rounded-sm border border-primary/20 bg-card p-4">
-              <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-primary">
-                <Sparkles className="h-3.5 w-3.5" />
+            <div className="rounded-sm border border-primary/20 bg-card p-3">
+              <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
+                <Sparkles className="h-3 w-3" />
                 NQAi · Neural Quantum Artificial Intelligence
               </p>
-              <p className="text-pretty text-sm leading-relaxed text-foreground/90">{NQAI_WELCOME}</p>
-              <p className="mt-3 border-t border-border pt-2 text-[11px] text-muted-foreground">
+              <p className="text-pretty text-[13px] leading-relaxed text-foreground/90">{NQAI_WELCOME}</p>
+              <p className="mt-2.5 border-t border-border pt-2 text-[10px] text-muted-foreground">
                 Running on RISC-V · Research cloud, UC Berkeley · Proprietary architecture
               </p>
             </div>
@@ -810,7 +810,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
             {/* Personalized briefing — generated server-side from the signed-in
                 client's own private account context. */}
             {greeting && (
-              <div className="mt-3 flex gap-2 rounded-sm border border-primary/20 bg-primary/5 p-3 text-sm leading-relaxed text-foreground/90">
+              <div className="mt-2.5 flex gap-2 rounded-sm border border-primary/20 bg-primary/5 p-2.5 text-[13px] leading-relaxed text-foreground/90">
                 <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
                 <p className="text-pretty">{greeting}</p>
               </div>
@@ -820,13 +820,13 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                 back until bootstrap finishes so returning users don't see a
                 flash of chips before their history loads) */}
             {bootstrapped && !hasConversation && (
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
                 {NQAI_SUGGESTIONS.map((s) => (
                   <button
                     key={s.label}
                     type="button"
                     onClick={() => submit(s.prompt)}
-                    className="flex items-center gap-2 rounded-sm border border-border bg-secondary/40 px-3 py-2 text-left text-xs text-foreground transition-colors hover:border-primary/40 hover:bg-secondary"
+                    className="flex items-center gap-2 rounded-sm border border-border bg-secondary/40 px-2.5 py-1.5 text-left text-[11px] text-foreground transition-colors hover:border-primary/40 hover:bg-secondary"
                   >
                     <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
                     <span className="truncate">{s.label}</span>
@@ -845,17 +845,17 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
           const files = isUser ? messageFiles(message) : []
           const docs = isUser ? [] : documentArtifacts(message)
           return (
-            <div key={message.id} className={cn("flex gap-3", isUser && "flex-row-reverse")}>
+            <div key={message.id} className={cn("flex gap-2.5", isUser && "flex-row-reverse")}>
               {isUser ? (
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border border-border bg-secondary text-muted-foreground">
-                  <User className="h-4 w-4" />
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm border border-border bg-secondary text-muted-foreground">
+                  <User className="h-3.5 w-3.5" />
                 </span>
               ) : (
                 <NqaiAvatar />
               )}
               <div
                 className={cn(
-                  "min-w-0 max-w-[85%] rounded-sm border px-3.5 py-2.5 text-sm leading-relaxed",
+                  "min-w-0 max-w-[85%] rounded-sm border px-3 py-2 text-[13px] leading-relaxed",
                   isUser
                     ? "border-primary/30 bg-primary/10 text-foreground"
                     : "border-border bg-card text-foreground/90",
@@ -922,11 +922,11 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                   ) : (
                     <Streamdown
                       className={cn(
-                        "max-w-none text-sm leading-relaxed",
+                        "max-w-none text-[13px] leading-relaxed",
                         "[&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0",
                         "[&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5",
                         "[&_strong]:font-semibold [&_strong]:text-foreground",
-                        "[&_h1]:mb-1.5 [&_h1]:mt-2 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:mb-1.5 [&_h2]:mt-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:mt-2 [&_h3]:text-sm [&_h3]:font-semibold",
+                        "[&_h1]:mb-1.5 [&_h1]:mt-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h2]:mb-1.5 [&_h2]:mt-2 [&_h2]:text-[13px] [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:mt-2 [&_h3]:text-[13px] [&_h3]:font-semibold",
                         "[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2",
                         "[&_code]:rounded-sm [&_code]:bg-secondary [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em]",
                         "[&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-sm [&_pre]:border [&_pre]:border-border [&_pre]:bg-secondary/60 [&_pre]:p-2.5",
@@ -960,8 +960,8 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                           <FileText className="h-4 w-4" />
                         </span>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-foreground">{doc.title}</p>
-                          <p className="text-[11px] text-muted-foreground">PDF document · prepared by NQAi</p>
+                          <p className="truncate text-[13px] font-medium text-foreground">{doc.title}</p>
+                          <p className="text-[10px] text-muted-foreground">PDF document · prepared by NQAi</p>
                         </div>
                         <Button
                           type="button"
@@ -1108,7 +1108,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
               }}
               rows={1}
               placeholder="Ask NQAi, or attach a document to analyze…  (Shift + Enter for a new line)"
-              className="min-h-[24px] flex-1 resize-none bg-transparent text-sm leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none"
+              className="min-h-[22px] flex-1 resize-none bg-transparent text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none"
               aria-label="Message NQAi"
             />
             {busy ? (
