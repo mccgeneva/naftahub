@@ -3,7 +3,13 @@ import { convertToModelMessages, generateText, streamText, stepCountIs, type UIM
 import { buildNqaiContext } from "@/lib/nqai-context"
 import { resolveCurrentSession } from "@/lib/session-user"
 import { getNqaiUserSnapshot, renderUserContextBlock } from "@/lib/nqai-user-context"
-import { loadNqaiChat, saveNqaiChat, saveNqaiProfile } from "@/lib/nqai-chat-db"
+import {
+  loadNqaiThread,
+  saveNqaiThread,
+  loadNqaiProfile,
+  saveNqaiProfile,
+  deriveThreadTitle,
+} from "@/lib/nqai-chat-db"
 import { createNqaiTools } from "@/lib/nqai-tools"
 
 // NQAi runs live through the Anthropic Claude account configured via the
@@ -174,6 +180,42 @@ async function updatePersonalizationProfile(
   }
 }
 
+/**
+ * Generate a short, human title for a thread's history card from its opening
+ * exchange. Best-effort — falls back to a truncation of the first user message.
+ */
+async function generateThreadTitle(messages: UIMessage[]): Promise<string> {
+  const fallback = deriveThreadTitle(messages)
+  const transcript = messages
+    .slice(0, 4)
+    .map((m) => {
+      const text = (m.parts ?? [])
+        .filter((p): p is { type: "text"; text: string } => p.type === "text")
+        .map((p) => p.text)
+        .join(" ")
+        .trim()
+      return text ? `${m.role.toUpperCase()}: ${text}` : ""
+    })
+    .filter(Boolean)
+    .join("\n")
+  if (!transcript) return fallback
+
+  try {
+    const { text } = await generateText({
+      model: anthropic(NQAI_MODEL),
+      system:
+        "You write an ultra-concise title (3–6 words, Title Case, no quotes, no trailing punctuation) summarizing the TOPIC of a trading-desk conversation, for a history card. Output ONLY the title.",
+      prompt: `Conversation:\n${transcript}\n\nTitle:`,
+      temperature: 0.2,
+    })
+    const clean = text.trim().replace(/^["']|["']$/g, "").replace(/\s+/g, " ")
+    return clean ? (clean.length > 70 ? `${clean.slice(0, 67)}…` : clean) : fallback
+  } catch (err) {
+    console.log("[v0] NQAi title gen failed:", err instanceof Error ? err.message : String(err))
+    return fallback
+  }
+}
+
 export async function POST(req: Request) {
   if (!process.env.ANTHROPIC_API_KEY) {
     return new Response(
@@ -185,9 +227,11 @@ export async function POST(req: Request) {
   }
 
   let messages: UIMessage[] = []
+  let threadId = ""
   try {
     const body = await req.json()
     messages = body.messages ?? []
+    threadId = typeof body.threadId === "string" ? body.threadId : ""
   } catch {
     return new Response(JSON.stringify({ error: "Invalid request body." }), {
       status: 400,
@@ -205,8 +249,9 @@ export async function POST(req: Request) {
     : undefined
 
   // Build context in parallel: live platform snapshot, the client's private
-  // account context, and their stored rolling memory. All best-effort.
-  const [liveContext, userSnapshot, stored] = await Promise.all([
+  // account context, this thread's rolling memory, and the durable per-user
+  // personalization profile (shared across all threads). All best-effort.
+  const [liveContext, userSnapshot, thread, personalizationProfile] = await Promise.all([
     buildNqaiContext().catch((err) => {
       console.log("[v0] NQAi platform context failed:", err instanceof Error ? err.message : String(err))
       return ""
@@ -217,14 +262,13 @@ export async function POST(req: Request) {
           return null
         })
       : Promise.resolve(null),
-    userId
-      ? loadNqaiChat(userId).catch(() => ({ messages: [], summary: "", profileNotes: "", updatedAt: null }))
-      : Promise.resolve({ messages: [], summary: "", profileNotes: "", updatedAt: null }),
+    userId && threadId ? loadNqaiThread(userId, threadId).catch(() => null) : Promise.resolve(null),
+    userId ? loadNqaiProfile(userId).catch(() => "") : Promise.resolve(""),
   ])
 
   const userContextBlock = renderUserContextBlock(userSnapshot)
-  const memory = stored.summary
-  const personalizationProfile = stored.profileNotes
+  const memory = thread?.summary ?? ""
+  const existingTitle = thread?.title ?? ""
 
   const systemParts = [NQAI_SYSTEM_PROMPT]
   if (userContextBlock) systemParts.push(userContextBlock)
@@ -269,26 +313,31 @@ export async function POST(req: Request) {
   return result.toUIMessageStreamResponse({
     originalMessages: messages,
     onFinish: async ({ messages: finalMessages }) => {
-      if (!userId) return
+      if (!userId || !threadId) return
       try {
-        // Refresh the rolling memory (fold everything except the recent window)
-        // and progressively re-learn the durable personalization profile. Run
-        // both model passes in parallel, then persist once.
+        // Refresh the rolling memory (fold everything except the recent window),
+        // progressively re-learn the durable personalization profile, and — on
+        // the first save of a thread — generate a history-card title. Run the
+        // model passes in parallel, then persist.
         const shouldSummarize = finalMessages.length > SUMMARY_THRESHOLD
         const shouldLearnProfile =
           finalMessages.length >= PROFILE_UPDATE_EVERY && finalMessages.length % PROFILE_UPDATE_EVERY === 0
+        const needsTitle = !existingTitle
 
-        const [newSummary, newProfile] = await Promise.all([
+        const [newSummary, newProfile, newTitle] = await Promise.all([
           shouldSummarize ? regenerateSummary(memory, finalMessages.slice(0, -RECENT_WINDOW)) : Promise.resolve(null),
           shouldLearnProfile
             ? updatePersonalizationProfile(personalizationProfile, finalMessages.slice(-RECENT_WINDOW))
             : Promise.resolve(null),
+          needsTitle ? generateThreadTitle(finalMessages) : Promise.resolve(null),
         ])
 
-        // Persist transcript (+ refreshed summary if we have one) in one write.
-        await saveNqaiChat(userId, finalMessages, newSummary ?? undefined)
-        // The profile lives on the same per-user row; persist separately only
-        // when it actually changed.
+        // Persist this thread's transcript (+ refreshed summary / first title).
+        await saveNqaiThread(userId, threadId, finalMessages, {
+          summary: newSummary ?? undefined,
+          title: newTitle ?? undefined,
+        })
+        // The durable profile lives on the per-user row; persist only on change.
         if (newProfile && newProfile !== personalizationProfile) {
           await saveNqaiProfile(userId, newProfile)
         }
