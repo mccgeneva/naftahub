@@ -26,8 +26,6 @@ import {
   X,
   Plus,
   History,
-  MessageSquare,
-  Trash2,
   RotateCcw,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -35,11 +33,18 @@ import { Button } from "@/components/ui/button"
 import { NQAI_WELCOME, NQAI_TAGLINE, NQAI_SUGGESTIONS } from "@/lib/nqai"
 import {
   bootstrapNqai,
-  listNqaiThreadsAction,
+  listNqaiOrganizerAction,
   loadNqaiThreadAction,
   deleteNqaiThreadAction,
+  renameNqaiThreadAction,
+  createNqaiFolderAction,
+  renameNqaiFolderAction,
+  deleteNqaiFolderAction,
+  moveNqaiThreadAction,
+  moveNqaiFolderAction,
 } from "@/app/actions/nqai"
-import type { NqaiThreadSummary } from "@/lib/nqai-chat-db"
+import type { NqaiThreadSummary, NqaiFolder } from "@/lib/nqai-chat-db"
+import { FolderTreePanel, NqaiManager, folderSubtreeIds, type OrganizerProps } from "@/components/nqai/nqai-organizer"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { generateNqaiDocumentPdf } from "@/lib/nqai-document-pdf"
@@ -237,121 +242,6 @@ function toolActivity(message: UIMessage): ToolActivity[] {
   return out
 }
 
-/** Compact relative timestamp for history cards (e.g. "3h", "2d", "Just now"). */
-function relativeTime(iso: string): string {
-  if (!iso) return ""
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return ""
-  const diff = Date.now() - then
-  const min = Math.floor(diff / 60000)
-  if (min < 1) return "Just now"
-  if (min < 60) return `${min}m ago`
-  const hr = Math.floor(min / 60)
-  if (hr < 24) return `${hr}h ago`
-  const day = Math.floor(hr / 24)
-  if (day < 7) return `${day}d ago`
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" })
-}
-
-/**
- * The history panel: a "New chat" action plus a scrollable list of the user's
- * stored conversation threads as cards. Used both as a persistent sidebar
- * (desktop, page variant) and inside the mobile/panel drawer.
- */
-function ThreadHistory({
-  threads,
-  activeThreadId,
-  loadingThreadId,
-  onNewChat,
-  onSelect,
-  onDelete,
-}: {
-  threads: NqaiThreadSummary[]
-  activeThreadId: string | null
-  loadingThreadId: string | null
-  onNewChat: () => void
-  onSelect: (id: string) => void
-  onDelete: (id: string) => void
-}) {
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-border p-3">
-        <Button
-          type="button"
-          size="sm"
-          onClick={onNewChat}
-          className="w-full justify-start gap-2"
-          aria-label="Start a new conversation"
-        >
-          <Plus className="h-4 w-4" />
-          New chat
-        </Button>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Conversation history
-        </p>
-        {threads.length === 0 ? (
-          <p className="px-2 py-3 text-xs leading-relaxed text-muted-foreground">
-            No saved conversations yet. Your chats are stored privately and will appear here.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-1">
-            {threads.map((t) => {
-              const isActive = t.id === activeThreadId
-              const isLoading = t.id === loadingThreadId
-              return (
-                <li key={t.id}>
-                  <div
-                    className={cn(
-                      "group flex items-start gap-2 rounded-sm border px-2.5 py-2 transition-colors",
-                      isActive
-                        ? "border-primary/40 bg-primary/10"
-                        : "border-transparent hover:border-border hover:bg-secondary/50",
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onSelect(t.id)}
-                      className="flex min-w-0 flex-1 items-start gap-2 text-left"
-                      aria-label={`Open conversation: ${t.title || "Untitled"}`}
-                    >
-                      {isLoading ? (
-                        <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
-                      ) : (
-                        <MessageSquare
-                          className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground")}
-                        />
-                      )}
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-xs font-medium text-foreground">
-                          {t.title || "Untitled conversation"}
-                        </span>
-                        <span className="mt-0.5 block text-[10px] text-muted-foreground">
-                          {relativeTime(t.updatedAt)} · {t.messageCount} {t.messageCount === 1 ? "message" : "messages"}
-                        </span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onDelete(t.id)}
-                      className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus:opacity-100 group-hover:opacity-100"
-                      aria-label={`Delete conversation: ${t.title || "Untitled"}`}
-                      title="Delete conversation"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
-        )}
-      </div>
-    </div>
-  )
-}
-
 function NqaiAvatar({ className }: { className?: string }) {
   return (
     <span
@@ -378,6 +268,12 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null)
   const [loadingThreadId, setLoadingThreadId] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  // Folder organizer state.
+  const [folders, setFolders] = useState<NqaiFolder[]>([])
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
+  const [focusedFolderId, setFocusedFolderId] = useState<string | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [managerOpen, setManagerOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -516,6 +412,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
         if (!active) return
         if (data.greeting) setGreeting(data.greeting)
         setThreads(data.threads ?? [])
+        setFolders(data.folders ?? [])
       })
       .catch(() => {})
       .finally(() => {
@@ -532,11 +429,12 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
     setActiveThreadId(id)
   }, [])
 
-  // Refresh the history list (best-effort) — e.g. after a turn produces a title.
+  // Refresh threads + folders (best-effort) — e.g. after a turn produces a title.
   const refreshThreads = useCallback(async () => {
     try {
-      const next = await listNqaiThreadsAction()
-      setThreads(next)
+      const next = await listNqaiOrganizerAction()
+      setThreads(next.threads)
+      setFolders(next.folders)
     } catch {
       /* best-effort */
     }
@@ -614,6 +512,137 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
     [activeThreadId, setMessages, setActiveThread, refreshThreads],
   )
 
+  // ---- Folder organizer handlers -----------------------------------------
+
+  const handleToggleFolder = useCallback((id: string) => {
+    setExpandedFolders((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  // Rename a thread (optimistic), then persist.
+  const handleRenameThread = useCallback(
+    async (id: string, title: string) => {
+      const clean = title.trim()
+      if (!clean) return
+      setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, title: clean } : t)))
+      try {
+        await renameNqaiThreadAction(id, clean)
+      } finally {
+        void refreshThreads()
+      }
+    },
+    [refreshThreads],
+  )
+
+  // Create a folder, expand its parent, and drop straight into rename mode.
+  const handleCreateFolder = useCallback(
+    async (parentId: string | null) => {
+      const res = await createNqaiFolderAction("New folder", parentId)
+      if (res.ok && res.folder) {
+        setFolders((prev) => [...prev, res.folder as NqaiFolder])
+        if (parentId) setExpandedFolders((prev) => new Set(prev).add(parentId))
+        setExpandedFolders((prev) => new Set(prev).add((res.folder as NqaiFolder).id))
+        setRenamingId(`f:${(res.folder as NqaiFolder).id}`)
+      }
+      void refreshThreads()
+    },
+    [refreshThreads],
+  )
+
+  const handleRenameFolder = useCallback(
+    async (id: string, name: string) => {
+      const clean = name.trim()
+      if (!clean) return
+      setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name: clean } : f)))
+      try {
+        await renameNqaiFolderAction(id, clean)
+      } finally {
+        void refreshThreads()
+      }
+    },
+    [refreshThreads],
+  )
+
+  // Delete a folder: contents are lifted to its parent server-side. Mirror that
+  // optimistically so the tree doesn't flash empty before the refresh lands.
+  const handleDeleteFolder = useCallback(
+    async (id: string) => {
+      setFolders((prev) => {
+        const target = prev.find((f) => f.id === id)
+        const newParent = target?.parentId ?? null
+        return prev
+          .filter((f) => f.id !== id)
+          .map((f) => (f.parentId === id ? { ...f, parentId: newParent } : f))
+      })
+      setThreads((prev) => {
+        const target = folders.find((f) => f.id === id)
+        const newParent = target?.parentId ?? null
+        return prev.map((t) => (t.folderId === id ? { ...t, folderId: newParent } : t))
+      })
+      if (focusedFolderId === id) setFocusedFolderId(null)
+      try {
+        await deleteNqaiFolderAction(id)
+      } finally {
+        void refreshThreads()
+      }
+    },
+    [folders, focusedFolderId, refreshThreads],
+  )
+
+  const handleMoveThread = useCallback(
+    async (threadId: string, folderId: string | null) => {
+      setThreads((prev) => prev.map((t) => (t.id === threadId ? { ...t, folderId } : t)))
+      if (folderId) setExpandedFolders((prev) => new Set(prev).add(folderId))
+      try {
+        await moveNqaiThreadAction(threadId, folderId)
+      } finally {
+        void refreshThreads()
+      }
+    },
+    [refreshThreads],
+  )
+
+  const handleMoveFolder = useCallback(
+    async (folderId: string, parentId: string | null) => {
+      // Guard cycles on the client too (server also rejects) for snappy UX.
+      if (parentId && folderSubtreeIds(folders, folderId).has(parentId)) return
+      setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, parentId } : f)))
+      if (parentId) setExpandedFolders((prev) => new Set(prev).add(parentId))
+      try {
+        await moveNqaiFolderAction(folderId, parentId)
+      } finally {
+        void refreshThreads()
+      }
+    },
+    [folders, refreshThreads],
+  )
+
+  // Bundle everything the organizer tree + manager need.
+  const organizerProps: OrganizerProps = {
+    folders,
+    threads,
+    activeThreadId,
+    loadingThreadId,
+    expanded: expandedFolders,
+    onToggle: handleToggleFolder,
+    focusedFolderId,
+    onFocusFolder: setFocusedFolderId,
+    renamingId,
+    onRenamingId: setRenamingId,
+    onSelectThread: handleSelectThread,
+    onDeleteThread: handleDeleteThread,
+    onRenameThread: handleRenameThread,
+    onCreateFolder: handleCreateFolder,
+    onRenameFolder: handleRenameFolder,
+    onDeleteFolder: handleDeleteFolder,
+    onMoveThread: handleMoveThread,
+    onMoveFolder: handleMoveFolder,
+  }
+
   const submit = (text: string) => {
     const value = text.trim()
     const files = attachments.filter((a) => a.status === "ready" && a.url)
@@ -658,13 +687,10 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
       {/* Persistent history sidebar (page variant, large screens) */}
       {variant === "page" && (
         <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
-          <ThreadHistory
-            threads={threads}
-            activeThreadId={activeThreadId}
-            loadingThreadId={loadingThreadId}
+          <FolderTreePanel
+            props={organizerProps}
             onNewChat={handleNewChat}
-            onSelect={handleSelectThread}
-            onDelete={handleDeleteThread}
+            onOpenManager={() => setManagerOpen(true)}
           />
         </aside>
       )}
@@ -696,13 +722,13 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
               </Button>
             </div>
             <div className="min-h-0 flex-1">
-              <ThreadHistory
-                threads={threads}
-                activeThreadId={activeThreadId}
-                loadingThreadId={loadingThreadId}
+              <FolderTreePanel
+                props={organizerProps}
                 onNewChat={handleNewChat}
-                onSelect={handleSelectThread}
-                onDelete={handleDeleteThread}
+                onOpenManager={() => {
+                  setHistoryOpen(false)
+                  setManagerOpen(true)
+                }}
               />
             </div>
           </aside>
