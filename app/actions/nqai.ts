@@ -8,6 +8,8 @@ import {
   deleteNqaiThread,
   renameNqaiThread,
   moveNqaiThread,
+  setNqaiThreadPinned,
+  setNqaiThreadArchived,
   listNqaiFolders,
   createNqaiFolder,
   renameNqaiFolder,
@@ -105,6 +107,30 @@ export async function renameNqaiThreadAction(threadId: string, title: string): P
     const session = await resolveCurrentSession()
     if (!session) return { ok: false }
     await renameNqaiThread(session.id, threadId, title)
+    return { ok: true }
+  } catch {
+    return { ok: false }
+  }
+}
+
+/** Pin or unpin one of the signed-in user's threads. */
+export async function pinNqaiThreadAction(threadId: string, pinned: boolean): Promise<{ ok: boolean }> {
+  try {
+    const session = await resolveCurrentSession()
+    if (!session) return { ok: false }
+    await setNqaiThreadPinned(session.id, threadId, pinned)
+    return { ok: true }
+  } catch {
+    return { ok: false }
+  }
+}
+
+/** Archive or unarchive one of the signed-in user's threads. */
+export async function archiveNqaiThreadAction(threadId: string, archived: boolean): Promise<{ ok: boolean }> {
+  try {
+    const session = await resolveCurrentSession()
+    if (!session) return { ok: false }
+    await setNqaiThreadArchived(session.id, threadId, archived)
     return { ok: true }
   } catch {
     return { ok: false }
