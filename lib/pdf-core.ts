@@ -8,6 +8,10 @@
 // the shared PDF viewer (see lib/pdf-viewer.tsx).
 
 import { jsPDF } from "jspdf"
+import { DEMO_DOCUMENT_NOTICE } from "@/lib/demo-notice"
+
+// Re-exported so existing importers of `pdf-core` keep working unchanged.
+export { DEMO_DOCUMENT_NOTICE }
 
 export type PdfDoc = jsPDF
 
@@ -81,4 +85,55 @@ export function makeDocRef(prefix: string): string {
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "")
   const rand = Math.floor(Math.random() * 9000 + 1000)
   return `${prefix}-${stamp}-${rand}`
+}
+
+// Guards against double-stamping if the very same doc is shown more than once.
+const demoStamped = new WeakSet<object>()
+
+/**
+ * Stamp the demo-only warning banner across the bottom edge of every page of a
+ * generated PDF. Called centrally from the shared PDF viewer for the demo
+ * account, so preview, print, download, and open-in-tab all carry it.
+ *
+ * Unit-agnostic: our generators build docs in either points (NQAi documents) or
+ * millimetres (statements, receipts, …), so sizing is derived from the page
+ * dimensions rather than assuming a unit. The band is drawn last so it sits on
+ * top of any footer the generator already placed.
+ */
+export function stampDemoNotice(doc: PdfDoc, message: string = DEMO_DOCUMENT_NOTICE): void {
+  if (demoStamped.has(doc)) return
+
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
+  // A4/Letter widths are ~595–612 in points but ~210–216 in millimetres, so a
+  // width above ~400 reliably indicates the document unit is points.
+  const isPoints = pageWidth > 400
+
+  const sidePad = isPoints ? 28 : 10
+  const bandHeight = isPoints ? 30 : 11
+  const lineHeight = isPoints ? 10 : 3.7
+  const fontSize = isPoints ? 8 : 7.5
+
+  const pageCount = doc.getNumberOfPages()
+  for (let page = 1; page <= pageCount; page++) {
+    doc.setPage(page)
+
+    doc.setFillColor(...BRAND.red)
+    doc.rect(0, pageHeight - bandHeight, pageWidth, bandHeight, "F")
+
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(fontSize)
+    doc.setTextColor(...BRAND.white)
+
+    const lines = doc.splitTextToSize(message, pageWidth - sidePad * 2) as string[]
+    const blockHeight = lines.length * lineHeight
+    // Vertically centre the wrapped text block within the band.
+    let textY = pageHeight - bandHeight + (bandHeight - blockHeight) / 2 + lineHeight * 0.75
+    lines.forEach((ln) => {
+      doc.text(ln, pageWidth / 2, textY, { align: "center" })
+      textY += lineHeight
+    })
+  }
+
+  demoStamped.add(doc)
 }

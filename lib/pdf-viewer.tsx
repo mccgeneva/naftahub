@@ -8,7 +8,9 @@
 
 import { createContext, useCallback, useContext, useState } from "react"
 import type { jsPDF } from "jspdf"
-import type { GeneratedPdf } from "@/lib/pdf-core"
+import { type GeneratedPdf, stampDemoNotice } from "@/lib/pdf-core"
+import { useCurrentUser } from "@/lib/use-current-user"
+import { DEMO_USER_ID } from "@/lib/users"
 import { PdfPreviewModal } from "@/components/pdf-preview-modal"
 
 interface PdfViewerState {
@@ -28,14 +30,28 @@ const PdfViewerContext = createContext<PdfViewerContextValue | null>(null)
 
 export function PdfViewerProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<PdfViewerState | null>(null)
+  // The demo/showcase account must have every exported or downloaded document
+  // stamped with a demo-only disclaimer. Doing it here — the single chokepoint
+  // every generator funnels through — guarantees coverage (preview, print,
+  // download, open-in-tab) without touching each individual generator.
+  const user = useCurrentUser()
+  const isDemo = user.id === DEMO_USER_ID
 
-  const preview = useCallback((doc: jsPDF, filename: string, title?: string) => {
-    setState({ doc, filename, title })
-  }, [])
+  const preview = useCallback(
+    (doc: jsPDF, filename: string, title?: string) => {
+      if (isDemo) stampDemoNotice(doc)
+      setState({ doc, filename, title })
+    },
+    [isDemo],
+  )
 
-  const show = useCallback((generated: GeneratedPdf) => {
-    setState({ doc: generated.doc, filename: generated.filename, title: generated.title })
-  }, [])
+  const show = useCallback(
+    (generated: GeneratedPdf) => {
+      if (isDemo) stampDemoNotice(generated.doc)
+      setState({ doc: generated.doc, filename: generated.filename, title: generated.title })
+    },
+    [isDemo],
+  )
 
   return (
     <PdfViewerContext.Provider value={{ preview, show }}>
