@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type PointerEvent as ReactPointerEvent,
 } from "react"
 import {
   Plus,
@@ -315,15 +316,24 @@ function MoveToSubmenu({
 // Thread menu (shared by every thread surface)
 // ---------------------------------------------------------------------------
 
-function ThreadMenu({ thread }: { thread: NqaiThreadSummary }) {
+function ThreadMenu({
+  thread,
+  open,
+  onOpenChange,
+}: {
+  thread: NqaiThreadSummary
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+}) {
   const o = useOrganizer()
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover:opacity-100"
           aria-label="Conversation actions"
+          title="Actions — or click and hold the chat"
         >
           <MoreHorizontal className="h-3.5 w-3.5" />
         </button>
@@ -370,10 +380,48 @@ function ThreadRow({ thread, depth }: { thread: NqaiThreadSummary; depth: number
   const isRenaming = o.renamingId === `t:${thread.id}`
   const recent = isRecent(thread.updatedAt) && !isActive
 
+  // Click-and-hold (long press) and right-click both open the actions menu.
+  const [menuOpen, setMenuOpen] = useState(false)
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pressOrigin = useRef<{ x: number; y: number } | null>(null)
+  const longPressed = useRef(false)
+
+  const clearPress = () => {
+    if (pressTimer.current) {
+      clearTimeout(pressTimer.current)
+      pressTimer.current = null
+    }
+    pressOrigin.current = null
+  }
+  const startPress = (e: ReactPointerEvent) => {
+    if (isRenaming) return
+    longPressed.current = false
+    pressOrigin.current = { x: e.clientX, y: e.clientY }
+    clearTimeout(pressTimer.current ?? undefined)
+    pressTimer.current = setTimeout(() => {
+      longPressed.current = true
+      setMenuOpen(true)
+      // Subtle haptic confirmation on supported touch devices.
+      try {
+        navigator.vibrate?.(12)
+      } catch {
+        /* no-op */
+      }
+    }, 450)
+  }
+  // Cancel the hold if the pointer moves enough to count as a scroll/drag.
+  const movePress = (e: ReactPointerEvent) => {
+    if (!pressOrigin.current) return
+    const dx = Math.abs(e.clientX - pressOrigin.current.x)
+    const dy = Math.abs(e.clientY - pressOrigin.current.y)
+    if (dx > 10 || dy > 10) clearPress()
+  }
+
   return (
     <div
       draggable={!isRenaming}
       onDragStart={(e) => {
+        clearPress()
         o.setDrag({ type: "thread", id: thread.id })
         e.dataTransfer.effectAllowed = "move"
         e.dataTransfer.setData("text/plain", thread.id)
@@ -382,9 +430,15 @@ function ThreadRow({ thread, depth }: { thread: NqaiThreadSummary; depth: number
         o.setDrag(null)
         o.setDropTarget(null)
       }}
+      onContextMenu={(e) => {
+        // Desktop right-click opens the same menu.
+        if (isRenaming) return
+        e.preventDefault()
+        setMenuOpen(true)
+      }}
       style={{ paddingLeft: depth * 12 + 8 }}
       className={cn(
-        "group flex items-center gap-1.5 rounded-sm border py-1 pr-1 transition-colors",
+        "group flex items-center gap-1.5 rounded-sm border py-1 pr-1 transition-colors select-none",
         isActive
           ? "border-primary/40 bg-primary/10"
           : "border-transparent hover:border-border hover:bg-secondary/50",
@@ -409,7 +463,19 @@ function ThreadRow({ thread, depth }: { thread: NqaiThreadSummary; depth: number
       ) : (
         <button
           type="button"
-          onClick={() => o.onSelectThread(thread.id)}
+          onClick={() => {
+            // Suppress the select that follows a long-press release.
+            if (longPressed.current) {
+              longPressed.current = false
+              return
+            }
+            o.onSelectThread(thread.id)
+          }}
+          onPointerDown={startPress}
+          onPointerMove={movePress}
+          onPointerUp={clearPress}
+          onPointerLeave={clearPress}
+          onPointerCancel={clearPress}
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
           aria-label={`Open conversation: ${thread.title || "Untitled"}`}
         >
@@ -422,7 +488,7 @@ function ThreadRow({ thread, depth }: { thread: NqaiThreadSummary; depth: number
           </span>
         </button>
       )}
-      <ThreadMenu thread={thread} />
+      <ThreadMenu thread={thread} open={menuOpen} onOpenChange={setMenuOpen} />
     </div>
   )
 }
