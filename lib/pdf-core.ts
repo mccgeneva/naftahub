@@ -8,6 +8,10 @@
 // the shared PDF viewer (see lib/pdf-viewer.tsx).
 
 import { jsPDF } from "jspdf"
+import { DEMO_DOCUMENT_NOTICE } from "@/lib/demo-notice"
+
+// Re-exported so existing importers of `pdf-core` keep working unchanged.
+export { DEMO_DOCUMENT_NOTICE }
 
 export type PdfDoc = jsPDF
 
@@ -82,14 +86,6 @@ export function makeDocRef(prefix: string): string {
   const rand = Math.floor(Math.random() * 9000 + 1000)
   return `${prefix}-${stamp}-${rand}`
 }
-
-/**
- * The mandatory disclaimer stamped on EVERY document the demo/showcase account
- * exports or downloads, so a generated file can never be mistaken for a genuine
- * MCC Capital document.
- */
-export const DEMO_DOCUMENT_NOTICE =
-  "This is a demo account generated document for demonstration only! Data reported could be invented. Forbidden any other uses."
 
 // Guards against double-stamping if the very same doc is shown more than once.
 const demoStamped = new WeakSet<object>()

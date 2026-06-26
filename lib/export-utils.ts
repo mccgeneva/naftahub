@@ -1,9 +1,25 @@
 // Shared helpers for exporting tabular data to CSV and importing CSV files.
 // Runs entirely in the browser — triggers a real file download / file picker.
 
+import { DEMO_DOCUMENT_NOTICE } from "@/lib/demo-notice"
+import { DEMO_USER_ID } from "@/lib/users"
+import { USER_COOKIE } from "@/lib/user-scope"
+
 // A single exportable record. Indexable by string so we can read values by
 // column key; callers may pass interface-typed objects (see exportToCsv).
 type Row = Record<string, unknown>
+
+/**
+ * Whether the current browser session belongs to the demo/showcase account.
+ * Reads the client-readable `mcc_user` scope cookie — this is only used to
+ * decide whether to prepend the cosmetic demo disclaimer to a data export, NOT
+ * for any security/identity decision, so the non-authoritative cookie is fine.
+ */
+function isDemoAccountClient(): boolean {
+  if (typeof document === "undefined") return false
+  const match = document.cookie.match(new RegExp(`(?:^|; )${USER_COOKIE}=([^;]*)`))
+  return !!match && decodeURIComponent(match[1]) === DEMO_USER_ID
+}
 
 function escapeCsvValue(value: unknown): string {
   if (value === null || value === undefined) return ""
@@ -39,8 +55,14 @@ export function toCsv(rows: Row[], columns?: { key: string; label?: string }[]):
  */
 export function downloadFile(filename: string, content: string, mimeType = "text/csv;charset=utf-8;") {
   if (typeof window === "undefined") return
+  // For the demo account, prepend the mandatory disclaimer to every text/CSV
+  // export so the downloaded data is unmistakably marked as demonstration-only.
+  let out = content
+  if (isDemoAccountClient() && /csv|text/i.test(mimeType)) {
+    out = `${escapeCsvValue(DEMO_DOCUMENT_NOTICE)}\r\n\r\n${content}`
+  }
   // Prepend BOM so Excel opens UTF-8 correctly.
-  const blob = new Blob(["\uFEFF", content], { type: mimeType })
+  const blob = new Blob(["\uFEFF", out], { type: mimeType })
   const url = URL.createObjectURL(blob)
   const link = document.createElement("a")
   link.href = url
