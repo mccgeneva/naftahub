@@ -63,6 +63,22 @@ function fileIcon(mediaType: string) {
   return FileText
 }
 
+/**
+ * Produce an accurate, human message for a chat error. The previous text always
+ * blamed the Anthropic key, which was misleading — most failures are transient
+ * stream faults or timeouts on heavy document analysis, which simply need a retry.
+ */
+function describeNqaiError(error: Error | undefined): string {
+  const raw = (error?.message || "").toLowerCase()
+  if (raw.includes("api key") || raw.includes("not configured") || raw.includes("offline")) {
+    return "NQAi is offline — the Anthropic key is not configured. Add ANTHROPIC_API_KEY, then try again."
+  }
+  if (raw.includes("could not read") || raw.includes("attachment")) {
+    return "NQAi could not read an attachment in this conversation. Try removing it or starting a new chat."
+  }
+  return "NQAi hit a transient fault (the request may have taken too long, e.g. a large document). Please try again."
+}
+
 function formatBytes(bytes: number): string {
   if (!bytes) return ""
   if (bytes < 1024) return `${bytes} B`
@@ -236,7 +252,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const { messages, sendMessage, setMessages, status, error, stop } = useChat({
+  const { messages, sendMessage, setMessages, status, error, stop, regenerate, clearError } = useChat({
     transport: new DefaultChatTransport({ api: "/api/nqai" }),
   })
   const pdf = usePdfViewer()
@@ -672,9 +688,20 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
         {error && (
           <div className="flex items-center gap-2 rounded-sm border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span>
-              NQAi could not complete that request. Confirm the Anthropic key is configured, then try again.
-            </span>
+            <span className="flex-1">{describeNqaiError(error)}</span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                clearError()
+                void regenerate()
+              }}
+              className="h-7 shrink-0 gap-1.5 border-destructive/40 text-destructive hover:bg-destructive/10"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Retry
+            </Button>
           </div>
         )}
         </div>

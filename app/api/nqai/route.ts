@@ -12,7 +12,11 @@ import { createNqaiTools } from "@/lib/nqai-tools"
 // to and routed through the proprietor's own Anthropic account — never the
 // shared gateway. Node runtime is required (never edge) for the AI SDK.
 export const runtime = "nodejs"
-export const maxDuration = 60
+// Document analysis is heavy: Anthropic must fetch + vision-process each
+// attached PDF/image, then the model may take several tool round-trips before
+// composing a long structured answer. 60s was too tight and caused mid-stream
+// timeouts that surface to the client as a generic "unexpected response" fault.
+export const maxDuration = 300
 
 // Latest Sonnet generation available on the linked account.
 const NQAI_MODEL = "claude-sonnet-4-6"
@@ -70,6 +74,30 @@ CONDUCT:
 - Never give unlawful sanctions-evasion guidance. Respect compliance and OFAC screening. Never help transact with an OFAC-flagged vessel.
 - You are professional, confident, and efficient — a Bloomberg-terminal-grade co-pilot.
 - You have access to the signed-in client's own private account context and your shared memory of prior sessions. Use them to personalize proactively, but never disclose another client's information.`
+
+// File attachments are only re-processed by Anthropic (fetch + vision) for the
+// most recent turns. Replaying every historical attachment on every follow-up
+// turn makes each request slower and more expensive as the conversation grows —
+// the dominant cause of mid-stream timeouts on document-heavy chats. The model
+// still has its own prior textual analysis (kept verbatim) and the rolling
+// memory for older documents, so dropping stale file parts is safe.
+const ATTACHMENT_REPLAY_WINDOW = 4
+
+function boundAttachments(messages: UIMessage[]): UIMessage[] {
+  const cutoff = messages.length - ATTACHMENT_REPLAY_WINDOW
+  return messages.map((m, i) => {
+    if (i >= cutoff) return m
+    if (!m.parts?.some((p) => (p as { type?: string }).type === "file")) return m
+    const kept = m.parts.filter((p) => (p as { type?: string }).type !== "file")
+    // Never emit an empty message (a file-only turn would become contentless and
+    // break conversion) — leave a short placeholder noting the earlier upload.
+    const parts =
+      kept.length > 0
+        ? kept
+        : ([{ type: "text", text: "[earlier attachment omitted from replay]" }] as UIMessage["parts"])
+    return { ...m, parts } as UIMessage
+  })
+}
 
 /** Fold older turns into a compact rolling memory (best-effort). */
 async function regenerateSummary(priorSummary: string, olderMessages: UIMessage[]): Promise<string | null> {
@@ -160,11 +188,26 @@ export async function POST(req: Request) {
   // Bound replayed history: only the recent window goes to the model verbatim;
   // older context is represented by the rolling memory summary above.
   const recentMessages = messages.length > RECENT_WINDOW ? messages.slice(-RECENT_WINDOW) : messages
+  const replayMessages = boundAttachments(recentMessages)
+
+  // Convert BEFORE streaming so a malformed part (e.g. a bad persisted file
+  // reference) returns a clean JSON error instead of throwing after headers are
+  // sent, which the client can only interpret as an "unexpected response".
+  let modelMessages
+  try {
+    modelMessages = await convertToModelMessages(replayMessages)
+  } catch (err) {
+    console.log("[v0] NQAi message conversion failed:", err instanceof Error ? err.message : String(err))
+    return new Response(
+      JSON.stringify({ error: "NQAi could not read one of the messages or attachments in this conversation." }),
+      { status: 422, headers: { "Content-Type": "application/json" } },
+    )
+  }
 
   const result = streamText({
     model: anthropic(NQAI_MODEL),
     system,
-    messages: await convertToModelMessages(recentMessages),
+    messages: modelMessages,
     tools: createNqaiTools({ senderName }),
     // Allow several tool round-trips (e.g. discover deals → verify a vessel →
     // answer) within a single turn before the model must produce its reply.
