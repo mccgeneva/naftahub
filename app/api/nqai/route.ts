@@ -3,7 +3,7 @@ import { convertToModelMessages, generateText, streamText, stepCountIs, type UIM
 import { buildNqaiContext } from "@/lib/nqai-context"
 import { resolveCurrentSession } from "@/lib/session-user"
 import { getNqaiUserSnapshot, renderUserContextBlock } from "@/lib/nqai-user-context"
-import { loadNqaiChat, saveNqaiChat } from "@/lib/nqai-chat-db"
+import { loadNqaiChat, saveNqaiChat, saveNqaiProfile } from "@/lib/nqai-chat-db"
 import { createNqaiTools } from "@/lib/nqai-tools"
 
 // NQAi runs live through the Anthropic Claude account configured via the
@@ -26,6 +26,10 @@ const NQAI_MODEL = "claude-sonnet-4-6"
 const RECENT_WINDOW = 16
 // Regenerate the rolling memory once the transcript grows beyond this.
 const SUMMARY_THRESHOLD = RECENT_WINDOW + 6
+// Re-learn the durable personalization profile every N persisted messages, so
+// it improves progressively (after a short warm-up) without a model call on
+// every single turn.
+const PROFILE_UPDATE_EVERY = 4
 
 const NQAI_SYSTEM_PROMPT = `You are NQAi — Neural Quantum Artificial Intelligence.
 
@@ -130,6 +134,46 @@ async function regenerateSummary(priorSummary: string, olderMessages: UIMessage[
   }
 }
 
+/**
+ * Progressively learn a DURABLE personalization profile for the client. Unlike
+ * the rolling summary (volatile "what we just discussed"), this distils the
+ * long-lived traits worth remembering forever — preferred products/grades,
+ * typical ports & trade routes, deal sizes, counterparties, instruments,
+ * communication style and recurring needs — merging new evidence into the prior
+ * profile. Best-effort; returns null (leave profile unchanged) on any failure.
+ */
+async function updatePersonalizationProfile(
+  priorProfile: string,
+  recentMessages: UIMessage[],
+): Promise<string | null> {
+  const transcript = recentMessages
+    .map((m) => {
+      const text = (m.parts ?? [])
+        .filter((p): p is { type: "text"; text: string } => p.type === "text")
+        .map((p) => p.text)
+        .join(" ")
+        .trim()
+      return text ? `${m.role.toUpperCase()}: ${text}` : ""
+    })
+    .filter(Boolean)
+    .join("\n")
+  if (!transcript) return null
+
+  try {
+    const { text } = await generateText({
+      model: anthropic(NQAI_MODEL),
+      system:
+        "You maintain a DURABLE personalization profile of a single NAFTAhub/MCC trading client so an AI co-pilot can tailor future help. Merge the prior profile with new evidence from the latest exchanges into one compact profile (max ~150 words, terse note form, grouped bullet-style). Capture ONLY durable, reusable traits: preferred products/grades, typical ports & trade routes, usual deal sizes & currencies, recurring counterparties & instruments (SKR/POF/SBLC etc.), risk posture, communication style/preferences, languages, and recurring needs or goals. Do NOT record one-off transactional details, pleasantries, or anything already obvious from account data. If the new exchanges add nothing durable, return the prior profile unchanged.",
+      prompt: `PRIOR PROFILE:\n${priorProfile || "(none yet)"}\n\nRECENT EXCHANGES:\n${transcript}\n\nUpdated durable profile:`,
+      temperature: 0.2,
+    })
+    return text.trim() || null
+  } catch (err) {
+    console.log("[v0] NQAi profile update failed:", err instanceof Error ? err.message : String(err))
+    return null
+  }
+}
+
 export async function POST(req: Request) {
   if (!process.env.ANTHROPIC_API_KEY) {
     return new Response(
@@ -173,14 +217,21 @@ export async function POST(req: Request) {
           return null
         })
       : Promise.resolve(null),
-    userId ? loadNqaiChat(userId).catch(() => ({ messages: [], summary: "", updatedAt: null })) : Promise.resolve({ messages: [], summary: "", updatedAt: null }),
+    userId
+      ? loadNqaiChat(userId).catch(() => ({ messages: [], summary: "", profileNotes: "", updatedAt: null }))
+      : Promise.resolve({ messages: [], summary: "", profileNotes: "", updatedAt: null }),
   ])
 
   const userContextBlock = renderUserContextBlock(userSnapshot)
   const memory = stored.summary
+  const personalizationProfile = stored.profileNotes
 
   const systemParts = [NQAI_SYSTEM_PROMPT]
   if (userContextBlock) systemParts.push(userContextBlock)
+  if (personalizationProfile)
+    systemParts.push(
+      `## CLIENT PERSONALIZATION PROFILE (durable preferences you've learned about THIS client — use proactively to tailor every reply)\n${personalizationProfile}`,
+    )
   if (memory) systemParts.push(`## LONG-TERM MEMORY (your notes from prior sessions with this client)\n${memory}`)
   if (liveContext) systemParts.push(liveContext)
   const system = systemParts.join("\n\n---\n\n")
@@ -220,17 +271,27 @@ export async function POST(req: Request) {
     onFinish: async ({ messages: finalMessages }) => {
       if (!userId) return
       try {
-        // Decide whether to refresh the rolling memory: fold everything except
-        // the recent window into the summary.
-        if (finalMessages.length > SUMMARY_THRESHOLD) {
-          const older = finalMessages.slice(0, -RECENT_WINDOW)
-          const newSummary = await regenerateSummary(memory, older)
-          if (newSummary) {
-            await saveNqaiChat(userId, finalMessages, newSummary)
-            return
-          }
+        // Refresh the rolling memory (fold everything except the recent window)
+        // and progressively re-learn the durable personalization profile. Run
+        // both model passes in parallel, then persist once.
+        const shouldSummarize = finalMessages.length > SUMMARY_THRESHOLD
+        const shouldLearnProfile =
+          finalMessages.length >= PROFILE_UPDATE_EVERY && finalMessages.length % PROFILE_UPDATE_EVERY === 0
+
+        const [newSummary, newProfile] = await Promise.all([
+          shouldSummarize ? regenerateSummary(memory, finalMessages.slice(0, -RECENT_WINDOW)) : Promise.resolve(null),
+          shouldLearnProfile
+            ? updatePersonalizationProfile(personalizationProfile, finalMessages.slice(-RECENT_WINDOW))
+            : Promise.resolve(null),
+        ])
+
+        // Persist transcript (+ refreshed summary if we have one) in one write.
+        await saveNqaiChat(userId, finalMessages, newSummary ?? undefined)
+        // The profile lives on the same per-user row; persist separately only
+        // when it actually changed.
+        if (newProfile && newProfile !== personalizationProfile) {
+          await saveNqaiProfile(userId, newProfile)
         }
-        await saveNqaiChat(userId, finalMessages)
       } catch (err) {
         console.log("[v0] NQAi persist failed:", err instanceof Error ? err.message : String(err))
       }
