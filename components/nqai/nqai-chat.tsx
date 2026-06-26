@@ -869,7 +869,9 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                 <Sparkles className="h-3 w-3" />
                 NQAi · Neural Quantum Artificial Intelligence
               </p>
-              <p className="text-pretty text-[13px] leading-relaxed text-foreground/90">{NQAI_WELCOME}</p>
+              <p className="whitespace-pre-line text-pretty text-[13px] leading-relaxed text-foreground/90">
+                {NQAI_WELCOME}
+              </p>
               <p className="mt-2.5 border-t border-border pt-2 text-[10px] text-muted-foreground">
                 Running on RISC-V · Research cloud, UC Berkeley · Proprietary architecture
               </p>

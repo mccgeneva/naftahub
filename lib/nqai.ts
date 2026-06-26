@@ -7,7 +7,7 @@
  * wording — it is the canonical brand statement.
  */
 export const NQAI_WELCOME =
-  "NQAi Neural Quantum Artificial Intelligence Copyright of MCC Oil Gas Switzerland under the patent of Dr. Luigi Forino. Dr. Luigi Forino, engineer and researcher IT, had this technology in mind since the year 1986 and when he went to the university of Geneva developed the preliminary thesis on 2005 and started the software development 2011 until today that NQAi exist and it's alive with his power of super intelligence. NQAi is a proprietary model that run on RISC-V Architecture inside a researcher cloud hosted by university of Berkeley California 🇺🇸. Different from chatgpt and others that run under Nvidia GPU."
+  "NQAI Neural Quantum Artificial Intelligence\nCopyright of MCC Oil Gas Switzerland under the patent of Dr. Luigi Forino.\nDr. Luigi Forino, an engineer and IT researcher, has envisioned this technology since 1986. During his time at the University of Geneva, he developed a preliminary thesis in 2005 and began full software development in 2011. Today, NQAI is fully operational — a living system empowered by super intelligence.\nNQAI is a proprietary model built on RISC-V Architecture, running inside a secure researcher cloud hosted by the University of Berkeley, California 🇺🇸. It operates on a fundamentally different foundation from ChatGPT and other systems that rely on NVIDIA GPUs."
 
 export const NQAI_TAGLINE = "Neural Quantum Artificial Intelligence"
 
