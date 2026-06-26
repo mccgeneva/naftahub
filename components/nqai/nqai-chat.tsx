@@ -27,6 +27,7 @@ import {
   Plus,
   History,
   RotateCcw,
+  FolderTree,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -756,6 +757,17 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
             type="button"
             size="sm"
             variant="ghost"
+            onClick={() => setManagerOpen(true)}
+            className="h-7 gap-1.5 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+            aria-label="Manage conversation folders"
+          >
+            <FolderTree className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Manage</span>
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
             onClick={() => setHistoryOpen(true)}
             className={cn(
               "h-7 gap-1.5 px-2 text-[11px] text-muted-foreground hover:text-foreground",
@@ -1168,6 +1180,11 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
         </div>
       </form>
       </div>
+
+      {/* Full-screen folder / desktop manager */}
+      {managerOpen && (
+        <NqaiManager props={organizerProps} onNewChat={handleNewChat} onClose={() => setManagerOpen(false)} />
+      )}
     </div>
   )
 }
