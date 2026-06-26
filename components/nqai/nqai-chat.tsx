@@ -38,6 +38,8 @@ import {
   loadNqaiThreadAction,
   deleteNqaiThreadAction,
   renameNqaiThreadAction,
+  pinNqaiThreadAction,
+  archiveNqaiThreadAction,
   createNqaiFolderAction,
   renameNqaiFolderAction,
   deleteNqaiFolderAction,
@@ -539,6 +541,32 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
     [refreshThreads],
   )
 
+  // Pin / unpin a thread (optimistic).
+  const handlePinThread = useCallback(
+    async (id: string, pinned: boolean) => {
+      setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, pinned } : t)))
+      try {
+        await pinNqaiThreadAction(id, pinned)
+      } finally {
+        void refreshThreads()
+      }
+    },
+    [refreshThreads],
+  )
+
+  // Archive / unarchive a thread (optimistic).
+  const handleArchiveThread = useCallback(
+    async (id: string, archived: boolean) => {
+      setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, archived } : t)))
+      try {
+        await archiveNqaiThreadAction(id, archived)
+      } finally {
+        void refreshThreads()
+      }
+    },
+    [refreshThreads],
+  )
+
   // Create a folder, expand its parent, and drop straight into rename mode.
   const handleCreateFolder = useCallback(
     async (parentId: string | null) => {
@@ -637,6 +665,8 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
     onSelectThread: handleSelectThread,
     onDeleteThread: handleDeleteThread,
     onRenameThread: handleRenameThread,
+    onPinThread: handlePinThread,
+    onArchiveThread: handleArchiveThread,
     onCreateFolder: handleCreateFolder,
     onRenameFolder: handleRenameFolder,
     onDeleteFolder: handleDeleteFolder,

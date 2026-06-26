@@ -24,6 +24,14 @@ export interface NqaiThreadSummary {
   messageCount: number
   /** The folder this thread lives in, or null when it sits at the root. */
   folderId: string | null
+  /** Short snippet of the last message, for the history card preview. */
+  preview: string
+  /** Rolling long-term-memory summary (used for "key topics" hints). */
+  summary: string
+  /** Pinned threads are surfaced at the top of the console regardless of folder. */
+  pinned: boolean
+  /** Archived threads are hidden from the main list until revealed. */
+  archived: boolean
   createdAt: string
   updatedAt: string
 }
@@ -73,13 +81,29 @@ async function ensureTables(): Promise<void> {
        messages   jsonb       NOT NULL DEFAULT '[]'::jsonb,
        summary    text        NOT NULL DEFAULT '',
        folder_id  text,
+       preview    text        NOT NULL DEFAULT '',
+       pinned     boolean     NOT NULL DEFAULT false,
+       archived   boolean     NOT NULL DEFAULT false,
        created_at timestamptz NOT NULL DEFAULT now(),
        updated_at timestamptz NOT NULL DEFAULT now()
      )`,
   )
-  // Folder placement for threads (null = root / "Unfiled"). Added for existing DBs.
+  // Columns added for existing DBs (idempotent).
   await query(`ALTER TABLE nqai_threads ADD COLUMN IF NOT EXISTS folder_id text`)
-  // Fast history listing: newest threads first, scoped by user.
+  await query(`ALTER TABLE nqai_threads ADD COLUMN IF NOT EXISTS preview text NOT NULL DEFAULT ''`)
+  await query(`ALTER TABLE nqai_threads ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false`)
+  await query(`ALTER TABLE nqai_threads ADD COLUMN IF NOT EXISTS archived boolean NOT NULL DEFAULT false`)
+  // Backfill last-message previews for rows that predate the column (once per
+  // process). Pulls the text parts of the final message via jsonb.
+  await query(
+    `UPDATE nqai_threads SET preview = COALESCE((
+        SELECT string_agg(p->>'text', ' ')
+        FROM jsonb_array_elements(messages -> (jsonb_array_length(messages) - 1) -> 'parts') p
+        WHERE p->>'type' = 'text'
+      ), '')
+      WHERE preview = '' AND jsonb_array_length(messages) > 0`,
+  )
+  // Fast history listing: pinned first, then newest, scoped by user.
   await query(
     `CREATE INDEX IF NOT EXISTS nqai_threads_user_updated_idx ON nqai_threads (user_id, updated_at DESC)`,
   )
@@ -135,10 +159,11 @@ export async function listNqaiThreads(userId: string): Promise<NqaiThreadSummary
   await ensureTables()
   await migrateLegacyChat(userId).catch(() => {})
   const { rows } = await query(
-    `SELECT id, title, jsonb_array_length(messages) AS message_count, folder_id, created_at, updated_at
+    `SELECT id, title, jsonb_array_length(messages) AS message_count, folder_id,
+            preview, summary, pinned, archived, created_at, updated_at
        FROM nqai_threads
        WHERE user_id = $1
-       ORDER BY updated_at DESC`,
+       ORDER BY pinned DESC, updated_at DESC`,
     [userId],
   )
   return rows.map((r) => {
@@ -148,6 +173,10 @@ export async function listNqaiThreads(userId: string): Promise<NqaiThreadSummary
       title: String(row.title ?? ""),
       messageCount: Number(row.message_count ?? 0),
       folderId: row.folder_id ? String(row.folder_id) : null,
+      preview: String(row.preview ?? ""),
+      summary: String(row.summary ?? ""),
+      pinned: Boolean(row.pinned),
+      archived: Boolean(row.archived),
       createdAt: row.created_at ? new Date(row.created_at as string).toISOString() : "",
       updatedAt: row.updated_at ? new Date(row.updated_at as string).toISOString() : "",
     }
@@ -190,19 +219,48 @@ export async function saveNqaiThread(
   const capped = messages.slice(-NQAI_MAX_STORED_MESSAGES)
   const title = opts?.title
   const summary = opts?.summary
+  const preview = deriveThreadPreview(capped)
 
   // Build the UPDATE set dynamically so we only overwrite what's provided.
   await query(
-    `INSERT INTO nqai_threads (id, user_id, title, messages, summary, created_at, updated_at)
-       VALUES ($1, $2, $3, $4::jsonb, $5, now(), now())
+    `INSERT INTO nqai_threads (id, user_id, title, messages, summary, preview, created_at, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $8, now(), now())
      ON CONFLICT (id) DO UPDATE SET
        messages   = EXCLUDED.messages,
        title      = CASE WHEN $6 THEN EXCLUDED.title ELSE nqai_threads.title END,
        summary    = CASE WHEN $7 THEN EXCLUDED.summary ELSE nqai_threads.summary END,
+       preview    = EXCLUDED.preview,
        updated_at = now()
      WHERE nqai_threads.user_id = $2`,
-    [threadId, userId, title ?? "", JSON.stringify(capped), summary ?? "", title !== undefined, summary !== undefined],
+    [
+      threadId,
+      userId,
+      title ?? "",
+      JSON.stringify(capped),
+      summary ?? "",
+      title !== undefined,
+      summary !== undefined,
+      preview,
+    ],
   )
+}
+
+/** Extract a short preview snippet from the last message's text parts. */
+export function deriveThreadPreview(messages: UIMessage[]): string {
+  const last = messages[messages.length - 1]
+  if (!last) return ""
+  const raw = (last.parts ?? [])
+    .filter((p): p is { type: "text"; text: string } => (p as { type?: string }).type === "text")
+    .map((p) => p.text)
+    .join(" ")
+  // Strip light markdown (bold/italic/code/headings/links) for a clean snippet.
+  const text = raw
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // links/images → label
+    .replace(/[*_`#>~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (!text) return ""
+  return text.length > 140 ? `${text.slice(0, 137)}…` : text
 }
 
 /** Rename a thread (used when the model generates a better title). */
@@ -221,6 +279,28 @@ export async function deleteNqaiThread(userId: string, threadId: string): Promis
   if (!userId || !threadId) return
   await ensureTables()
   await query(`DELETE FROM nqai_threads WHERE id = $1 AND user_id = $2`, [threadId, userId])
+}
+
+/** Pin / unpin a thread (pinned threads sort to the top), scoped to its owner. */
+export async function setNqaiThreadPinned(userId: string, threadId: string, pinned: boolean): Promise<void> {
+  if (!userId || !threadId) return
+  await ensureTables()
+  await query(`UPDATE nqai_threads SET pinned = $3, updated_at = updated_at WHERE id = $1 AND user_id = $2`, [
+    threadId,
+    userId,
+    pinned,
+  ])
+}
+
+/** Archive / unarchive a thread (hidden from the main list), scoped to its owner. */
+export async function setNqaiThreadArchived(userId: string, threadId: string, archived: boolean): Promise<void> {
+  if (!userId || !threadId) return
+  await ensureTables()
+  await query(`UPDATE nqai_threads SET archived = $3, updated_at = updated_at WHERE id = $1 AND user_id = $2`, [
+    threadId,
+    userId,
+    archived,
+  ])
 }
 
 /** Derive a short fallback title from the first user message in a thread. */
