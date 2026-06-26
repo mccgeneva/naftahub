@@ -658,7 +658,8 @@ function useConsoleSearch(
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      // ⌘⇧K / Ctrl+Shift+K — ⌘K is reserved by the global command palette.
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "k") {
         e.preventDefault()
         inputRef.current?.focus()
         inputRef.current?.select()
@@ -728,9 +729,9 @@ function SearchBox({
           <X className="h-3.5 w-3.5" />
         </button>
       ) : (
-        <kbd className="pointer-events-none absolute right-1.5 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-secondary px-1 font-mono text-[9px] text-muted-foreground sm:block">
-          ⌘K
-        </kbd>
+          <kbd className="pointer-events-none absolute right-1.5 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-secondary px-1 font-mono text-[9px] text-muted-foreground sm:block">
+            ⌘⇧K
+          </kbd>
       )}
     </div>
   )
