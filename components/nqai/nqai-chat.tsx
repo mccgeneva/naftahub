@@ -19,11 +19,95 @@ import {
   Maximize2,
   Minimize2,
   Send,
+  Paperclip,
+  FileText,
+  FileSpreadsheet,
+  ImageIcon,
+  Download,
+  X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { NQAI_WELCOME, NQAI_TAGLINE, NQAI_SUGGESTIONS } from "@/lib/nqai"
 import { bootstrapNqai, resetNqaiConversation } from "@/app/actions/nqai"
+import { usePdfViewer } from "@/lib/pdf-viewer"
+import { useCurrentUser } from "@/lib/use-current-user"
+import { generateNqaiDocumentPdf } from "@/lib/nqai-document-pdf"
+
+/** Client-accepted upload types and the limit, mirrored by the upload route. */
+const ACCEPTED_UPLOAD = ".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.csv,application/pdf,image/png,image/jpeg,image/webp,image/gif,text/plain,text/csv"
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+
+interface PendingAttachment {
+  id: string
+  name: string
+  size: number
+  mediaType: string
+  status: "uploading" | "ready" | "error"
+  url?: string
+  error?: string
+}
+
+/** A file attached to a (user) message, reconstructed from its parts. */
+interface MessageFile {
+  url: string
+  name: string
+  mediaType: string
+}
+
+/** Pick an icon for an attachment based on its media type. */
+function fileIcon(mediaType: string) {
+  if (mediaType.startsWith("image/")) return ImageIcon
+  if (mediaType === "application/pdf") return FileText
+  if (mediaType.includes("csv")) return FileSpreadsheet
+  return FileText
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return ""
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** Extract file attachments from a message's parts. */
+function messageFiles(message: UIMessage): MessageFile[] {
+  if (!message.parts) return []
+  const out: MessageFile[] = []
+  message.parts.forEach((p) => {
+    const part = p as { type?: string; url?: string; mediaType?: string; filename?: string }
+    if (part.type === "file" && part.url) {
+      out.push({
+        url: part.url,
+        name: part.filename || "attachment",
+        mediaType: part.mediaType || "application/octet-stream",
+      })
+    }
+  })
+  return out
+}
+
+/** A document NQAi authored via the createDocument tool, ready to download. */
+interface DocArtifact {
+  key: string
+  title: string
+  markdown: string
+}
+
+/** Extract finished createDocument artifacts from an assistant message. */
+function documentArtifacts(message: UIMessage): DocArtifact[] {
+  if (!message.parts) return []
+  const out: DocArtifact[] = []
+  message.parts.forEach((p, i) => {
+    const part = p as { type?: string; state?: string; output?: { ok?: boolean; title?: string; markdown?: string } }
+    if (part.type !== "tool-createDocument") return
+    const o = part.output
+    if (part.state === "output-available" && o?.ok && o.markdown) {
+      out.push({ key: `doc-${i}`, title: o.title || "NQAi Document", markdown: o.markdown })
+    }
+  })
+  return out
+}
 
 /** Extract the plain-text content from a UIMessage's parts array. */
 function messageText(message: UIMessage): string {
@@ -47,6 +131,7 @@ const TOOL_LABELS: Record<string, string> = {
   "tool-exploreConcept": "Mapping research field",
   "tool-sendEmail": "Sending email",
   "tool-sendSms": "Sending SMS",
+  "tool-createDocument": "Drafting document",
 }
 
 // Past-tense labels shown once a tool has finished successfully, so a completed
@@ -62,6 +147,7 @@ const TOOL_DONE_LABELS: Record<string, string> = {
   "tool-exploreConcept": "Field mapped",
   "tool-sendEmail": "Email sent",
   "tool-sendSms": "SMS sent",
+  "tool-createDocument": "Document ready",
 }
 
 // Labels shown when a tool finished but reported a failure (e.g. email not
@@ -77,12 +163,15 @@ const KNOWLEDGE_TOOLS = new Set(["tool-searchResearch", "tool-lookupInstitution"
 /** Tool keys that send an outbound message (send icon). */
 const MESSAGING_TOOLS = new Set(["tool-sendEmail", "tool-sendSms"])
 
+/** Tool keys that author a document (file icon). */
+const DOCUMENT_TOOLS = new Set(["tool-createDocument"])
+
 interface ToolActivity {
   key: string
   label: string
   done: boolean
   failed: boolean
-  kind: "vessel" | "knowledge" | "messaging"
+  kind: "vessel" | "knowledge" | "messaging" | "document"
 }
 
 /** Collect tool invocations from a message's parts for the activity strip. */
@@ -110,7 +199,13 @@ function toolActivity(message: UIMessage): ToolActivity[] {
       label,
       done,
       failed,
-      kind: KNOWLEDGE_TOOLS.has(type) ? "knowledge" : MESSAGING_TOOLS.has(type) ? "messaging" : "vessel",
+      kind: KNOWLEDGE_TOOLS.has(type)
+        ? "knowledge"
+        : MESSAGING_TOOLS.has(type)
+          ? "messaging"
+          : DOCUMENT_TOOLS.has(type)
+            ? "document"
+            : "vessel",
     })
   })
   return out
@@ -136,14 +231,96 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
   const [bootstrapped, setBootstrapped] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const [dragOver, setDragOver] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const { messages, sendMessage, setMessages, status, error, stop } = useChat({
     transport: new DefaultChatTransport({ api: "/api/nqai" }),
   })
+  const pdf = usePdfViewer()
+  const user = useCurrentUser()
+  const clientName = [user?.fullName, user?.company].filter(Boolean).join(" — ") || undefined
 
   const busy = status === "submitted" || status === "streaming"
   const hasConversation = messages.length > 0
+  const uploadingFiles = attachments.some((a) => a.status === "uploading")
+  const readyFiles = attachments.filter((a) => a.status === "ready" && a.url)
+  const canSend = !busy && !uploadingFiles && (input.trim().length > 0 || readyFiles.length > 0)
+
+  // Download an NQAi-authored document as a branded PDF via the shared viewer.
+  const downloadDocument = useCallback(
+    (artifact: DocArtifact) => {
+      try {
+        const generated = generateNqaiDocumentPdf({
+          title: artifact.title,
+          markdown: artifact.markdown,
+          clientName,
+        })
+        pdf.show(generated)
+      } catch (err) {
+        console.log("[v0] NQAi document PDF failed:", err instanceof Error ? err.message : String(err))
+      }
+    },
+    [pdf, clientName],
+  )
+
+  // Upload one file to Blob via the NQAi upload route, tracking its progress.
+  const uploadAttachment = useCallback(async (id: string, file: File) => {
+    try {
+      const form = new FormData()
+      form.append("file", file)
+      const res = await fetch("/api/nqai/upload", { method: "POST", body: form })
+      const data = (await res.json().catch(() => ({}))) as {
+        url?: string
+        mediaType?: string
+        error?: string
+      }
+      if (!res.ok || !data.url) {
+        setAttachments((prev) =>
+          prev.map((a) => (a.id === id ? { ...a, status: "error", error: data.error || "Upload failed" } : a)),
+        )
+        return
+      }
+      setAttachments((prev) =>
+        prev.map((a) =>
+          a.id === id ? { ...a, status: "ready", url: data.url, mediaType: data.mediaType || a.mediaType } : a,
+        ),
+      )
+    } catch {
+      setAttachments((prev) =>
+        prev.map((a) => (a.id === id ? { ...a, status: "error", error: "Upload failed" } : a)),
+      )
+    }
+  }, [])
+
+  // Validate and queue files for upload (from the picker or drag & drop).
+  const addFiles = useCallback(
+    (files: FileList | File[]) => {
+      const list = Array.from(files)
+      list.forEach((file) => {
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+        if (file.size > MAX_UPLOAD_BYTES) {
+          setAttachments((prev) => [
+            ...prev,
+            { id, name: file.name, size: file.size, mediaType: file.type, status: "error", error: "Over 20 MB" },
+          ])
+          return
+        }
+        setAttachments((prev) => [
+          ...prev,
+          { id, name: file.name, size: file.size, mediaType: file.type || "application/octet-stream", status: "uploading" },
+        ])
+        void uploadAttachment(id, file)
+      })
+    },
+    [uploadAttachment],
+  )
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id))
+  }, [])
 
   // Auto-grow the composer: reset to a single row, then expand to fit content
   // up to a comfortable max (after which it scrolls internally).
@@ -378,6 +555,8 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                           <BookOpen className="h-3 w-3" />
                         ) : a.kind === "messaging" ? (
                           <Send className="h-3 w-3" />
+                        ) : a.kind === "document" ? (
+                          <FileText className="h-3 w-3" />
                         ) : a.label.includes("vessel") || a.label.includes("AIS") ? (
                           <Ship className="h-3 w-3" />
                         ) : (

@@ -573,5 +573,34 @@ export function createNqaiTools(ctx: NqaiToolContext = {}) {
       }
     },
   }),
+
+  // =========================================================================
+  // DOCUMENT GENERATION — NQAi authors a downloadable, branded PDF. The tool
+  // itself just structures the content; the CLIENT renders the actual PDF from
+  // this output (jsPDF, MCC house style) and shows a Download button. This keeps
+  // PDF rendering in the browser, consistent with every other export.
+  // =========================================================================
+  createDocument: tool({
+    description:
+      "Author a downloadable, professionally formatted PDF document for the client. Use this whenever the client asks you to prepare/draft/create/generate a document, report, summary, briefing, quotation, memo or analysis that they can download or share (e.g. 'prepare a deal summary I can download', 'draft a market report as a PDF', 'put that in a document'). Provide a clear `title` and the full document body as `markdown` — use # / ## / ### headings, bullet and numbered lists, and Markdown tables for structured/comparative data. Write desk-grade, well-structured content. The client receives a branded PDF with a Download button. After calling this, also give a brief chat reply summarizing what you produced; do NOT repeat the entire document body in the chat.",
+    inputSchema: z.object({
+      title: z.string().describe("A concise document title, e.g. 'Brent CIF Rotterdam — Indicative Quotation'."),
+      markdown: z
+        .string()
+        .describe(
+          "The full document body in Markdown: headings (#/##/###), bullet/numbered lists, tables (| col | col |), paragraphs. This becomes the PDF content.",
+        ),
+    }),
+    execute: async ({ title, markdown }) => {
+      const docId = `NQAI-DOC-${Date.now().toString(36).toUpperCase()}`
+      return {
+        ok: true,
+        docId,
+        title,
+        markdown,
+        note: "Document prepared. The client can download it as a branded PDF from the chat. Give a short summary in your reply — do not paste the whole document.",
+      }
+    },
+  }),
   } as const
 }
