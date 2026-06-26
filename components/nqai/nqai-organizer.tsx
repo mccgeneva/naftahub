@@ -38,11 +38,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import type { NqaiFolder, NqaiThreadSummary } from "@/lib/nqai-chat-db"
 
 /** Root drop-zone sentinel (distinct from a real folder id). */
@@ -269,46 +267,82 @@ function InlineRename({
 }
 
 // ---------------------------------------------------------------------------
-// "Move to…" submenu (shared by folder + thread menus)
+// "Move to…" picker — a dialog (NOT a nested submenu).
+// Radix submenus open on hover and do not reliably open on a touch tap, which
+// left mobile users stuck on "Move to…". A dialog works on every input type.
 // ---------------------------------------------------------------------------
 
-function MoveToSubmenu({
+function MoveToDialog({
+  open,
+  onOpenChange,
   exclude,
   currentFolderId,
   onPick,
+  title,
 }: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
   exclude: Set<string>
   currentFolderId: string | null
   onPick: (folderId: string | null) => void
+  title: string
 }) {
   const { folders } = useOrganizer()
   const options = useMemo(() => flattenForPicker(folders, exclude), [folders, exclude])
+
+  const pick = (folderId: string | null) => {
+    onPick(folderId)
+    onOpenChange(false)
+  }
+
   return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger className="gap-2 text-xs">
-        <FolderInput className="h-3.5 w-3.5" />
-        Move to…
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
-        <DropdownMenuItem className="gap-2 text-xs" disabled={currentFolderId === null} onSelect={() => onPick(null)}>
-          <Folder className="h-3.5 w-3.5" />
-          Unfiled (root)
-        </DropdownMenuItem>
-        {options.length > 0 && <DropdownMenuSeparator />}
-        {options.map((o) => (
-          <DropdownMenuItem
-            key={o.id}
-            className="gap-2 text-xs"
-            disabled={o.id === currentFolderId}
-            onSelect={() => onPick(o.id)}
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-sm">
+            <FolderInput className="h-4 w-4 text-primary" />
+            {title}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="-mx-2 max-h-[60vh] overflow-y-auto">
+          <button
+            type="button"
+            disabled={currentFolderId === null}
+            onClick={() => pick(null)}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-sm px-3 py-2.5 text-left text-sm transition-colors",
+              currentFolderId === null
+                ? "cursor-default text-muted-foreground"
+                : "text-foreground hover:bg-secondary",
+            )}
           >
-            <span style={{ width: o.depth * 10 }} aria-hidden />
-            <Folder className="h-3.5 w-3.5" />
-            <span className="truncate">{o.name}</span>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
+            <Folder className="h-4 w-4 shrink-0" />
+            <span className="flex-1 truncate">Unfiled (root)</span>
+            {currentFolderId === null && <Check className="h-4 w-4 shrink-0 text-primary" />}
+          </button>
+          {options.map((o) => {
+            const isCurrent = o.id === currentFolderId
+            return (
+              <button
+                key={o.id}
+                type="button"
+                disabled={isCurrent}
+                onClick={() => pick(o.id)}
+                style={{ paddingLeft: o.depth * 14 + 12 }}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-sm py-2.5 pr-3 text-left text-sm transition-colors",
+                  isCurrent ? "cursor-default text-muted-foreground" : "text-foreground hover:bg-secondary",
+                )}
+              >
+                <Folder className="h-4 w-4 shrink-0" />
+                <span className="flex-1 truncate">{o.name}</span>
+                {isCurrent && <Check className="h-4 w-4 shrink-0 text-primary" />}
+              </button>
+            )
+          })}
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -326,46 +360,64 @@ function ThreadMenu({
   onOpenChange?: (open: boolean) => void
 }) {
   const o = useOrganizer()
+  const [moveOpen, setMoveOpen] = useState(false)
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover:opacity-100"
-          aria-label="Conversation actions"
-          title="Actions — or click and hold the chat"
-        >
-          <MoreHorizontal className="h-3.5 w-3.5" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuItem className="gap-2 text-xs" onSelect={() => o.onPinThread(thread.id, !thread.pinned)}>
-          {thread.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-          {thread.pinned ? "Unpin" : "Pin to top"}
-        </DropdownMenuItem>
-        <DropdownMenuItem className="gap-2 text-xs" onSelect={() => o.setRenamingId(`t:${thread.id}`)}>
-          <Pencil className="h-3.5 w-3.5" />
-          Rename
-        </DropdownMenuItem>
-        <MoveToSubmenu
-          exclude={new Set()}
-          currentFolderId={thread.folderId ?? null}
-          onPick={(fid) => o.onMoveThread(thread.id, fid)}
-        />
-        <DropdownMenuItem className="gap-2 text-xs" onSelect={() => o.onArchiveThread(thread.id, !thread.archived)}>
-          {thread.archived ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
-          {thread.archived ? "Unarchive" : "Archive"}
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          className="gap-2 text-xs text-destructive focus:text-destructive"
-          onSelect={() => o.onDeleteThread(thread.id)}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          Delete
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <DropdownMenu open={open} onOpenChange={onOpenChange}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+            aria-label="Conversation actions"
+            title="Actions — or click and hold the chat"
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuItem className="gap-2 text-xs" onSelect={() => o.onPinThread(thread.id, !thread.pinned)}>
+            {thread.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+            {thread.pinned ? "Unpin" : "Pin to top"}
+          </DropdownMenuItem>
+          <DropdownMenuItem className="gap-2 text-xs" onSelect={() => o.setRenamingId(`t:${thread.id}`)}>
+            <Pencil className="h-3.5 w-3.5" />
+            Rename
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="gap-2 text-xs"
+            onSelect={(e) => {
+              // Defer so the menu finishes closing before the dialog opens
+              // (avoids a focus race that can instantly dismiss the dialog).
+              e.preventDefault()
+              setTimeout(() => setMoveOpen(true), 0)
+            }}
+          >
+            <FolderInput className="h-3.5 w-3.5" />
+            Move to…
+          </DropdownMenuItem>
+          <DropdownMenuItem className="gap-2 text-xs" onSelect={() => o.onArchiveThread(thread.id, !thread.archived)}>
+            {thread.archived ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
+            {thread.archived ? "Unarchive" : "Archive"}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="gap-2 text-xs text-destructive focus:text-destructive"
+            onSelect={() => o.onDeleteThread(thread.id)}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <MoveToDialog
+        open={moveOpen}
+        onOpenChange={setMoveOpen}
+        exclude={new Set()}
+        currentFolderId={thread.folderId ?? null}
+        onPick={(fid) => o.onMoveThread(thread.id, fid)}
+        title={`Move "${thread.title || "Untitled"}" to…`}
+      />
+    </>
   )
 }
 
@@ -614,37 +666,57 @@ function FolderNode({ folder, depth }: { folder: NqaiFolder; depth: number }) {
 function FolderMenu({ folder }: { folder: NqaiFolder }) {
   const o = useOrganizer()
   const exclude = useMemo(() => folderSubtreeIds(o.folders, folder.id), [o.folders, folder.id])
+  const [moveOpen, setMoveOpen] = useState(false)
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover:opacity-100"
-          aria-label="Folder actions"
-        >
-          <MoreHorizontal className="h-3.5 w-3.5" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuItem className="gap-2 text-xs" onSelect={() => o.onCreateFolder(folder.id)}>
-          <FolderPlus className="h-3.5 w-3.5" />
-          New subfolder
-        </DropdownMenuItem>
-        <DropdownMenuItem className="gap-2 text-xs" onSelect={() => o.setRenamingId(`f:${folder.id}`)}>
-          <Pencil className="h-3.5 w-3.5" />
-          Rename
-        </DropdownMenuItem>
-        <MoveToSubmenu exclude={exclude} currentFolderId={folder.parentId} onPick={(pid) => o.onMoveFolder(folder.id, pid)} />
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          className="gap-2 text-xs text-destructive focus:text-destructive"
-          onSelect={() => o.onDeleteFolder(folder.id)}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          Delete folder
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+            aria-label="Folder actions"
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuItem className="gap-2 text-xs" onSelect={() => o.onCreateFolder(folder.id)}>
+            <FolderPlus className="h-3.5 w-3.5" />
+            New subfolder
+          </DropdownMenuItem>
+          <DropdownMenuItem className="gap-2 text-xs" onSelect={() => o.setRenamingId(`f:${folder.id}`)}>
+            <Pencil className="h-3.5 w-3.5" />
+            Rename
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="gap-2 text-xs"
+            onSelect={(e) => {
+              e.preventDefault()
+              setTimeout(() => setMoveOpen(true), 0)
+            }}
+          >
+            <FolderInput className="h-3.5 w-3.5" />
+            Move to…
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="gap-2 text-xs text-destructive focus:text-destructive"
+            onSelect={() => o.onDeleteFolder(folder.id)}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete folder
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <MoveToDialog
+        open={moveOpen}
+        onOpenChange={setMoveOpen}
+        exclude={exclude}
+        currentFolderId={folder.parentId}
+        onPick={(pid) => o.onMoveFolder(folder.id, pid)}
+        title={`Move "${folder.name}" to…`}
+      />
+    </>
   )
 }
 
