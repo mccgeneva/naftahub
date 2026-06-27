@@ -20,9 +20,7 @@ import {
   Minus,
   Plus,
   BadgeCheck,
-  FileText,
   ArrowUpRight,
-  Radio,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -46,7 +44,6 @@ import { useActivityLog } from "@/components/activity-tracker"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { useLedger } from "@/lib/ledger-store"
 import { useMarketQuotes } from "@/lib/use-market"
-import { LiveEmbedPanel } from "@/components/dashboard/live-embed-panel"
 import { TradingViewWidget } from "@/components/market/tradingview-widget"
 import { tradingViewSymbol } from "@/lib/market-symbols"
 
@@ -241,6 +238,17 @@ export default function TradingPage() {
       }))
       .filter((g) => g.symbols.length > 0)
   }, [])
+
+  // Symbols for the live ticker-tape banner (one canonical TradingView symbol
+  // per instrument), so the moving strip shows real, self-updating prices.
+  const tickerTapeSymbols = useMemo(
+    () =>
+      INSTRUMENT_META.map((m) => ({
+        proName: tradingViewSymbol(m.symbol),
+        title: m.symbol,
+      })),
+    [],
+  )
   const [autoExecute, setAutoExecute] = useState(true)
   const [tradeTarget, setTradeTarget] = useState<Instrument | null>(null)
   const [tradeSide, setTradeSide] = useState<"LONG" | "SHORT">("LONG")
@@ -366,26 +374,6 @@ export default function TradingPage() {
               Neural Quantum AI trading across commodities, FX, equities, crypto &amp; indices.
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <a
-                href="https://v0-naftahub-daily-report.vercel.app/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary/40 px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-secondary"
-              >
-                <FileText className="h-3.5 w-3.5 text-primary" />
-                View NQAi Daily Report
-                <ArrowUpRight className="h-3.5 w-3.5 text-muted-foreground" />
-              </a>
-              <a
-                href="https://v0-naftahub-trading-monitor.vercel.app/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary/40 px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-secondary"
-              >
-                <Activity className="h-3.5 w-3.5 text-primary" />
-                Live Trading Monitor
-                <ArrowUpRight className="h-3.5 w-3.5 text-muted-foreground" />
-              </a>
               <a
                 href="https://v0-nqai-political-volatility-agent.vercel.app"
                 target="_blank"
@@ -517,33 +505,24 @@ export default function TradingPage() {
         </Card>
       </div>
 
-      {/* Embedded live NQAi tools — auto-refreshing in-page so their data
-          always stays in sync without leaving NAFTAhub. */}
-      <div>
-        <div className="mb-3 flex items-center gap-2">
-          <Radio className="h-4 w-4 text-primary" />
-          <h2 className="font-semibold text-foreground">Live NQAi Tools</h2>
-          <Badge variant="outline" className="border-green-500/30 bg-green-500/10 text-green-500 text-[10px]">
-            Auto-syncing
-          </Badge>
-        </div>
-        <div className="grid gap-4 lg:grid-cols-2">
-          <LiveEmbedPanel
-            title="NQAi Daily Report"
-            description="Daily market intelligence from the NQAi engine"
-            src="https://v0-naftahub-daily-report.vercel.app/"
-            icon={FileText}
-            refreshMs={120000}
-          />
-          <LiveEmbedPanel
-            title="Live Trading Monitor"
-            description="Real-time NQAi execution monitor"
-            src="https://v0-naftahub-trading-monitor.vercel.app/"
-            icon={Activity}
-            refreshMs={30000}
+      {/* Live ticker tape — real, self-updating quotes streamed directly from
+          TradingView so the numbers always match the TradingView app. */}
+      <Card className="bg-card border-border overflow-hidden">
+        <div className="h-[46px] w-full">
+          <TradingViewWidget
+            scriptSrc="embed-widget-ticker-tape.js"
+            config={{
+              symbols: tickerTapeSymbols,
+              showSymbolLogo: true,
+              isTransparent: true,
+              displayMode: "adaptive",
+              colorTheme: "dark",
+              locale: "en",
+            }}
+            height={46}
           />
         </div>
-      </div>
+      </Card>
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
