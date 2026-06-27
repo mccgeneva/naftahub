@@ -63,16 +63,19 @@ export const TRADINGVIEW_SYMBOLS: Record<string, string> = {
   "USD/CAD": "FX:USDCAD",
   "EUR/CHF": "FX:EURCHF",
   "USD/SGD": "FX:USDSGD",
-  // Commodities
+  // Commodities. NOTE: exchange futures symbols (NYMEX:NG1!, NYMEX:HO1!,
+  // NYMEX:RB1!, TVC:DXY) render BLANK in the free TradingView quotes widget on
+  // weekends/closed sessions and for some feeds require a paid data agreement.
+  // CAPITALCOM CFD symbols quote continuously and render reliably, so use them.
   "XAU/USD": "OANDA:XAUUSD",
   BRENT: "TVC:UKOIL",
   WTI: "TVC:USOIL",
-  NG: "NYMEX:NG1!",
+  NG: "CAPITALCOM:NATURALGAS",
   // Energy products
-  ULSD: "NYMEX:HO1!",
-  RBOB: "NYMEX:RB1!",
+  ULSD: "CAPITALCOM:HEATINGOIL",
+  RBOB: "CAPITALCOM:GASOLINE",
   // FX index
-  DXY: "TVC:DXY",
+  DXY: "CAPITALCOM:DXY",
   // Indices — use FOREXCOM CFD index symbols, which render with delayed data
   // in free TradingView widgets (the native SP:/NASDAQ: feeds require a paid
   // real-time data agreement and otherwise show an error in the widget).
