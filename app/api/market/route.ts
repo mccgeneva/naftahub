@@ -48,8 +48,12 @@ function toQuote(meta: SparkMeta) {
   return { price, changePct: Number(changePct.toFixed(2)) }
 }
 
-// Fetch many Yahoo symbols in a single request, retrying on the alternate host.
-async function fetchBatch(yahooSymbols: string[]): Promise<Record<string, { price: number; changePct: number }>> {
+// Yahoo's spark endpoint silently truncates large symbol lists (it returns only
+// ~10 results when 20+ are requested), so we split into small chunks and fetch
+// them in parallel. Each chunk retries on the alternate Yahoo host.
+const CHUNK_SIZE = 8
+
+async function fetchChunk(yahooSymbols: string[]): Promise<Record<string, { price: number; changePct: number }>> {
   const out: Record<string, { price: number; changePct: number }> = {}
   if (yahooSymbols.length === 0) return out
   const query = yahooSymbols.map((s) => encodeURIComponent(s)).join(",")
@@ -57,13 +61,10 @@ async function fetchBatch(yahooSymbols: string[]): Promise<Record<string, { pric
 
   for (const host of hosts) {
     try {
-      const res = await fetch(
-        `https://${host}/v7/finance/spark?symbols=${query}&interval=1d&range=1d`,
-        {
-          headers: { "User-Agent": UA, Accept: "application/json" },
-          cache: "no-store",
-        },
-      )
+      const res = await fetch(`https://${host}/v7/finance/spark?symbols=${query}&interval=1d&range=1d`, {
+        headers: { "User-Agent": UA, Accept: "application/json" },
+        cache: "no-store",
+      })
       if (!res.ok) continue
       const json = (await res.json()) as SparkResponse
       const results = json.spark?.result ?? []
@@ -72,12 +73,24 @@ async function fetchBatch(yahooSymbols: string[]): Promise<Record<string, { pric
         const quote = toQuote(meta)
         if (r.symbol && quote) out[r.symbol] = quote
       }
-      if (Object.keys(out).length > 0) return out
+      // Got everything we asked for — no need to try the fallback host.
+      if (Object.keys(out).length >= yahooSymbols.length) return out
     } catch {
       // try next host
     }
   }
   return out
+}
+
+// Fetch every requested Yahoo symbol by chunking the list and merging results.
+async function fetchBatch(yahooSymbols: string[]): Promise<Record<string, { price: number; changePct: number }>> {
+  if (yahooSymbols.length === 0) return {}
+  const chunks: string[][] = []
+  for (let i = 0; i < yahooSymbols.length; i += CHUNK_SIZE) {
+    chunks.push(yahooSymbols.slice(i, i + CHUNK_SIZE))
+  }
+  const results = await Promise.all(chunks.map((c) => fetchChunk(c)))
+  return Object.assign({}, ...results)
 }
 
 export async function GET(request: Request) {

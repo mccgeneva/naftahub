@@ -68,26 +68,39 @@ type Instrument = {
 
 // Instrument metadata + analyst signal/confidence. Live price and change are
 // merged in from the market-data feed at render time (see useMarketQuotes);
-// the seed price/change here are only fallbacks until quotes load.
+// the seed price/change here are only fallbacks until quotes load and are never
+// shown on screen until a real quote merges in (see the `live` flag).
 const INSTRUMENT_META: Instrument[] = [
-  { symbol: "XAU/USD", name: "Gold Spot", category: "Commodities", price: 2331.4, decimals: 2, change: 0.62, signal: "BUY", confidence: 91 },
-  { symbol: "WTI", name: "Crude Oil", category: "Commodities", price: 78.34, decimals: 2, change: -0.41, signal: "HOLD", confidence: 64 },
-  { symbol: "NG", name: "Natural Gas", category: "Commodities", price: 2.61, decimals: 3, change: 1.27, signal: "BUY", confidence: 78 },
-  { symbol: "EUR/USD", name: "Euro / Dollar", category: "Forex", price: 1.0892, decimals: 4, change: 0.15, signal: "BUY", confidence: 73 },
-  { symbol: "USD/JPY", name: "Dollar / Yen", category: "Forex", price: 149.52, decimals: 2, change: -0.12, signal: "SELL", confidence: 69 },
-  { symbol: "AAPL", name: "Apple Inc.", category: "Equities", price: 187.52, decimals: 2, change: 0.83, signal: "BUY", confidence: 84 },
-  { symbol: "MSFT", name: "Microsoft Corp.", category: "Equities", price: 426.89, decimals: 2, change: 0.54, signal: "BUY", confidence: 86 },
-  { symbol: "AMZN", name: "Amazon.com Inc.", category: "Equities", price: 184.72, decimals: 2, change: 0.41, signal: "BUY", confidence: 79 },
-  { symbol: "GOOGL", name: "Alphabet Inc.", category: "Equities", price: 178.35, decimals: 2, change: -0.22, signal: "HOLD", confidence: 68 },
-  { symbol: "META", name: "Meta Platforms", category: "Equities", price: 504.11, decimals: 2, change: 1.12, signal: "BUY", confidence: 82 },
-  { symbol: "TSLA", name: "Tesla Inc.", category: "Equities", price: 241.18, decimals: 2, change: -1.04, signal: "SELL", confidence: 71 },
-  { symbol: "NVDA", name: "Nvidia Corp.", category: "Equities", price: 122.76, decimals: 2, change: 2.31, signal: "BUY", confidence: 93 },
-  { symbol: "AMD", name: "Adv. Micro Devices", category: "Equities", price: 162.44, decimals: 2, change: 1.68, signal: "BUY", confidence: 77 },
-  { symbol: "JPM", name: "JPMorgan Chase", category: "Equities", price: 198.53, decimals: 2, change: 0.29, signal: "HOLD", confidence: 65 },
-  { symbol: "BTC/USD", name: "Bitcoin", category: "Crypto", price: 64210, decimals: 0, change: 1.92, signal: "BUY", confidence: 88 },
-  { symbol: "ETH/USD", name: "Ethereum", category: "Crypto", price: 3412, decimals: 0, change: 0.74, signal: "HOLD", confidence: 61 },
-  { symbol: "NDX", name: "NASDAQ 100", category: "Indices", price: 19743, decimals: 0, change: 0.46, signal: "BUY", confidence: 80 },
-  { symbol: "SPX", name: "S&P 500", category: "Indices", price: 5471, decimals: 0, change: 0.31, signal: "HOLD", confidence: 66 },
+  // Commodities & energy
+  { symbol: "XAU/USD", name: "Gold Spot", category: "Commodities", price: 4103.0, decimals: 2, change: 1.37, signal: "BUY", confidence: 91 },
+  { symbol: "WTI", name: "Crude Oil · WTI (USOIL)", category: "Commodities", price: 70.24, decimals: 2, change: -2.34, signal: "HOLD", confidence: 64 },
+  { symbol: "BRENT", name: "Crude Oil · Brent (UKOIL)", category: "Commodities", price: 73.57, decimals: 2, change: -2.56, signal: "HOLD", confidence: 63 },
+  { symbol: "ULSD", name: "Gulf Diesel · ULSD", category: "Commodities", price: 3.132, decimals: 4, change: -2.41, signal: "HOLD", confidence: 60 },
+  { symbol: "RBOB", name: "Gasoline · RBOB", category: "Commodities", price: 2.853, decimals: 4, change: -1.71, signal: "HOLD", confidence: 58 },
+  { symbol: "NG", name: "Natural Gas", category: "Commodities", price: 3.287, decimals: 3, change: -0.24, signal: "BUY", confidence: 78 },
+  // Forex
+  { symbol: "DXY", name: "US Dollar Index", category: "Forex", price: 101.37, decimals: 2, change: 0.01, signal: "HOLD", confidence: 67 },
+  { symbol: "EUR/USD", name: "Euro / Dollar", category: "Forex", price: 1.139, decimals: 4, change: 0.11, signal: "BUY", confidence: 73 },
+  { symbol: "USD/JPY", name: "Dollar / Yen", category: "Forex", price: 161.73, decimals: 2, change: -0.03, signal: "SELL", confidence: 69 },
+  // Equities
+  { symbol: "AAPL", name: "Apple Inc.", category: "Equities", price: 283.78, decimals: 2, change: 3.14, signal: "BUY", confidence: 84 },
+  { symbol: "MSFT", name: "Microsoft Corp.", category: "Equities", price: 372.97, decimals: 2, change: 5.71, signal: "BUY", confidence: 86 },
+  { symbol: "AMZN", name: "Amazon.com Inc.", category: "Equities", price: 232.69, decimals: 2, change: 2.5, signal: "BUY", confidence: 79 },
+  { symbol: "GOOGL", name: "Alphabet Inc.", category: "Equities", price: 337.39, decimals: 2, change: -1.84, signal: "HOLD", confidence: 68 },
+  { symbol: "META", name: "Meta Platforms", category: "Equities", price: 550.25, decimals: 2, change: 1.36, signal: "BUY", confidence: 82 },
+  { symbol: "TSLA", name: "Tesla Inc.", category: "Equities", price: 379.71, decimals: 2, change: 1.22, signal: "SELL", confidence: 71 },
+  { symbol: "NVDA", name: "Nvidia Corp.", category: "Equities", price: 192.53, decimals: 2, change: -1.64, signal: "BUY", confidence: 93 },
+  { symbol: "PLTR", name: "Palantir Tech.", category: "Equities", price: 112.93, decimals: 2, change: 5.27, signal: "BUY", confidence: 81 },
+  { symbol: "ORCL", name: "Oracle Corp.", category: "Equities", price: 148.53, decimals: 2, change: -2.58, signal: "HOLD", confidence: 67 },
+  { symbol: "MSTR", name: "Strategy (MSTR)", category: "Equities", price: 82.31, decimals: 2, change: -3.54, signal: "HOLD", confidence: 62 },
+  { symbol: "AMD", name: "Adv. Micro Devices", category: "Equities", price: 521.58, decimals: 2, change: -2.06, signal: "BUY", confidence: 77 },
+  { symbol: "JPM", name: "JPMorgan Chase", category: "Equities", price: 329.05, decimals: 2, change: -1.81, signal: "HOLD", confidence: 65 },
+  // Crypto
+  { symbol: "BTC/USD", name: "Bitcoin", category: "Crypto", price: 60226, decimals: 0, change: 0.35, signal: "BUY", confidence: 88 },
+  { symbol: "ETH/USD", name: "Ethereum", category: "Crypto", price: 1579, decimals: 0, change: 0.14, signal: "HOLD", confidence: 61 },
+  // Indices
+  { symbol: "NDX", name: "NASDAQ 100", category: "Indices", price: 29118, decimals: 0, change: -1.09, signal: "BUY", confidence: 80 },
+  { symbol: "SPX", name: "S&P 500", category: "Indices", price: 7354, decimals: 0, change: -0.05, signal: "HOLD", confidence: 66 },
 ]
 
 const INSTRUMENT_SYMBOLS = INSTRUMENT_META.map((m) => m.symbol)

@@ -18,6 +18,11 @@ export const YAHOO_SYMBOLS: Record<string, string> = {
   BRENT: "BZ=F",
   WTI: "CL=F",
   NG: "NG=F",
+  // Energy products (front-month futures used as the reference for physical grades)
+  ULSD: "HO=F", // NY Harbor ULSD — proxy for US Gulf diesel/gasoil
+  RBOB: "RB=F", // RBOB gasoline
+  // FX index
+  DXY: "DX-Y.NYB", // US Dollar Index
   // Indices
   SPX: "^GSPC",
   NDX: "^NDX",
@@ -39,6 +44,9 @@ export const YAHOO_SYMBOLS: Record<string, string> = {
   NVDA: "NVDA",
   AMD: "AMD",
   JPM: "JPM",
+  PLTR: "PLTR",
+  ORCL: "ORCL",
+  MSTR: "MSTR",
 }
 
 // Maps the platform's display symbols to TradingView's "EXCHANGE:SYMBOL"
@@ -60,6 +68,11 @@ export const TRADINGVIEW_SYMBOLS: Record<string, string> = {
   BRENT: "TVC:UKOIL",
   WTI: "TVC:USOIL",
   NG: "NYMEX:NG1!",
+  // Energy products
+  ULSD: "NYMEX:HO1!",
+  RBOB: "NYMEX:RB1!",
+  // FX index
+  DXY: "TVC:DXY",
   // Indices — use FOREXCOM CFD index symbols, which render with delayed data
   // in free TradingView widgets (the native SP:/NASDAQ: feeds require a paid
   // real-time data agreement and otherwise show an error in the widget).
@@ -83,6 +96,9 @@ export const TRADINGVIEW_SYMBOLS: Record<string, string> = {
   NVDA: "NASDAQ:NVDA",
   AMD: "NASDAQ:AMD",
   JPM: "NYSE:JPM",
+  PLTR: "NASDAQ:PLTR",
+  ORCL: "NYSE:ORCL",
+  MSTR: "NASDAQ:MSTR",
 }
 
 /** TradingView symbol for a display symbol, falling back to the raw symbol. */
