@@ -1,5 +1,6 @@
 "use client"
 
+import { usePathname } from "next/navigation"
 import { TradingViewWidget } from "@/components/market/tradingview-widget"
 import { TRADINGVIEW_SYMBOLS } from "@/lib/market-symbols"
 
@@ -23,6 +24,11 @@ const TICKER: { display: string; title: string }[] = [
 ]
 
 export function MarketTicker() {
+  const pathname = usePathname()
+  // On the NQAi console only, brand the ticker with the NAFTAhub logo instead of
+  // the generic "Markets" label. Reverts automatically on every other route.
+  const isNqai = pathname?.startsWith("/dashboard/nqai")
+
   const config = {
     symbols: TICKER.map((t) => ({ proName: TRADINGVIEW_SYMBOLS[t.display] ?? t.display, title: t.title })),
     showSymbolLogo: true,
@@ -34,10 +40,20 @@ export function MarketTicker() {
 
   return (
     <div className="flex h-12 items-center overflow-hidden border-b border-border bg-background">
-      <span className="flex h-full shrink-0 items-center gap-1.5 border-r border-border bg-primary px-3 text-[10px] font-bold uppercase tracking-wider text-primary-foreground">
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary-foreground" />
-        Markets
-      </span>
+      {isNqai ? (
+        <span className="flex h-full shrink-0 items-center border-r border-border bg-white px-3">
+          <img
+            src="/images/naftahub-logo.png"
+            alt="NAFTAhub"
+            className="h-6 w-auto object-contain"
+          />
+        </span>
+      ) : (
+        <span className="flex h-full shrink-0 items-center gap-1.5 border-r border-border bg-primary px-3 text-[10px] font-bold uppercase tracking-wider text-primary-foreground">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary-foreground" />
+          Markets
+        </span>
+      )}
       <div className="h-full flex-1 overflow-hidden">
         <TradingViewWidget scriptSrc="embed-widget-ticker-tape.js" config={config} height="100%" />
       </div>
