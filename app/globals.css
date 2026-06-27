@@ -183,6 +183,38 @@
   [class*="tabular"] {
     font-variant-numeric: tabular-nums;
   }
+
+  /* Smooth (non-flashing) fade for the card focus-within highlight below. */
+  [data-slot="card"] {
+    @apply transition-[border-color,box-shadow] duration-200;
+  }
+}
+
+/* ----- Platform-wide active / focus feedback -----
+   Consistent, accessible (keyboard + touch) visual feedback for interactive
+   elements. Kept UNLAYERED (outside @layer) so it reliably overrides Tailwind
+   utility classes such as the card's default `border`. Buttons, tabs and inputs
+   ship their own focus rings; these rules cover links, summaries and custom
+   controls that otherwise have none. */
+a:focus-visible,
+summary:focus-visible,
+label:focus-visible,
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: none;
+  border-radius: var(--radius-md);
+  box-shadow:
+    0 0 0 2px var(--background),
+    0 0 0 4px color-mix(in oklab, var(--ring) 70%, transparent);
+}
+
+/* Cards / panels visibly highlight while a control inside them is in use, then
+   revert automatically once focus leaves — no flashing, smooth fade. */
+[data-slot="card"]:focus-within {
+  border-color: color-mix(in oklab, var(--primary) 50%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--primary) 30%, transparent);
 }
 
 /* Terminal scrollbar */

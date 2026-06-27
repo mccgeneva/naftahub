@@ -192,7 +192,7 @@ export function DashboardSidebar() {
                       className={cn(
                         "relative flex w-full items-center justify-center rounded-lg px-2 py-2.5 transition-colors",
                         active
-                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                          ? "bg-sidebar-accent text-sidebar-accent-foreground ring-1 ring-primary/40 [&>svg]:text-primary"
                           : "text-sidebar-foreground hover:bg-sidebar-accent/50"
                       )}
                     >
@@ -222,7 +222,7 @@ export function DashboardSidebar() {
                           className={cn(
                             "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
                             isActive(item.href)
-                              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                              ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium shadow-[inset_3px_0_0_0_var(--primary)] [&>svg]:text-primary"
                               : "text-sidebar-foreground hover:bg-sidebar-accent/50"
                           )}
                         >
@@ -255,7 +255,7 @@ export function DashboardSidebar() {
                     className={cn(
                       "flex w-full items-center justify-between rounded-lg px-2 py-2 text-xs font-semibold uppercase tracking-wider transition-colors",
                       "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
-                      groupContainsActive(group) && "text-sidebar-foreground"
+                      groupContainsActive(group) && "text-primary"
                     )}
                   >
                     <span className="flex items-center gap-2">
@@ -277,7 +277,7 @@ export function DashboardSidebar() {
                           className={cn(
                             "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
                             isActive(item.href)
-                              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                              ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium shadow-[inset_3px_0_0_0_var(--primary)] [&>svg]:text-primary"
                               : "text-sidebar-foreground hover:bg-sidebar-accent/50"
                           )}
                         >

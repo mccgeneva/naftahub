@@ -157,7 +157,12 @@ export function MobileSidebar() {
                 onOpenChange={() => toggleGroup(group.label)}
                 className="pb-1"
               >
-                <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground">
+                <CollapsibleTrigger
+                  className={cn(
+                    "flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-wider transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+                    hasActive ? "text-primary" : "text-muted-foreground",
+                  )}
+                >
                   <span className="flex items-center gap-2">
                     {group.label}
                     {!isOpen && hasActive && (
@@ -184,7 +189,7 @@ export function MobileSidebar() {
                           className={cn(
                             "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
                             pathname === item.href
-                              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                              ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium shadow-[inset_3px_0_0_0_var(--primary)] [&>svg]:text-primary"
                               : "text-sidebar-foreground hover:bg-sidebar-accent/50",
                           )}
                         >
