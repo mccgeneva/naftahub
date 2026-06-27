@@ -62,6 +62,8 @@ type Instrument = {
   change: number
   signal: Signal
   confidence: number
+  /** True once a real quote from the live feed has been merged in. */
+  live?: boolean
 }
 
 // Instrument metadata + analyst signal/confidence. Live price and change are
@@ -211,8 +213,11 @@ export default function TradingPage() {
   const instruments = useMemo<Instrument[]>(
     () =>
       INSTRUMENT_META.map((m) => {
-        const q = quotes[m.symbol]
-        return q ? { ...m, price: q.price, change: q.changePct } : m
+      const q = quotes[m.symbol]
+      // Only mark an instrument "live" once a real quote merges in. Until then
+      // the seed price/change are placeholders and MUST NOT be shown as if they
+      // were current market data (they would otherwise look wrong vs TradingView).
+      return q ? { ...m, price: q.price, change: q.changePct, live: true } : { ...m, live: false }
       }),
     [quotes],
   )
@@ -628,27 +633,43 @@ export default function TradingPage() {
                   </div>
                   <div className="flex items-center justify-between gap-4 sm:justify-end">
                     <div className="text-right">
-                      <p className="font-mono text-sm font-semibold text-foreground">
-                        {formatPrice(it.price, it.decimals)}
-                      </p>
-                      <p
-                        className={cn(
-                          "flex items-center justify-end text-xs font-medium",
-                          it.change >= 0 ? "text-green-500" : "text-red-500",
-                        )}
-                      >
-                        {it.change >= 0 ? (
-                          <TrendingUp className="mr-0.5 h-3 w-3" />
-                        ) : (
-                          <TrendingDown className="mr-0.5 h-3 w-3" />
-                        )}
-                        {Math.abs(it.change).toFixed(2)}%
-                      </p>
+                      {it.live ? (
+                        <>
+                          <p className="font-mono text-sm font-semibold text-foreground">
+                            {formatPrice(it.price, it.decimals)}
+                          </p>
+                          <p
+                            className={cn(
+                              "flex items-center justify-end text-xs font-medium",
+                              it.change >= 0 ? "text-green-500" : "text-red-500",
+                            )}
+                          >
+                            {it.change >= 0 ? (
+                              <TrendingUp className="mr-0.5 h-3 w-3" />
+                            ) : (
+                              <TrendingDown className="mr-0.5 h-3 w-3" />
+                            )}
+                            {Math.abs(it.change).toFixed(2)}%
+                          </p>
+                        </>
+                      ) : (
+                        // Never render the stale seed price — show a syncing
+                        // placeholder until the live quote arrives.
+                        <>
+                          <span className="block h-4 w-16 animate-pulse rounded bg-muted" aria-hidden />
+                          <span className="mt-1 block text-[10px] text-muted-foreground">syncing…</span>
+                        </>
+                      )}
                     </div>
                     <Badge variant="outline" className={cn("w-14 justify-center text-[10px]", signalStyles[it.signal])}>
                       {it.signal}
                     </Badge>
-                    <Button size="sm" className="h-8" onClick={() => openTrade(it, it.signal === "SELL" ? "SHORT" : "LONG")}>
+                    <Button
+                      size="sm"
+                      className="h-8"
+                      disabled={!it.live}
+                      onClick={() => openTrade(it, it.signal === "SELL" ? "SHORT" : "LONG")}
+                    >
                       Trade
                     </Button>
                   </div>
