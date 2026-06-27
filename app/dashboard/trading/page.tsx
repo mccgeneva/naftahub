@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useMemo } from "react"
+import { useState, useRef, useMemo, useEffect } from "react"
 import {
   Activity,
   TrendingUp,
@@ -23,6 +23,7 @@ import {
   BadgeCheck,
   FileText,
   ArrowUpRight,
+  Radio,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -46,6 +47,7 @@ import { useActivityLog } from "@/components/activity-tracker"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { useLedger } from "@/lib/ledger-store"
 import { useMarketQuotes } from "@/lib/use-market"
+import { LiveEmbedPanel } from "@/components/dashboard/live-embed-panel"
 import { TradingViewWidget } from "@/components/market/tradingview-widget"
 import { tradingViewSymbol } from "@/lib/market-symbols"
 
@@ -191,8 +193,19 @@ export default function TradingPage() {
   // Real funds available to the client, aggregated from the ledger (EUR equiv.).
   const availableCapital = totalIn("EUR")
   // Live market prices for every instrument, refreshed automatically.
-  const { quotes, updatedAt, isLoading: isRefreshing, refresh } = useMarketQuotes(INSTRUMENT_SYMBOLS)
+  const { quotes, updatedAt, isValidating, isLoading: isRefreshing, refresh } = useMarketQuotes(INSTRUMENT_SYMBOLS)
   const lastTick = updatedAt ?? new Date()
+
+  // Ticking "Xs ago" label so the freshness of the in-app feed is always visible
+  // and visibly counts up between the 12s auto-refreshes.
+  const [feedSecondsAgo, setFeedSecondsAgo] = useState(0)
+  useEffect(() => {
+    if (!updatedAt) return
+    const tick = () => setFeedSecondsAgo(Math.max(0, Math.round((Date.now() - updatedAt.getTime()) / 1000)))
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [updatedAt])
   // Merge live price + change onto the instrument metadata; analyst signal and
   // confidence are kept as-is, only the market price/change come from the feed.
   const instruments = useMemo<Instrument[]>(
@@ -479,6 +492,34 @@ export default function TradingPage() {
         </Card>
       </div>
 
+      {/* Embedded live NQAi tools — auto-refreshing in-page so their data
+          always stays in sync without leaving NAFTAhub. */}
+      <div>
+        <div className="mb-3 flex items-center gap-2">
+          <Radio className="h-4 w-4 text-primary" />
+          <h2 className="font-semibold text-foreground">Live NQAi Tools</h2>
+          <Badge variant="outline" className="border-green-500/30 bg-green-500/10 text-green-500 text-[10px]">
+            Auto-syncing
+          </Badge>
+        </div>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <LiveEmbedPanel
+            title="NQAi Daily Report"
+            description="Daily market intelligence from the NQAi engine"
+            src="https://v0-naftahub-daily-report.vercel.app/"
+            icon={FileText}
+            refreshMs={120000}
+          />
+          <LiveEmbedPanel
+            title="Live Trading Monitor"
+            description="Real-time NQAi execution monitor"
+            src="https://v0-naftahub-trading-monitor.vercel.app/"
+            icon={Activity}
+            refreshMs={30000}
+          />
+        </div>
+      </div>
+
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
         {/* Sticky section nav: stays pinned below the header so users can jump
@@ -530,12 +571,39 @@ export default function TradingPage() {
           <Card className="bg-card border-border">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <div>
-                <CardTitle className="text-lg font-semibold">Live Markets</CardTitle>
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-lg font-semibold">Live Markets</CardTitle>
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+                      isValidating
+                        ? "border-primary/30 bg-primary/10 text-primary"
+                        : "border-green-500/30 bg-green-500/10 text-green-500",
+                    )}
+                  >
+                    <span className="relative flex h-1.5 w-1.5">
+                      <span
+                        className={cn(
+                          "absolute inline-flex h-full w-full animate-ping rounded-full",
+                          isValidating ? "bg-primary/70" : "bg-green-500/70",
+                        )}
+                      />
+                      <span
+                        className={cn(
+                          "relative inline-flex h-1.5 w-1.5 rounded-full",
+                          isValidating ? "bg-primary" : "bg-green-500",
+                        )}
+                      />
+                    </span>
+                    {isValidating ? "SYNCING" : "LIVE"}
+                  </span>
+                </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  NQAi feed · updated {lastTick.toLocaleTimeString()}
+                  NQAi feed · updated {feedSecondsAgo <= 1 ? "just now" : `${feedSecondsAgo}s ago`} ·{" "}
+                  {lastTick.toLocaleTimeString()}
                 </p>
               </div>
-              <Button variant="ghost" size="icon" onClick={refresh} disabled={isRefreshing}>
+              <Button variant="ghost" size="icon" onClick={refresh} disabled={isRefreshing} aria-label="Refresh market data">
                 <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
               </Button>
             </CardHeader>
