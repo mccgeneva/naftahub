@@ -189,7 +189,7 @@ export function MobileSidebar() {
                           className={cn(
                             "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
                             pathname === item.href
-                              ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium shadow-[inset_3px_0_0_0_var(--primary)] [&>svg]:text-primary"
+                              ? "bg-primary/15 text-primary font-semibold shadow-[inset_4px_0_0_0_var(--primary)] [&>svg]:text-primary"
                               : "text-sidebar-foreground hover:bg-sidebar-accent/50",
                           )}
                         >
