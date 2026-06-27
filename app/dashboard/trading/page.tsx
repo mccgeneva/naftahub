@@ -1,13 +1,12 @@
 "use client"
 
-import { useState, useRef, useMemo, useEffect } from "react"
+import { useState, useRef, useMemo } from "react"
 import {
   Activity,
   TrendingUp,
   TrendingDown,
   Zap,
   Shield,
-  RefreshCw,
   ArrowRight,
   Crown,
   Sparkles,
@@ -207,33 +206,41 @@ export default function TradingPage() {
   const { totalIn } = useLedger()
   // Real funds available to the client, aggregated from the ledger (EUR equiv.).
   const availableCapital = totalIn("EUR")
-  // Live market prices for every instrument, refreshed automatically.
-  const { quotes, updatedAt, isValidating, isLoading: isRefreshing, refresh } = useMarketQuotes(INSTRUMENT_SYMBOLS)
-  const lastTick = updatedAt ?? new Date()
-
-  // Ticking "Xs ago" label so the freshness of the in-app feed is always visible
-  // and visibly counts up between the 12s auto-refreshes.
-  const [feedSecondsAgo, setFeedSecondsAgo] = useState(0)
-  useEffect(() => {
-    if (!updatedAt) return
-    const tick = () => setFeedSecondsAgo(Math.max(0, Math.round((Date.now() - updatedAt.getTime()) / 1000)))
-    tick()
-    const id = setInterval(tick, 1000)
-    return () => clearInterval(id)
-  }, [updatedAt])
+  // Live market prices power the trade-ticket execution price and the AI-signal
+  // context. The on-screen price BOARD itself is rendered by TradingView's own
+  // widget (see "Live Markets" below) so the displayed numbers always match the
+  // user's TradingView app exactly. Yahoo's spot-vs-futures symbol differences
+  // (e.g. gold) and weekend-frozen closes were the source of the recurring
+  // "prices don't match TradingView / not updating" reports.
+  const { quotes } = useMarketQuotes(INSTRUMENT_SYMBOLS)
   // Merge live price + change onto the instrument metadata; analyst signal and
   // confidence are kept as-is, only the market price/change come from the feed.
   const instruments = useMemo<Instrument[]>(
     () =>
       INSTRUMENT_META.map((m) => {
-      const q = quotes[m.symbol]
-      // Only mark an instrument "live" once a real quote merges in. Until then
-      // the seed price/change are placeholders and MUST NOT be shown as if they
-      // were current market data (they would otherwise look wrong vs TradingView).
-      return q ? { ...m, price: q.price, change: q.changePct, live: true } : { ...m, live: false }
+        const q = quotes[m.symbol]
+        // Only mark an instrument "live" once a real quote merges in, so the
+        // trade ticket never executes against a stale seed price.
+        return q ? { ...m, price: q.price, change: q.changePct, live: true } : { ...m, live: false }
       }),
     [quotes],
   )
+
+  // Group every instrument by asset class for the TradingView "Market Quotes"
+  // widget, mapping each to its canonical TradingView symbol so the board shows
+  // exactly the prices the user sees on TradingView.
+  const quoteGroups = useMemo(() => {
+    const order: Instrument["category"][] = ["Commodities", "Forex", "Indices", "Equities", "Crypto"]
+    return order
+      .map((cat) => ({
+        name: cat,
+        symbols: INSTRUMENT_META.filter((m) => m.category === cat).map((m) => ({
+          name: tradingViewSymbol(m.symbol),
+          displayName: `${m.symbol} · ${m.name}`,
+        })),
+      }))
+      .filter((g) => g.symbols.length > 0)
+  }, [])
   const [autoExecute, setAutoExecute] = useState(true)
   const [tradeTarget, setTradeTarget] = useState<Instrument | null>(null)
   const [tradeSide, setTradeSide] = useState<"LONG" | "SHORT">("LONG")
@@ -587,93 +594,71 @@ export default function TradingPage() {
           </Card>
 
           <Card className="bg-card border-border">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <div>
-                <div className="flex items-center gap-2">
-                  <CardTitle className="text-lg font-semibold">Live Markets</CardTitle>
-                  <span
-                    className={cn(
-                      "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
-                      isValidating
-                        ? "border-primary/30 bg-primary/10 text-primary"
-                        : "border-green-500/30 bg-green-500/10 text-green-500",
-                    )}
-                  >
-                    <span className="relative flex h-1.5 w-1.5">
-                      <span
-                        className={cn(
-                          "absolute inline-flex h-full w-full animate-ping rounded-full",
-                          isValidating ? "bg-primary/70" : "bg-green-500/70",
-                        )}
-                      />
-                      <span
-                        className={cn(
-                          "relative inline-flex h-1.5 w-1.5 rounded-full",
-                          isValidating ? "bg-primary" : "bg-green-500",
-                        )}
-                      />
-                    </span>
-                    {isValidating ? "SYNCING" : "LIVE"}
+            <CardHeader className="pb-2">
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-lg font-semibold">Live Markets</CardTitle>
+                <span className="inline-flex items-center gap-1 rounded-full border border-green-500/30 bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-500">
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-500/70" />
+                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-green-500" />
                   </span>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  NQAi feed · updated {feedSecondsAgo <= 1 ? "just now" : `${feedSecondsAgo}s ago`} ·{" "}
-                  {lastTick.toLocaleTimeString()}
-                </p>
+                  LIVE
+                </span>
               </div>
-              <Button variant="ghost" size="icon" onClick={refresh} disabled={isRefreshing} aria-label="Refresh market data">
-                <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
-              </Button>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Real-time quotes streamed from TradingView — the exact prices shown in your TradingView app.
+              </p>
             </CardHeader>
-            <CardContent className="space-y-2">
+            <CardContent>
+              <div className="h-[560px] w-full">
+                <TradingViewWidget
+                  scriptSrc="embed-widget-market-quotes.js"
+                  config={{
+                    width: "100%",
+                    height: "100%",
+                    symbolsGroups: quoteGroups,
+                    showSymbolLogo: true,
+                    isTransparent: true,
+                    colorTheme: "dark",
+                    backgroundColor: "rgba(0,0,0,0)",
+                    locale: "en",
+                  }}
+                  height="100%"
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Quick Trade — deploy an NQAi position. No price is shown here so it
+              can never contradict the TradingView board above; the execution
+              price is captured live from the feed at order time. */}
+          <Card className="bg-card border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg font-semibold">Quick Trade</CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Deploy a position with the NQAi engine — execution price is taken live at order time.
+              </p>
+            </CardHeader>
+            <CardContent className="grid gap-2 sm:grid-cols-2">
               {instruments.map((it) => (
                 <div
                   key={it.symbol}
-                  className="flex flex-col gap-3 rounded-lg border border-border bg-secondary/30 p-3 sm:flex-row sm:items-center sm:justify-between"
+                  className="flex items-center justify-between gap-3 rounded-lg border border-border bg-secondary/30 p-3"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary">
                       <span className="text-[10px] font-semibold text-foreground">
                         {it.symbol.split("/")[0].slice(0, 4)}
                       </span>
                     </div>
-                    <div>
-                      <p className="text-sm font-medium text-foreground">{it.symbol}</p>
-                      <p className="text-xs text-muted-foreground">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">{it.symbol}</p>
+                      <p className="truncate text-xs text-muted-foreground">
                         {it.name} · {it.category}
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between gap-4 sm:justify-end">
-                    <div className="text-right">
-                      {it.live ? (
-                        <>
-                          <p className="font-mono text-sm font-semibold text-foreground">
-                            {formatPrice(it.price, it.decimals)}
-                          </p>
-                          <p
-                            className={cn(
-                              "flex items-center justify-end text-xs font-medium",
-                              it.change >= 0 ? "text-green-500" : "text-red-500",
-                            )}
-                          >
-                            {it.change >= 0 ? (
-                              <TrendingUp className="mr-0.5 h-3 w-3" />
-                            ) : (
-                              <TrendingDown className="mr-0.5 h-3 w-3" />
-                            )}
-                            {Math.abs(it.change).toFixed(2)}%
-                          </p>
-                        </>
-                      ) : (
-                        // Never render the stale seed price — show a syncing
-                        // placeholder until the live quote arrives.
-                        <>
-                          <span className="block h-4 w-16 animate-pulse rounded bg-muted" aria-hidden />
-                          <span className="mt-1 block text-[10px] text-muted-foreground">syncing…</span>
-                        </>
-                      )}
-                    </div>
+                  <div className="flex shrink-0 items-center gap-2">
                     <Badge variant="outline" className={cn("w-14 justify-center text-[10px]", signalStyles[it.signal])}>
                       {it.signal}
                     </Badge>
