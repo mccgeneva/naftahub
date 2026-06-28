@@ -61,7 +61,24 @@ async function readAccounts(userId: string): Promise<GatewayAccount[]> {
     `SELECT * FROM gateway_accounts WHERE user_id = $1 ORDER BY submitted_at DESC NULLS LAST`,
     [userId],
   )
-  return rows.map(rowToAccount)
+  // Defense-in-depth ownership tripwire: the WHERE clause already scopes by
+  // user_id, but we re-verify every row's owning column matches the requested
+  // owner before returning. This guarantees a foreign client's gateway account
+  // (and its funding history) can NEVER render for another signed-in user, even
+  // if a future change or a stale build weakens the query above. Any mismatch is
+  // dropped and logged loudly rather than leaked.
+  const owned: GatewayAccount[] = []
+  for (const row of rows) {
+    const rowOwner = row.user_id as string
+    if (rowOwner !== userId) {
+      console.log(
+        `[v0] gateway ownership tripwire: dropped account ${String(row.request_id)} owned by ${rowOwner} from read scoped to ${userId}`,
+      )
+      continue
+    }
+    owned.push(rowToAccount(row))
+  }
+  return owned
 }
 
 /** Read every user's gateway accounts (admin queue). */
@@ -109,8 +126,12 @@ async function readAccount(userId: string, requestId: string): Promise<GatewayAc
 
 /** Return the signed-in user's gateway account requests. */
 export async function getMyGatewayAccounts(): Promise<GatewayAccount[]> {
+  // getSessionUser() resolves through resolveCurrentSession(), which is
+  // impersonation-aware: under an admin "Sign in as", `user.id` is the TARGET
+  // client's id (not the operator's), so the gateway is always read as the
+  // person whose account is on screen. All reads/writes key strictly on this id.
   const user = await getSessionUser()
-  if (!user) return []
+  if (!user?.id) return []
   try {
     // Back-fill any approved outgoing payment addressed to one of this user's
     // gateway IBANs into a received deposit before reading, so funds auto-matched
