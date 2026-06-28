@@ -367,11 +367,11 @@ function ThreadMenu({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+            className="shrink-0 rounded-sm p-2 text-muted-foreground opacity-100 transition-opacity hover:text-foreground focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
             aria-label="Conversation actions"
             title="Actions — or click and hold the chat"
           >
-            <MoreHorizontal className="h-3.5 w-3.5" />
+            <MoreHorizontal className="h-4 w-4" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">
@@ -673,10 +673,10 @@ function FolderMenu({ folder }: { folder: NqaiFolder }) {
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+            className="shrink-0 rounded-sm p-2 text-muted-foreground opacity-100 transition-opacity hover:text-foreground focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
             aria-label="Folder actions"
           >
-            <MoreHorizontal className="h-3.5 w-3.5" />
+            <MoreHorizontal className="h-4 w-4" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">
@@ -1367,6 +1367,7 @@ function ManagerFolderCard({ folder, onFocus }: { folder: NqaiFolder; onFocus: (
   const o = useOrganizer()
   const count = deepThreadCount(o.folders, o.threads, folder.id)
   const isDropTarget = o.dropTarget === folder.id
+  const isRenaming = o.renamingId === `f:${folder.id}`
   const canAccept = !o.drag || o.drag.type === "thread" || !folderSubtreeIds(o.folders, o.drag.id).has(folder.id)
   return (
     <div
@@ -1384,19 +1385,30 @@ function ManagerFolderCard({ folder, onFocus }: { folder: NqaiFolder; onFocus: (
         o.setDropTarget(null)
       }}
       className={cn(
-        "flex items-center gap-2 rounded-sm border bg-card p-3 transition-colors",
+        "group flex items-center gap-2 rounded-sm border bg-card p-3 transition-colors",
         isDropTarget ? "border-primary bg-primary/10" : "border-border hover:border-primary/40",
       )}
     >
-      <button type="button" onClick={() => onFocus(folder.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-        <Folder className="h-5 w-5 shrink-0 text-primary" />
-        <span className="min-w-0">
-          <span className="block truncate text-sm font-medium text-foreground">{folder.name}</span>
-          <span className="block font-mono text-[11px] text-muted-foreground">
-            {count} {count === 1 ? "chat" : "chats"}
+      <Folder className="h-5 w-5 shrink-0 text-primary" />
+      {isRenaming ? (
+        <InlineRename
+          initial={folder.name}
+          onCommit={(v) => {
+            o.onRenameFolder(folder.id, v)
+            o.setRenamingId(null)
+          }}
+          onCancel={() => o.setRenamingId(null)}
+        />
+      ) : (
+        <button type="button" onClick={() => onFocus(folder.id)} className="flex min-w-0 flex-1 items-center text-left">
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-medium text-foreground">{folder.name}</span>
+            <span className="block font-mono text-[11px] text-muted-foreground">
+              {count} {count === 1 ? "chat" : "chats"}
+            </span>
           </span>
-        </span>
-      </button>
+        </button>
+      )}
       <FolderMenu folder={folder} />
     </div>
   )
@@ -1405,6 +1417,7 @@ function ManagerFolderCard({ folder, onFocus }: { folder: NqaiFolder; onFocus: (
 function ManagerThreadCard({ thread }: { thread: NqaiThreadSummary }) {
   const o = useOrganizer()
   const recent = isRecent(thread.updatedAt) && thread.id !== o.activeThreadId
+  const isRenaming = o.renamingId === `t:${thread.id}`
   return (
     <div
       draggable
@@ -1417,28 +1430,41 @@ function ManagerThreadCard({ thread }: { thread: NqaiThreadSummary }) {
         o.setDrag(null)
         o.setDropTarget(null)
       }}
-      className="flex items-start gap-2 rounded-sm border border-border bg-card p-3 transition-colors hover:border-primary/40"
+      className="group flex items-start gap-2 rounded-sm border border-border bg-card p-3 transition-colors hover:border-primary/40"
     >
       {thread.pinned ? (
         <Pin className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
       ) : (
         <MessageSquare className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
       )}
-      <button type="button" onClick={() => o.onSelectThread(thread.id)} className="flex min-w-0 flex-1 flex-col text-left">
-        <span className="flex items-center gap-1.5">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-            {thread.title || "Untitled conversation"}
+      {isRenaming ? (
+        <div className="flex min-w-0 flex-1 items-center">
+          <InlineRename
+            initial={thread.title || "Untitled conversation"}
+            onCommit={(v) => {
+              o.onRenameThread(thread.id, v)
+              o.setRenamingId(null)
+            }}
+            onCancel={() => o.setRenamingId(null)}
+          />
+        </div>
+      ) : (
+        <button type="button" onClick={() => o.onSelectThread(thread.id)} className="flex min-w-0 flex-1 flex-col text-left">
+          <span className="flex items-center gap-1.5">
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+              {thread.title || "Untitled conversation"}
+            </span>
+            {recent && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-label="Recently updated" />}
           </span>
-          {recent && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-label="Recently updated" />}
-        </span>
-        {thread.preview && <span className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{thread.preview}</span>}
-        <span className="mt-1 flex items-center gap-2 font-mono text-[10px] tabular-nums text-muted-foreground">
-          <span>{relativeTime(thread.updatedAt)}</span>
-          <span>·</span>
-          <span>{thread.messageCount} msg</span>
-          {thread.archived && <span className="rounded-sm bg-secondary px-1 uppercase">Arch</span>}
-        </span>
-      </button>
+          {thread.preview && <span className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{thread.preview}</span>}
+          <span className="mt-1 flex items-center gap-2 font-mono text-[10px] tabular-nums text-muted-foreground">
+            <span>{relativeTime(thread.updatedAt)}</span>
+            <span>·</span>
+            <span>{thread.messageCount} msg</span>
+            {thread.archived && <span className="rounded-sm bg-secondary px-1 uppercase">Arch</span>}
+          </span>
+        </button>
+      )}
       <ThreadMenu thread={thread} />
     </div>
   )
