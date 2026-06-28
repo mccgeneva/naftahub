@@ -72,7 +72,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <PointerEventsGuard />
       <FundingCapitalReconciler />
       <TreasuryFinancingReconciler />
-      <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <div className="flex h-dvh flex-col overflow-hidden bg-background">
         {/* Maintenance banner — only while an administrator is signed in as this client. */}
         {identity.impersonator && (
           <ImpersonationBanner
