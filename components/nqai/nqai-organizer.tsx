@@ -1363,6 +1363,73 @@ export function NqaiManager({
   )
 }
 
+/** Always-visible Rename button for the full-screen Manager cards. A pencil is
+ *  universally understood, unlike the easily-missed "⋯" menu — this is the
+ *  primary fix for users not finding how to rename. */
+function RenameButton({ onClick, label }: { onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+    >
+      <Pencil className="h-4 w-4" />
+    </button>
+  )
+}
+
+/** Always-visible Delete button + confirmation dialog for the Manager cards.
+ *  Deletes are immediate/destructive server-side, so we always confirm first. */
+function DeleteButton({
+  label,
+  description,
+  onConfirm,
+}: {
+  label: string
+  description: string
+  onConfirm: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label={label}
+        title={label}
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border border-destructive/30 text-destructive transition-colors hover:bg-destructive/10"
+      >
+        <Trash2 className="h-4 w-4" />
+      </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{label}</DialogTitle>
+          </DialogHeader>
+          <p className="text-pretty text-sm leading-relaxed text-muted-foreground">{description}</p>
+          <div className="mt-2 flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                onConfirm()
+                setOpen(false)
+              }}
+            >
+              Delete
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
 function ManagerFolderCard({ folder, onFocus }: { folder: NqaiFolder; onFocus: (id: string) => void }) {
   const o = useOrganizer()
   const count = deepThreadCount(o.folders, o.threads, folder.id)
@@ -1409,7 +1476,21 @@ function ManagerFolderCard({ folder, onFocus }: { folder: NqaiFolder; onFocus: (
           </span>
         </button>
       )}
-      <FolderMenu folder={folder} />
+      {!isRenaming && (
+        <>
+          <RenameButton label="Rename folder" onClick={() => o.setRenamingId(`f:${folder.id}`)} />
+          <DeleteButton
+            label="Delete folder"
+            description={
+              count > 0
+                ? `Delete "${folder.name}"? Its ${count} ${count === 1 ? "conversation" : "conversations"} and any subfolders will be moved up, not deleted.`
+                : `Delete the empty folder "${folder.name}"? This cannot be undone.`
+            }
+            onConfirm={() => o.onDeleteFolder(folder.id)}
+          />
+          <FolderMenu folder={folder} />
+        </>
+      )}
     </div>
   )
 }
@@ -1465,7 +1546,17 @@ function ManagerThreadCard({ thread }: { thread: NqaiThreadSummary }) {
           </span>
         </button>
       )}
-      <ThreadMenu thread={thread} />
+      {!isRenaming && (
+        <>
+          <RenameButton label="Rename conversation" onClick={() => o.setRenamingId(`t:${thread.id}`)} />
+          <DeleteButton
+            label="Delete conversation"
+            description={`Delete "${thread.title || "Untitled conversation"}"? This permanently removes the conversation and cannot be undone.`}
+            onConfirm={() => o.onDeleteThread(thread.id)}
+          />
+          <ThreadMenu thread={thread} />
+        </>
+      )}
     </div>
   )
 }
