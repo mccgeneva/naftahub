@@ -156,6 +156,58 @@ export interface NqaiToolContext {
   senderName?: string
 }
 
+// Hard ceiling for any single tool round-trip. The knowledge APIs already
+// self-limit to ~12s and messaging to ~9s; this is the backstop for the
+// otherwise-unbounded ones (platform DB reads, external vessel providers) so a
+// slow or hung upstream can never stall the whole turn toward the route's
+// maxDuration — which the client would otherwise see as the generic
+// "the request may have taken too long" transient fault.
+const TOOL_TIMEOUT_MS = 22_000
+const TOOL_TIMEOUT_MARKER = "__nqai_tool_timeout__"
+
+/**
+ * Harden every tool so a misbehaving round-trip can never break the chat:
+ *   1. TIMEOUT — execute is raced against TOOL_TIMEOUT_MS so a hung upstream is
+ *      abandoned instead of blocking the stream until the platform kills it.
+ *   2. NEVER THROW — a thrown tool error aborts the ENTIRE streamed response
+ *      (surfacing as the transient-fault banner). We catch everything and
+ *      resolve to a graceful { ok:false, error } result, which the model
+ *      already knows how to recover from (answer without the tool, or suggest a
+ *      retry). Mutates execute in place and returns the same object so the
+ *      caller keeps its precise tool types.
+ */
+function guardTools<T extends Record<string, unknown>>(tools: T): T {
+  for (const name of Object.keys(tools)) {
+    const entry = tools[name] as { execute?: (...args: unknown[]) => Promise<unknown> }
+    const original = entry?.execute
+    if (typeof original !== "function") continue
+    entry.execute = async (...args: unknown[]) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        return await Promise.race([
+          original(...args),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(TOOL_TIMEOUT_MARKER)), TOOL_TIMEOUT_MS)
+          }),
+        ])
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const timedOut = message.includes(TOOL_TIMEOUT_MARKER)
+        console.log(`[v0] NQAi tool "${name}" ${timedOut ? "timed out" : "failed"}:`, timedOut ? `${TOOL_TIMEOUT_MS}ms` : message)
+        return {
+          ok: false,
+          error: timedOut
+            ? `The ${name} lookup took too long and was skipped. Answer with what you already have, or suggest the client try again.`
+            : `The ${name} tool could not complete. Proceed without it, or suggest the client try again.`,
+        }
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+    }
+  }
+  return tools
+}
+
 /**
  * Build the NQAi tool belt for a single request. Any data that must be read in
  * the request scope (e.g. the signed-in client's identity via cookies) is
@@ -164,7 +216,7 @@ export interface NqaiToolContext {
  * the request scope) where cookies() would throw and abort the whole stream.
  */
 export function createNqaiTools(ctx: NqaiToolContext = {}) {
-  return {
+  const tools = {
   /**
    * Verify a vessel by IMO. Runs the official IMO check-digit validation, the
    * free OFAC sanctions screen, and (if an AIS provider is linked) live master
@@ -602,5 +654,6 @@ export function createNqaiTools(ctx: NqaiToolContext = {}) {
       }
     },
   }),
-  } as const
+  }
+  return guardTools(tools)
 }
