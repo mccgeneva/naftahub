@@ -28,6 +28,9 @@ import {
   History,
   RotateCcw,
   FolderTree,
+  ChevronUp,
+  ChevronDown,
+  CornerDownRight,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -459,6 +462,24 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
   }, [messages, busy])
 
+  // Manual navigation for the persistent left-side scroll toggle. Long
+  // generated documents (handbooks, tables, ASCII diagrams) can run for many
+  // screens, so the user always needs a reliable way to move the conversation
+  // up/down and to jump straight to the composer at the very bottom.
+  const scrollByPage = useCallback((direction: 1 | -1) => {
+    const el = scrollRef.current
+    if (!el) return
+    // Scroll ~85% of the visible height so a little context carries over.
+    el.scrollBy({ top: direction * el.clientHeight * 0.85, behavior: "smooth" })
+  }, [])
+
+  const scrollToInput = useCallback(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+    // Focus the composer so the input + send button are immediately usable.
+    textareaRef.current?.focus()
+  }, [])
+
   // Clear the live transcript and start a fresh thread (clean welcome view).
   // The next message will lazily create a new thread id.
   const handleNewChat = useCallback(() => {
@@ -767,7 +788,41 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
       )}
 
       {/* Main chat column */}
-      <div className="flex h-full min-h-0 flex-1 flex-col">
+      <div className="relative flex h-full min-h-0 flex-1 flex-col">
+      {/* Persistent left-side scroll toggle — always available so the user can
+          move long content up/down and jump straight to the composer, even when
+          a mobile in-app browser chrome crowds the bottom of the screen. */}
+      <div className="pointer-events-none absolute left-1.5 top-1/2 z-30 -translate-y-1/2 sm:left-2">
+        <div className="pointer-events-auto flex flex-col overflow-hidden rounded-full border border-border bg-card/95 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-card/80">
+          <button
+            type="button"
+            onClick={() => scrollByPage(-1)}
+            className="flex h-11 w-11 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none active:bg-accent"
+            aria-label="Scroll up"
+            title="Scroll up"
+          >
+            <ChevronUp className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => scrollByPage(1)}
+            className="flex h-11 w-11 items-center justify-center border-t border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none active:bg-accent"
+            aria-label="Scroll down"
+            title="Scroll down"
+          >
+            <ChevronDown className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            onClick={scrollToInput}
+            className="flex h-11 w-11 items-center justify-center border-t border-border text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none active:bg-primary/15"
+            aria-label="Jump to message input"
+            title="Jump to message box"
+          >
+            <CornerDownRight className="h-5 w-5" />
+          </button>
+        </div>
+      </div>
       {/* Header */}
       <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:gap-3 sm:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
@@ -1075,7 +1130,10 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
       </div>
 
       {/* Composer */}
-      <form onSubmit={onSubmit} className="border-t border-border bg-card p-3">
+      <form
+        onSubmit={onSubmit}
+        className="border-t border-border bg-card p-3 [padding-bottom:calc(0.75rem+env(safe-area-inset-bottom))]"
+      >
         <div className="mx-auto w-full max-w-3xl">
           <input
             ref={fileInputRef}
