@@ -364,6 +364,10 @@ export async function POST(req: Request) {
     // answer) within a single turn before the model must produce its reply.
     stopWhen: stepCountIs(6),
     temperature: 0.6,
+    // Stop server-side work the moment the client disconnects or cancels, so a
+    // navigated-away/aborted request never keeps an expensive model call running
+    // (and never blocks behind a request the user already abandoned).
+    abortSignal: req.signal,
   })
 
   return result.toUIMessageStreamResponse({
