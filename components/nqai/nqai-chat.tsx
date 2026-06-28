@@ -769,20 +769,20 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
       {/* Main chat column */}
       <div className="flex h-full min-h-0 flex-1 flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-3">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:gap-3 sm:px-4">
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           <NqaiAvatar />
-          <div className="leading-tight">
+          <div className="min-w-0 leading-tight">
             <div className="flex items-center gap-2">
               <span className="font-semibold tracking-tight text-foreground">NQAi</span>
-              <span className="rounded-sm border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-primary">
+              <span className="hidden rounded-sm border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-primary sm:inline-block">
                 Super Intelligence
               </span>
             </div>
-            <p className="text-[11px] text-muted-foreground">{NQAI_TAGLINE}</p>
+            <p className="truncate text-[11px] text-muted-foreground">{NQAI_TAGLINE}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
           <Button
             type="button"
             size="sm"
@@ -834,7 +834,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                 error ? "bg-destructive" : busy ? "bg-warning animate-pulse" : "bg-success animate-pulse",
               )}
             />
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <span className="hidden text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sm:inline">
               {error ? "Fault" : busy ? "Reasoning" : "Online"}
             </span>
           </div>
@@ -869,7 +869,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                 <Sparkles className="h-3 w-3" />
                 NQAi · Neural Quantum Artificial Intelligence
               </p>
-              <p className="whitespace-pre-line text-pretty text-[13px] leading-relaxed text-foreground/90">
+              <p className="whitespace-pre-line text-pretty text-[14px] leading-relaxed text-foreground/90 sm:text-[13px]">
                 {NQAI_WELCOME}
               </p>
               <p className="mt-2.5 border-t border-border pt-2 text-[10px] text-muted-foreground">
@@ -880,9 +880,9 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
             {/* Personalized briefing — generated server-side from the signed-in
                 client's own private account context. */}
             {greeting && (
-              <div className="mt-2.5 flex gap-2 rounded-sm border border-primary/20 bg-primary/5 p-2.5 text-[13px] leading-relaxed text-foreground/90">
+              <div className="mt-2.5 flex gap-2 rounded-sm border border-primary/20 bg-primary/5 p-2.5 text-[14px] leading-relaxed text-foreground/90 sm:text-[13px]">
                 <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
-                <p className="text-pretty">{greeting}</p>
+                <p className="text-pretty break-words [overflow-wrap:anywhere]">{greeting}</p>
               </div>
             )}
 
@@ -925,7 +925,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
               )}
               <div
                 className={cn(
-                  "min-w-0 max-w-[85%] rounded-sm border px-3 py-2 text-[13px] leading-relaxed",
+                  "min-w-0 max-w-[88%] break-words rounded-sm border px-3 py-2 text-[15px] leading-relaxed sm:max-w-[85%] sm:text-[13px]",
                   isUser
                     ? "border-primary/30 bg-primary/10 text-foreground"
                     : "border-border bg-card text-foreground/90",
@@ -988,16 +988,16 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                 )}
                 {text ? (
                   isUser ? (
-                    <p className="whitespace-pre-wrap text-pretty">{text}</p>
+                    <p className="whitespace-pre-wrap text-pretty break-words [overflow-wrap:anywhere]">{text}</p>
                   ) : (
                     <Streamdown
                       className={cn(
-                        "max-w-none text-[13px] leading-relaxed",
-                        "[&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0",
+                        "max-w-none min-w-0 break-words text-[15px] leading-relaxed sm:text-[13px]",
+                        "[&_p]:my-1.5 [&_p]:break-words [&_p:first-child]:mt-0 [&_p:last-child]:mb-0",
                         "[&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5",
                         "[&_strong]:font-semibold [&_strong]:text-foreground",
-                        "[&_h1]:mb-1.5 [&_h1]:mt-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h2]:mb-1.5 [&_h2]:mt-2 [&_h2]:text-[13px] [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:mt-2 [&_h3]:text-[13px] [&_h3]:font-semibold",
-                        "[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2",
+                        "[&_h1]:mb-1.5 [&_h1]:mt-2 [&_h1]:text-[15px] [&_h1]:font-semibold sm:[&_h1]:text-sm [&_h2]:mb-1.5 [&_h2]:mt-2 [&_h2]:text-[15px] [&_h2]:font-semibold sm:[&_h2]:text-[13px] [&_h3]:mb-1 [&_h3]:mt-2 [&_h3]:text-[15px] [&_h3]:font-semibold sm:[&_h3]:text-[13px]",
+                        "[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_a]:break-words",
                         "[&_code]:rounded-sm [&_code]:bg-secondary [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em]",
                         "[&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-sm [&_pre]:border [&_pre]:border-border [&_pre]:bg-secondary/60 [&_pre]:p-2.5",
                         "[&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_table]:text-xs",
