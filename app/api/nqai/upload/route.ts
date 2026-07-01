@@ -1,44 +1,21 @@
 import { put } from "@vercel/blob"
 import { resolveCurrentSession } from "@/lib/session-user"
+import { resolveUpload } from "@/lib/nqai-extract"
 
 // Uploads a single document for NQAi to analyze. Files are stored in Blob under
 // an unguessable, per-user prefix and the public URL is handed back to the
 // client, which then attaches it to the next chat message as a file part. The
 // Anthropic provider fetches that URL directly (URL source) so we never inline
 // base64 into the persisted transcript — keeping the chat row lightweight.
+//
+// The model can only read PDF, images (PNG/JPEG/GIF/WEBP) and plain text over a
+// URL source, so `resolveUpload` extracts/converts anything else server-side
+// (docx/doc/rtf/bin → text, tiff → png) and we store THAT derived payload —
+// never the raw Office/TIFF bytes.
 export const runtime = "nodejs"
-export const maxDuration = 30
+export const maxDuration = 60
 
 const MAX_BYTES = 20 * 1024 * 1024 // 20 MB — comfortably within Claude's limits
-
-// Accepted upload types → the media type we tag the attachment with for the
-// model. CSV is normalised to text/plain because Anthropic ingests it as a
-// plain-text document (it has no dedicated CSV content block).
-const ACCEPTED: Record<string, string> = {
-  "application/pdf": "application/pdf",
-  "image/png": "image/png",
-  "image/jpeg": "image/jpeg",
-  "image/jpg": "image/jpeg",
-  "image/webp": "image/webp",
-  "image/gif": "image/gif",
-  "text/plain": "text/plain",
-  "text/csv": "text/plain",
-  "application/csv": "text/plain",
-}
-
-// Fallback when the browser sends a blank/octet-stream type: infer from the
-// file extension so .csv / .txt / images / pdf still resolve.
-const EXT_MEDIA: Record<string, string> = {
-  pdf: "application/pdf",
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  webp: "image/webp",
-  gif: "image/gif",
-  txt: "text/plain",
-  text: "text/plain",
-  csv: "text/plain",
-}
 
 function json(body: unknown, status: number) {
   return new Response(JSON.stringify(body), {
@@ -67,11 +44,16 @@ export async function POST(req: Request) {
     return json({ error: "File is too large. The maximum size is 20 MB." }, 413)
   }
 
-  const ext = (file.name.split(".").pop() || "").toLowerCase()
-  const mediaType = ACCEPTED[file.type] || EXT_MEDIA[ext] || ""
-  if (!mediaType) {
+  // Extract/convert the upload into a model-ingestible payload.
+  const resolved = await resolveUpload(file)
+  if ("error" in resolved) {
     return json(
-      { error: "Unsupported file type. Upload a PDF, image (PNG/JPG/WEBP/GIF), text or CSV file." },
+      {
+        error:
+          resolved.error === "Unsupported file type."
+            ? "Unsupported file type. Upload a PDF, Word (DOC/DOCX), RTF, text, image (JPG/JPEG/GIF/PNG/WEBP/TIFF) or BIN file."
+            : resolved.error,
+      },
       415,
     )
   }
@@ -81,13 +63,13 @@ export async function POST(req: Request) {
   const safeName = (file.name || "document").replace(/[^\w.\- ]+/g, "_").slice(-100)
 
   try {
-    const blob = await put(`nqai/${session.id}/${crypto.randomUUID()}-${safeName}`, file, {
+    const blob = await put(`nqai/${session.id}/${crypto.randomUUID()}-${safeName}`, resolved.body, {
       access: "public",
       addRandomSuffix: true,
-      contentType: file.type || mediaType,
+      contentType: resolved.contentType,
     })
     return json(
-      { url: blob.url, name: file.name || safeName, mediaType, size: file.size },
+      { url: blob.url, name: file.name || safeName, mediaType: resolved.mediaType, size: file.size },
       200,
     )
   } catch (err) {

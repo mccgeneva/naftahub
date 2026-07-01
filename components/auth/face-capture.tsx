@@ -3,9 +3,22 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Camera, Loader2, ScanFace, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { captureDescriptor } from "@/lib/face-client"
+import { captureDescriptor, FaceModelLoadError } from "@/lib/face-client"
 
 type Phase = "idle" | "loading" | "ready" | "scanning" | "error"
+
+/** Heuristic: are we inside an in-app browser webview (e.g. opened from a
+ *  messaging app)? These frequently block camera access or the WebGL/model
+ *  fetch that face recognition needs, so we surface a "open in your browser"
+ *  hint when capture fails. */
+function isInAppBrowser(): boolean {
+  if (typeof navigator === "undefined") return false
+  const ua = navigator.userAgent || ""
+  return /FBAN|FBAV|Instagram|Line|WhatsApp|WeChat|Telegram|Snapchat|Twitter|TikTok|; wv\)|GSA\//i.test(ua)
+}
+
+const IN_APP_HINT =
+  " If you opened this from inside another app, tap the menu and choose “Open in Safari/Chrome”, then try again."
 
 interface FaceCaptureProps {
   /** Called with a captured 128-float descriptor. Return a promise so the
@@ -46,6 +59,23 @@ export function FaceCapture({
   const startCamera = useCallback(async () => {
     setMessage("")
     setPhase("loading")
+
+    // Pre-flight: the camera API is only available in a secure context and on
+    // browsers that expose getUserMedia. Failing these early gives a clear
+    // reason instead of a generic throw.
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      setPhase("error")
+      setMessage("Camera access requires a secure (https) connection. Open this page over https and try again.")
+      return
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setPhase("error")
+      setMessage(
+        "This browser doesn’t allow camera access." + (isInAppBrowser() ? IN_APP_HINT : " Try a different browser such as Safari or Chrome."),
+      )
+      return
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
@@ -57,9 +87,23 @@ export function FaceCapture({
         await videoRef.current.play()
       }
       setPhase("ready")
-    } catch {
+    } catch (err) {
       setPhase("error")
-      setMessage("Camera access was denied or is unavailable. Enable camera permissions and try again.")
+      const name = err instanceof Error ? err.name : ""
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        setMessage(
+          "Camera permission was blocked. Allow camera access for this site in your browser settings, then try again." +
+            (isInAppBrowser() ? IN_APP_HINT : ""),
+        )
+      } else if (name === "NotFoundError" || name === "OverconstrainedError") {
+        setMessage("No camera was found on this device.")
+      } else if (name === "NotReadableError") {
+        setMessage("Your camera is in use by another app. Close it and try again.")
+      } else {
+        setMessage(
+          "Camera access was denied or is unavailable." + (isInAppBrowser() ? IN_APP_HINT : " Enable camera permissions and try again."),
+        )
+      }
     }
   }, [])
 
@@ -106,9 +150,22 @@ export function FaceCapture({
         stopCamera()
         setPhase("idle")
       }
-    } catch {
-      setPhase("error")
-      setMessage("Something went wrong during the scan. Please try again.")
+    } catch (err) {
+      // A model-load failure is the most common real cause here (the ~7MB face
+      // models can't be fetched, or WebGL is unavailable — typical inside in-app
+      // browser webviews). Surface that specifically so the user knows it's the
+      // environment, not their face. Keep the camera "ready" so retry can
+      // re-attempt the load (face-client resets its cached promise on failure).
+      if (err instanceof FaceModelLoadError) {
+        setPhase("ready")
+        setMessage(
+          "Couldn’t load the face scanner." +
+            (isInAppBrowser() ? IN_APP_HINT : " Check your connection and try again."),
+        )
+      } else {
+        setPhase("error")
+        setMessage("Something went wrong during the scan. Please try again.")
+      }
     } finally {
       busyRef.current = false
       setProgress(0)
