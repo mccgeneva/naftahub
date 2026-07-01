@@ -802,8 +802,10 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
         </div>
       )}
 
-      {/* Main chat column */}
-      <div className="relative flex h-full min-h-0 flex-1 flex-col">
+      {/* Main chat column — `min-w-0` + `overflow-x-hidden` guarantee wide content
+          (tables, long tokens) can never widen the layout and push the composer's
+          send button off the right edge of the viewport. */}
+      <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
       {/* Persistent left-side scroll toggle — always available so the user can
           move long content up/down and jump straight to the composer, even when
           a mobile in-app browser chrome crowds the bottom of the screen. */}
@@ -923,7 +925,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
       </div>
 
       {/* Conversation */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-3">
         <div
           className={cn(
             "mx-auto w-full",
@@ -1072,7 +1074,13 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                         "[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_a]:break-words",
                         "[&_code]:rounded-sm [&_code]:bg-secondary [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em]",
                         "[&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-sm [&_pre]:border [&_pre]:border-border [&_pre]:bg-secondary/60 [&_pre]:p-2.5",
-                        "[&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_table]:text-xs",
+                            // Wide tables must scroll WITHIN the bubble, not expand the
+                            // layout — otherwise they push the composer's send button off
+                            // the right edge of a mobile viewport. `block` + `max-w-full` +
+                            // `overflow-x-auto` turns the table into a self-contained
+                            // horizontally-scrollable box.
+                            "[&_table]:my-2 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:text-xs",
+                            "[&_td]:whitespace-nowrap [&_th]:whitespace-nowrap",
                         "[&_th]:border [&_th]:border-border [&_th]:bg-secondary/60 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold",
                         "[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_td]:tabular-nums",
                         "[&_blockquote]:border-l-2 [&_blockquote]:border-primary/40 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground",
