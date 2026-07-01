@@ -60,9 +60,9 @@ import { generateNqaiDocumentPdf } from "@/lib/nqai-document-pdf"
  *  Office/rich-text/tiff/bin are extracted or converted server-side into a
  *  model-ingestible payload (text or PNG). */
 const ACCEPTED_UPLOAD =
-  ".pdf,.doc,.docx,.rtf,.txt,.csv,.gif,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bin," +
+  ".pdf,.doc,.docx,.rtf,.txt,.csv,.gif,.jpg,.jpeg,.png,.webp,.tif,.tiff,.heic,.heif,.bmp,.avif,.bin," +
   "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document," +
-  "application/rtf,text/rtf,text/plain,text/csv,image/gif,image/jpeg,image/png,image/webp,image/tiff,application/octet-stream"
+  "application/rtf,text/rtf,text/plain,text/csv,image/*,application/octet-stream"
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 interface PendingAttachment {
@@ -1172,32 +1172,37 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                   <span
                     key={a.id}
                     className={cn(
-                      "inline-flex max-w-[220px] items-center gap-1.5 rounded-sm border px-2 py-1 text-xs",
+                      "inline-flex max-w-[260px] flex-col gap-0.5 rounded-sm border px-2 py-1 text-xs",
                       a.status === "error"
                         ? "border-destructive/40 bg-destructive/10 text-destructive"
                         : "border-border bg-background text-foreground",
                     )}
                     title={a.error ? `${a.name} — ${a.error}` : a.name}
                   >
-                    {a.status === "uploading" ? (
-                      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
-                    ) : a.status === "error" ? (
-                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                    ) : (
-                      <Icon className="h-3.5 w-3.5 shrink-0 text-primary" />
+                    <span className="flex items-center gap-1.5">
+                      {a.status === "uploading" ? (
+                        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+                      ) : a.status === "error" ? (
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      ) : (
+                        <Icon className="h-3.5 w-3.5 shrink-0 text-primary" />
+                      )}
+                      <span className="truncate">{a.name}</span>
+                      {a.status === "ready" && a.size > 0 && (
+                        <span className="shrink-0 text-[10px] text-muted-foreground">{formatBytes(a.size)}</span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeAttachment(a.id)}
+                        className="shrink-0 rounded-sm text-muted-foreground transition-colors hover:text-foreground"
+                        aria-label={`Remove ${a.name}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                    {a.status === "error" && a.error && (
+                      <span className="pl-5 text-[10px] leading-snug text-pretty break-words">{a.error}</span>
                     )}
-                    <span className="truncate">{a.name}</span>
-                    {a.status === "ready" && a.size > 0 && (
-                      <span className="shrink-0 text-[10px] text-muted-foreground">{formatBytes(a.size)}</span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => removeAttachment(a.id)}
-                      className="shrink-0 rounded-sm text-muted-foreground transition-colors hover:text-foreground"
-                      aria-label={`Remove ${a.name}`}
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
                   </span>
                 )
               })}
