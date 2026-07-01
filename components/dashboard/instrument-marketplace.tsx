@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   Search,
   Loader2,
@@ -11,6 +11,10 @@ import {
   Landmark,
   Globe,
   Sparkles,
+  ChevronsUpDown,
+  Check,
+  Plus,
+  MapPin,
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -38,6 +42,7 @@ import { useActivityLog } from "@/components/activity-tracker"
 import { buildInstrumentIdentifiers } from "@/lib/instrument-identifiers"
 import {
   buildMarketplaceCatalogue,
+  buildCustomBankInstruments,
   computeAcquisitionFee,
   ACQUISITION_FEE_RATES,
   ACQUISITION_ACTION_LABELS,
@@ -47,6 +52,7 @@ import {
   type MarketInstrument,
   type AcquisitionAction,
 } from "@/lib/instrument-marketplace"
+import { BANK_REGIONS, type BankRegion } from "@/lib/partner-banks"
 
 function money(value: number, currency: string): string {
   return new Intl.NumberFormat("en-US", {
@@ -78,28 +84,86 @@ export function InstrumentMarketplace() {
   const [filter, setFilter] = useState("")
   const [typeFilter, setTypeFilter] = useState<string>("all")
   const [bankFilter, setBankFilter] = useState<string>("all")
+  // Instruments for a user-typed bank not in the curated directory.
+  const [customInstruments, setCustomInstruments] = useState<MarketInstrument[] | null>(null)
+  const [customLabel, setCustomLabel] = useState<string>("")
+  // Bank picker dialog.
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [bankQuery, setBankQuery] = useState("")
+  // Progressive render cap (the worldwide catalogue is large).
+  const [visibleCount, setVisibleCount] = useState(60)
 
-  const banks = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const i of catalogue) map.set(i.bankKey, i.bankName)
-    return Array.from(map, ([key, name]) => ({ key, name }))
+  // Worldwide bank directory, grouped by region, for the searchable picker.
+  const bankDirectory = useMemo(() => {
+    const map = new Map<string, { key: string; name: string; country: string; region: BankRegion }>()
+    for (const i of catalogue) {
+      if (!map.has(i.bankKey)) {
+        map.set(i.bankKey, { key: i.bankKey, name: i.bankName, country: i.bankCountry, region: i.region })
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name))
   }, [catalogue])
 
+  const selectedBankLabel = customInstruments
+    ? customLabel
+    : bankFilter === "all"
+      ? "All banks"
+      : (bankDirectory.find((b) => b.key === bankFilter)?.name ?? "All banks")
+
   const filtered = useMemo(() => {
+    const base = customInstruments ?? catalogue
     const q = filter.trim().toLowerCase()
-    return catalogue.filter((i) => {
+    return base.filter((i) => {
       if (typeFilter !== "all" && i.type !== typeFilter) return false
-      if (bankFilter !== "all" && i.bankKey !== bankFilter) return false
+      if (!customInstruments && bankFilter !== "all" && i.bankKey !== bankFilter) return false
       if (!q) return true
       return (
         i.bankName.toLowerCase().includes(q) ||
+        i.bankCountry.toLowerCase().includes(q) ||
         i.type.toLowerCase().includes(q) ||
         i.typeFull.toLowerCase().includes(q) ||
         i.isin.toLowerCase().includes(q) ||
         i.currency.toLowerCase().includes(q)
       )
     })
-  }, [catalogue, filter, typeFilter, bankFilter])
+  }, [catalogue, customInstruments, filter, typeFilter, bankFilter])
+
+  // Reset the render cap whenever the result set changes.
+  useEffect(() => {
+    setVisibleCount(60)
+  }, [filter, typeFilter, bankFilter, customInstruments])
+
+  const visible = filtered.slice(0, visibleCount)
+
+  // Directory entries matching the picker search box.
+  const bankMatches = useMemo(() => {
+    const q = bankQuery.trim().toLowerCase()
+    if (!q) return bankDirectory
+    return bankDirectory.filter((b) => b.name.toLowerCase().includes(q) || b.country.toLowerCase().includes(q))
+  }, [bankDirectory, bankQuery])
+
+  const trimmedBankQuery = bankQuery.trim()
+  const showCustomOption =
+    trimmedBankQuery.length >= 2 &&
+    !bankDirectory.some((b) => b.name.toLowerCase() === trimmedBankQuery.toLowerCase())
+
+  const selectDirectoryBank = (key: string) => {
+    setBankFilter(key)
+    setCustomInstruments(null)
+    setCustomLabel("")
+    setPickerOpen(false)
+    setBankQuery("")
+  }
+
+  const useCustomBank = (name: string) => {
+    const list = buildCustomBankInstruments(name)
+    if (list.length === 0) return
+    setCustomInstruments(list)
+    setCustomLabel(name.trim())
+    setBankFilter("all")
+    setPickerOpen(false)
+    setBankQuery("")
+  }
 
   // --- Live OpenFIGI reference search --------------------------------------
   const [figiQuery, setFigiQuery] = useState("")
@@ -349,36 +413,52 @@ export function InstrumentMarketplace() {
             ))}
           </SelectContent>
         </Select>
-        <Select value={bankFilter} onValueChange={setBankFilter}>
-          <SelectTrigger className="sm:w-48" aria-label="Filter by issuing bank">
-            <SelectValue placeholder="All banks" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All banks</SelectItem>
-            {banks.map((b) => (
-              <SelectItem key={b.key} value={b.key}>
-                {b.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setPickerOpen(true)}
+          className="justify-between gap-2 bg-transparent font-normal sm:w-64"
+          aria-label="Choose issuing bank"
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <Landmark className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="truncate">{selectedBankLabel}</span>
+          </span>
+          <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </Button>
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        <span className="font-semibold text-foreground">{filtered.length}</span> AAA-rated bank instruments available
-        to lease, assign or purchase. Acquisitions are submitted for Administrator approval — nothing executes
-        automatically.
+      <p className="text-xs text-muted-foreground text-pretty">
+        <span className="font-semibold text-foreground">{filtered.length}</span> bank instrument
+        {filtered.length === 1 ? "" : "s"}
+        {customInstruments ? (
+          <>
+            {" "}
+            from <span className="font-medium text-foreground">{customLabel}</span>
+          </>
+        ) : (
+          " available to lease, assign or purchase across banks worldwide"
+        )}
+        . Acquisitions are submitted for Administrator approval — nothing executes automatically.
       </p>
 
       {/* Catalogue grid */}
       {filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border py-16 text-center">
+        <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border py-16 text-center">
           <Landmark className="h-6 w-6 text-muted-foreground" />
           <p className="text-sm font-medium text-foreground">No instruments match your filters</p>
+          <p className="max-w-sm text-xs text-muted-foreground text-pretty">
+            Looking for a specific bank? Use the bank selector above to search every bank worldwide — or enter any bank
+            name to generate its instruments.
+          </p>
+          <Button type="button" variant="outline" size="sm" onClick={() => setPickerOpen(true)} className="gap-1.5">
+            <Search className="h-4 w-4" />
+            Choose a bank
+          </Button>
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((inst) => (
+          {visible.map((inst) => (
             <Card
               key={inst.id}
               className={cn("border-border bg-card", !inst.available && "opacity-60")}
@@ -450,6 +530,111 @@ export function InstrumentMarketplace() {
           ))}
         </div>
       )}
+
+      {filtered.length > visible.length ? (
+        <div className="flex flex-col items-center gap-2 pt-1">
+          <p className="text-xs text-muted-foreground">
+            Showing {visible.length} of {filtered.length}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setVisibleCount((c) => c + 60)}
+            className="gap-1.5 bg-transparent"
+          >
+            <Plus className="h-4 w-4" />
+            Load more
+          </Button>
+        </div>
+      ) : null}
+
+      {/* Bank picker dialog */}
+      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+        <DialogContent className="max-h-[85vh] gap-0 overflow-hidden p-0 sm:max-w-lg">
+          <DialogHeader className="border-b border-border p-4">
+            <DialogTitle className="text-base">Choose an issuing bank</DialogTitle>
+            <DialogDescription className="text-xs">
+              Search every bank in the world. Not listed? Type the name to generate its instruments.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="border-b border-border p-3">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                autoFocus
+                value={bankQuery}
+                onChange={(e) => setBankQuery(e.target.value)}
+                placeholder="Search by bank or country, e.g. Venezuela"
+                className="pl-9"
+                aria-label="Search banks"
+              />
+            </div>
+          </div>
+          <div className="max-h-[52vh] overflow-y-auto p-2">
+            {showCustomOption ? (
+              <button
+                type="button"
+                onClick={() => useCustomBank(trimmedBankQuery)}
+                className="mb-2 flex w-full items-center gap-2 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-left text-sm transition-colors hover:bg-primary/10"
+              >
+                <Plus className="h-4 w-4 shrink-0 text-primary" />
+                <span className="min-w-0">
+                  <span className="block truncate font-medium text-foreground">
+                    Search instruments from &ldquo;{trimmedBankQuery}&rdquo;
+                  </span>
+                  <span className="block text-xs text-muted-foreground">Generate a set for this custom bank</span>
+                </span>
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => selectDirectoryBank("all")}
+              className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
+            >
+              <span className="flex items-center gap-2">
+                <Globe className="h-4 w-4 text-muted-foreground" />
+                All banks
+              </span>
+              {bankFilter === "all" && !customInstruments ? <Check className="h-4 w-4 text-primary" /> : null}
+            </button>
+
+            {BANK_REGIONS.map((region) => {
+              const regionBanks = bankMatches.filter((b) => b.region === region)
+              if (regionBanks.length === 0) return null
+              return (
+                <div key={region} className="mt-2">
+                  <p className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    <MapPin className="h-3 w-3" />
+                    {region}
+                  </p>
+                  {regionBanks.map((b) => (
+                    <button
+                      key={b.key}
+                      type="button"
+                      onClick={() => selectDirectoryBank(b.key)}
+                      className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
+                    >
+                      <span className="flex min-w-0 flex-col">
+                        <span className="truncate text-foreground">{b.name}</span>
+                        <span className="truncate text-xs text-muted-foreground">{b.country}</span>
+                      </span>
+                      {bankFilter === b.key && !customInstruments ? (
+                        <Check className="h-4 w-4 shrink-0 text-primary" />
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              )
+            })}
+
+            {bankMatches.length === 0 && !showCustomOption ? (
+              <p className="px-3 py-6 text-center text-xs text-muted-foreground">No banks match your search.</p>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Acquisition dialog */}
       <Dialog open={target !== null} onOpenChange={(open) => !open && !submitting && setTarget(null)}>
