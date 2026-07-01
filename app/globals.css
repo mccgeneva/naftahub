@@ -96,6 +96,7 @@
 @theme inline {
   --font-sans: 'Inter', 'Geist', 'Geist Fallback', system-ui, sans-serif;
   --font-mono: 'Geist Mono', 'Geist Mono Fallback', monospace;
+  --font-serif: var(--font-instrument-serif), 'Georgia', 'Times New Roman', serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

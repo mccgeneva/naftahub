@@ -327,15 +327,18 @@ export function InstrumentMarketplace() {
       {/* Terminal header — desk identity + worldwide coverage */}
       <div className="overflow-hidden rounded-lg border border-border bg-card">
         <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/30 px-4 py-2.5">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             <span className="flex h-2 w-2 items-center justify-center">
               <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
             </span>
-            <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-foreground">
+            <h2
+              className="text-2xl leading-none tracking-tight text-foreground"
+              style={{ fontFamily: "var(--font-instrument-serif), Georgia, serif" }}
+            >
               Instruments Desk
             </h2>
           </div>
-          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
             Global Coverage
           </span>
         </div>
