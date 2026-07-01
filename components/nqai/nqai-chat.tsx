@@ -13,6 +13,7 @@ import {
   User,
   Ship,
   Radar,
+  Warehouse,
   Loader2,
   BookOpen,
   Maximize2,
@@ -168,6 +169,8 @@ const TOOL_LABELS: Record<string, string> = {
   "tool-listSpotDeals": "Scanning spot-deal board",
   "tool-discoverOilDeals": "Matching vessels & oil deals",
   "tool-vesselDataProviderStatus": "Checking AIS provider",
+  "tool-findTankStorage": "Searching tank terminals",
+  "tool-getTerminalDetails": "Loading terminal profile",
   "tool-searchResearch": "Searching global research",
   "tool-lookupInstitution": "Looking up institution",
   "tool-exploreConcept": "Mapping research field",
@@ -184,6 +187,8 @@ const TOOL_DONE_LABELS: Record<string, string> = {
   "tool-listSpotDeals": "Spot-deal board scanned",
   "tool-discoverOilDeals": "Vessels & deals matched",
   "tool-vesselDataProviderStatus": "AIS provider checked",
+  "tool-findTankStorage": "Tank terminals found",
+  "tool-getTerminalDetails": "Terminal profile loaded",
   "tool-searchResearch": "Research retrieved",
   "tool-lookupInstitution": "Institution found",
   "tool-exploreConcept": "Field mapped",
@@ -205,15 +210,18 @@ const KNOWLEDGE_TOOLS = new Set(["tool-searchResearch", "tool-lookupInstitution"
 /** Tool keys that send an outbound message (send icon). */
 const MESSAGING_TOOLS = new Set(["tool-sendEmail", "tool-sendSms"])
 
-/** Tool keys that author a document (file icon). */
-const DOCUMENT_TOOLS = new Set(["tool-createDocument"])
+  /** Tool keys that author a document (file icon). */
+  const DOCUMENT_TOOLS = new Set(["tool-createDocument"])
+
+  /** Tool keys that query tank terminals / storage (warehouse icon). */
+  const STORAGE_TOOLS = new Set(["tool-findTankStorage", "tool-getTerminalDetails"])
 
 interface ToolActivity {
   key: string
   label: string
   done: boolean
   failed: boolean
-  kind: "vessel" | "knowledge" | "messaging" | "document"
+  kind: "vessel" | "knowledge" | "messaging" | "document" | "storage"
 }
 
 /** Collect tool invocations from a message's parts for the activity strip. */
@@ -247,7 +255,9 @@ function toolActivity(message: UIMessage): ToolActivity[] {
           ? "messaging"
           : DOCUMENT_TOOLS.has(type)
             ? "document"
-            : "vessel",
+            : STORAGE_TOOLS.has(type)
+              ? "storage"
+              : "vessel",
     })
   })
   return out
@@ -1015,6 +1025,8 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                           <Send className="h-3 w-3" />
                         ) : a.kind === "document" ? (
                           <FileText className="h-3 w-3" />
+                        ) : a.kind === "storage" ? (
+                          <Warehouse className="h-3 w-3" />
                         ) : a.label.includes("vessel") || a.label.includes("AIS") ? (
                           <Ship className="h-3 w-3" />
                         ) : (
