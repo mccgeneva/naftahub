@@ -258,8 +258,11 @@ export function InstrumentMarketplace() {
             </span>
             <div>
               <h3 className="text-sm font-semibold text-foreground">Securities reference lookup</h3>
-              <p className="text-xs text-muted-foreground">
-                Live OpenFIGI search — enter an issuer, ticker or ISIN to retrieve official FIGI identifiers.
+              <p className="text-xs text-muted-foreground text-pretty">
+                Live OpenFIGI search — enter an issuer, ticker or ISIN. A name/ticker search returns the official{" "}
+                <span className="font-medium text-foreground">FIGI</span> (Bloomberg&apos;s global identifier); ISINs are
+                not distributed through securities search. To validate a specific ISIN, use the{" "}
+                <span className="font-medium text-foreground">ISIN Tools</span> tab.
               </p>
             </div>
           </div>
@@ -293,7 +296,7 @@ export function InstrumentMarketplace() {
                       <th className="px-3 py-2 font-medium">Name</th>
                       <th className="px-3 py-2 font-medium">Ticker</th>
                       <th className="px-3 py-2 font-medium">FIGI</th>
-                      <th className="hidden px-3 py-2 font-medium sm:table-cell">Type</th>
+                      <th className="px-3 py-2 font-medium">Type</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -302,7 +305,7 @@ export function InstrumentMarketplace() {
                         <td className="px-3 py-2 text-foreground">{m.name ?? "—"}</td>
                         <td className="px-3 py-2 font-mono text-muted-foreground">{m.ticker ?? "—"}</td>
                         <td className="px-3 py-2 font-mono text-muted-foreground">{m.figi}</td>
-                        <td className="hidden px-3 py-2 text-muted-foreground sm:table-cell">
+                        <td className="px-3 py-2 text-muted-foreground">
                           {m.securityType ?? m.marketSector ?? "—"}
                         </td>
                       </tr>
@@ -311,6 +314,12 @@ export function InstrumentMarketplace() {
                 </table>
               </div>
             )
+          ) : null}
+          {figiResults && figiResults.length > 0 && !figiError ? (
+            <p className="text-[11px] text-muted-foreground text-pretty">
+              FIGI is Bloomberg&apos;s open global security identifier. Securities search does not return ISINs — switch
+              to the ISIN Tools tab to validate or resolve a specific ISIN.
+            </p>
           ) : null}
         </CardContent>
       </Card>
