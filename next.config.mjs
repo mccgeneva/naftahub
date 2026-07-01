@@ -6,6 +6,12 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  // Keep native / heavy document-conversion packages out of the server bundle so
+  // they're required from node_modules at runtime. Bundling `sharp` (a native
+  // addon) breaks its binary resolution in the serverless runtime, which threw
+  // at module import and 500'd the NQAi upload route for EVERY file — including
+  // valid JPEGs that never actually need conversion.
+  serverExternalPackages: ["sharp", "mammoth", "word-extractor"],
   // Server Actions validate the request Origin against the forwarded Host.
   // Behind custom domains and the apex -> www redirect (mcc-btp.app -> www.mcc-btp.app),
   // those can differ from the deployment URL, which makes Next reject the action
