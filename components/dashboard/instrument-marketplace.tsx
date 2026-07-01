@@ -110,6 +110,17 @@ export function InstrumentMarketplace() {
       ? "All banks"
       : (bankDirectory.find((b) => b.key === bankFilter)?.name ?? "All banks")
 
+  // Coverage stats for the terminal header strip.
+  const coverage = useMemo(() => {
+    const regions = new Set(bankDirectory.map((b) => b.region))
+    return {
+      banks: bankDirectory.length,
+      instruments: catalogue.length,
+      regions: regions.size,
+      types: MARKET_INSTRUMENT_TYPES.length,
+    }
+  }, [bankDirectory, catalogue])
+
   const filtered = useMemo(() => {
     const base = customInstruments ?? catalogue
     const q = filter.trim().toLowerCase()
@@ -313,6 +324,36 @@ export function InstrumentMarketplace() {
 
   return (
     <div className="space-y-6">
+      {/* Terminal header — desk identity + worldwide coverage */}
+      <div className="overflow-hidden rounded-lg border border-border bg-card">
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/30 px-4 py-2.5">
+          <div className="flex items-center gap-2">
+            <span className="flex h-2 w-2 items-center justify-center">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
+            </span>
+            <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-foreground">
+              Instruments Desk
+            </h2>
+          </div>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Global Coverage
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4">
+          {[
+            { label: "Banks Worldwide", value: `${coverage.banks}+` },
+            { label: "Instruments", value: coverage.instruments.toLocaleString() },
+            { label: "Regions", value: coverage.regions },
+            { label: "Instrument Types", value: coverage.types },
+          ].map((s) => (
+            <div key={s.label} className="bg-card px-4 py-3">
+              <p className="font-mono text-xl font-bold tabular-nums text-primary">{s.value}</p>
+              <p className="mt-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">{s.label}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* Live OpenFIGI reference search */}
       <Card className="border-border bg-card">
         <CardContent className="space-y-4 p-5">
@@ -356,11 +397,11 @@ export function InstrumentMarketplace() {
               <div className="max-h-64 overflow-y-auto rounded-lg border border-border">
                 <table className="w-full text-left text-xs">
                   <thead className="sticky top-0 bg-muted/60 text-muted-foreground">
-                    <tr>
-                      <th className="px-3 py-2 font-medium">Name</th>
-                      <th className="px-3 py-2 font-medium">Ticker</th>
-                      <th className="px-3 py-2 font-medium">Bloomberg ID</th>
-                      <th className="px-3 py-2 font-medium">Type</th>
+                    <tr className="[&>th]:px-3 [&>th]:py-2 [&>th]:text-[10px] [&>th]:font-medium [&>th]:uppercase [&>th]:tracking-wider">
+                      <th>Name</th>
+                      <th>Ticker</th>
+                      <th>Bloomberg ID</th>
+                      <th>Type</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -461,42 +502,60 @@ export function InstrumentMarketplace() {
           {visible.map((inst) => (
             <Card
               key={inst.id}
-              className={cn("border-border bg-card", !inst.available && "opacity-60")}
+              className={cn(
+                "relative overflow-hidden border-border bg-card transition-colors hover:border-primary/40",
+                !inst.available && "opacity-60",
+              )}
             >
-              <CardContent className="flex flex-col gap-4 p-5">
+              {/* gold accent rail */}
+              <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-primary/70" />
+              <CardContent className="flex flex-col gap-3 p-4 pl-5">
+                {/* Type + rating header */}
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-foreground">
-                      <Landmark className="h-5 w-5" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold leading-tight text-foreground">{inst.bankName}</p>
-                      <p className="text-xs text-muted-foreground">{inst.bankCountry}</p>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Badge className="rounded-sm px-1.5 py-0 font-mono text-[10px] font-bold">{inst.type}</Badge>
+                      <span className="truncate text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {inst.typeFull}
+                      </span>
                     </div>
+                    <p className="mt-2 truncate text-sm font-semibold leading-tight text-foreground">
+                      {inst.bankName}
+                    </p>
+                    <p className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-muted-foreground">
+                      <MapPin className="h-3 w-3 shrink-0" />
+                      {inst.bankCountry}
+                      <span className="text-border">·</span>
+                      <span className="font-mono">{inst.bankBic}</span>
+                    </p>
                   </div>
-                  <Badge variant="secondary" className="gap-1 font-mono">
+                  <Badge
+                    variant="outline"
+                    className="shrink-0 gap-1 rounded-sm border-primary/30 bg-primary/5 font-mono text-[10px] text-primary"
+                  >
                     <ShieldCheck className="h-3 w-3" />
                     {inst.rating}
                   </Badge>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <Badge className="font-mono">{inst.type}</Badge>
-                  <span className="text-xs text-muted-foreground">{inst.typeFull}</span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border border-border bg-muted/30 p-3 text-xs">
-                  <div>
-                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Face value</p>
-                    <p className="text-sm font-bold text-foreground">{money(inst.faceValue, inst.currency)}</p>
+                {/* Terminal data grid (hairline dividers) */}
+                <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border">
+                  <div className="bg-card px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Face Value</p>
+                    <p className="font-mono text-sm font-bold tabular-nums text-foreground">
+                      {money(inst.faceValue, inst.currency)}
+                    </p>
                   </div>
-                  <div className="text-right">
-                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Validity</p>
-                    <p className="text-sm font-semibold text-foreground">{tenorLabel(inst.tenorMonths)}</p>
+                  <div className="bg-card px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Validity</p>
+                    <p className="font-mono text-sm font-semibold text-foreground">{tenorLabel(inst.tenorMonths)}</p>
                   </div>
-                  <div className="col-span-2 flex items-center gap-1.5 border-t border-border pt-2 text-muted-foreground">
-                    <span className="text-[11px] uppercase tracking-wide">ISIN</span>
-                    <span className="font-mono text-foreground">{inst.isin}</span>
+                  <div className="col-span-2 bg-card px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">ISIN · Common Code</p>
+                    <p className="truncate font-mono text-xs text-foreground">
+                      {inst.isin} <span className="text-border">·</span>{" "}
+                      <span className="text-muted-foreground">{inst.commonCode}</span>
+                    </p>
                   </div>
                 </div>
 
@@ -513,7 +572,7 @@ export function InstrumentMarketplace() {
                           className={cn("flex-1 gap-1", a !== "lease" && "bg-transparent")}
                         >
                           {ACQUISITION_ACTION_LABELS[a]}
-                          <span className="text-[10px] opacity-70">
+                          <span className="font-mono text-[10px] opacity-70">
                             {(ACQUISITION_FEE_RATES[a] * 100).toFixed(a === "assign" ? 1 : 0)}%
                           </span>
                         </Button>
@@ -521,7 +580,7 @@ export function InstrumentMarketplace() {
                     })}
                   </div>
                 ) : (
-                  <Badge variant="outline" className="w-fit">
+                  <Badge variant="outline" className="w-fit rounded-sm text-[10px] uppercase tracking-wider">
                     Reserved — not currently available
                   </Badge>
                 )}
