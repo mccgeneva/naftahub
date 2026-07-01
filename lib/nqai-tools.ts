@@ -25,6 +25,13 @@ import { listLiveSpotDeals } from "@/app/actions/spot-deals"
 import { searchResearch, lookupInstitution, exploreConcept } from "@/lib/nqai-knowledge"
 import { sendOutboundEmail, sendOutboundSms } from "@/lib/nqai-messaging"
 import {
+  queryTerminals,
+  findTerminal,
+  projectTerminal,
+  STORAGE_DATA_NOTE,
+  STORAGE_CLASS_LABELS,
+} from "@/lib/tank-terminals"
+import {
   isValidImo,
   dealCountdown,
   VESSEL_TYPE_LABELS,
@@ -466,6 +473,91 @@ export function createNqaiTools(ctx: NqaiToolContext = {}) {
         note: status.connected
           ? `Live vessel intelligence is active via ${status.active?.label}. Free OFAC sanctions + IMO-validity screening always runs.`
           : "No paid AIS provider is linked. Free OFAC sanctions screening, IMO validation, and public-registry lookups are always available; live real-time positions/ETA require connecting a provider API key.",
+      }
+    },
+  }),
+
+  // =========================================================================
+  // TANK TERMINALS & WORLDWIDE STORAGE — query the reference catalogue of real
+  // tank-terminal operators at global hubs (Rotterdam, Houston, Singapore,
+  // Fujairah, Ras Tanura, Cushing, …). Nameplate capacities are reference
+  // figures; live open/booked space needs a commercial feed or desk
+  // confirmation (STORAGE_DATA_NOTE is always surfaced, never fabricated).
+  // =========================================================================
+
+  /**
+   * Find tank terminals / storage facilities matching a port, region, product
+   * and/or minimum capacity. Powers natural-language storage queries.
+   */
+  findTankStorage: tool({
+    description:
+      "Find oil/gas/chemical tank terminals and storage facilities worldwide. Filter by port (e.g. 'Rotterdam', 'Houston', 'Singapore', 'Fujairah', 'Ras Tanura'), region (e.g. 'Middle East', 'US Gulf Coast', 'ARA'), the product to be stored (e.g. 'diesel', 'crude', 'LNG', 'fuel oil', 'chemicals'), and/or a minimum nameplate capacity. Use for requests like 'Show tank storage in Rotterdam for diesel', 'List major crude storage terminals in the Middle East', or 'Where can I store LPG in Asia?'. Returns matching terminals with operator, port, product slate, nameplate capacity (m³), connectivity and services.",
+    inputSchema: z.object({
+      port: z.string().nullable().describe("Port/hub name to filter by, e.g. 'Rotterdam'. Null = any port."),
+      region: z
+        .string()
+        .nullable()
+        .describe("Region to filter by, e.g. 'Middle East', 'US Gulf Coast', 'ARA', 'Singapore'. Null = any region."),
+      product: z
+        .string()
+        .nullable()
+        .describe("Product/grade to be stored, e.g. 'diesel', 'crude oil', 'LNG', 'fuel oil', 'chemicals'. Null = any."),
+      minCapacityCbm: z
+        .number()
+        .nullable()
+        .describe("Optional minimum nameplate capacity in cubic metres (m³) a terminal must have."),
+    }),
+    execute: async ({ port, region, product, minCapacityCbm }) => {
+      const { terminals, resolvedRegion, resolvedClass } = queryTerminals({
+        port,
+        region,
+        product,
+        minCapacityCbm,
+      })
+      return {
+        ok: true,
+        query: {
+          port: port ?? "any",
+          region: resolvedRegion ?? region ?? "any",
+          product: product ?? "any",
+          resolvedProductClass: resolvedClass ? STORAGE_CLASS_LABELS[resolvedClass] : "any",
+          minCapacityCbm: minCapacityCbm ?? null,
+        },
+        count: terminals.length,
+        terminals: terminals.slice(0, 12).map(projectTerminal),
+        dataNote: STORAGE_DATA_NOTE,
+        note:
+          terminals.length === 0
+            ? "No terminals in the reference catalogue match those criteria. Try a broader region, a different product family, or drop the capacity filter."
+            : `${terminals.length} terminal(s) match, sorted by nameplate capacity. Present the top ones as a table (operator, port, products, capacity). Always state that capacities are reference figures and live space must be confirmed with the terminal/desk.`,
+      }
+    },
+  }),
+
+  /**
+   * Detail on a single named terminal / operator.
+   */
+  getTerminalDetails: tool({
+    description:
+      "Get full details on a single tank terminal by its name or operator, e.g. 'Vopak Europoort', 'Universal Terminal Jurong', 'VTTI Fujairah', 'Cushing Enbridge'. Returns operator, port/country/region, full product slate, nameplate capacity, tank count, marine/inland connectivity and value-added services. Use after findTankStorage when the user wants to drill into one facility.",
+    inputSchema: z.object({
+      query: z.string().describe("The terminal name or operator to look up, e.g. 'Vopak Europoort'."),
+    }),
+    execute: async ({ query }) => {
+      const q = (query ?? "").trim()
+      if (!q) return { ok: false, error: "Provide a terminal name or operator to look up." }
+      const terminal = findTerminal(q)
+      if (!terminal) {
+        return {
+          ok: false,
+          error: `No terminal matching "${q}" is in the reference catalogue. Try findTankStorage to browse by port/region/product.`,
+        }
+      }
+      return {
+        ok: true,
+        terminal: projectTerminal(terminal),
+        dataNote: STORAGE_DATA_NOTE,
+        note: "Reference facility profile. Confirm live available capacity with the terminal or the MCC desk before committing cargo.",
       }
     },
   }),
