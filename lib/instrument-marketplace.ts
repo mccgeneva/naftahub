@@ -11,7 +11,7 @@
 // renders, devices and reloads — never random per render.
 // ---------------------------------------------------------------------------
 
-import { ISSUING_BANKS, type IssuingBankProfile } from "@/lib/instrument-identifiers"
+import { PARTNER_BANKS, type PartnerBank, type BankRegion } from "@/lib/partner-banks"
 
 // --- Indicative acquisition pricing ----------------------------------------
 // These mirror the headline rates shown on the Instruments page pricing strip.
@@ -94,6 +94,8 @@ export interface MarketInstrument {
   bankName: string
   bankBic: string
   bankCountry: string
+  /** Geographic grouping (from the partner-bank directory), for the region filter. */
+  region: BankRegion
   rating: string
   type: string
   typeFull: string
@@ -181,59 +183,103 @@ const FACE_VALUES = [
 const TENORS = [12, 13, 24, 36]
 const RATINGS = ["AAA", "AA+", "AA", "AA-", "A+"]
 
-/** Currency by issuing-bank country, with a sensible default. */
-function bankCurrency(countryCode: string): string[] {
-  switch (countryCode) {
-    case "US":
-      return ["USD", "EUR"]
-    case "GB":
-      return ["GBP", "USD", "EUR"]
-    case "CH":
-      return ["CHF", "EUR", "USD"]
-    case "DE":
-      return ["EUR", "USD"]
-    default:
-      return ["USD", "EUR"]
+/** Preferred settlement currencies for a bank: its own list, USD-first, EUR always available. */
+function bankCurrencies(bank: Pick<PartnerBank, "currencies">): string[] {
+  const set = new Set<string>(bank.currencies)
+  set.add("USD")
+  set.add("EUR")
+  return Array.from(set)
+}
+
+/** Build the two deterministic offerings a given bank × instrument type carries. */
+function offeringsForBank(
+  bank: Pick<PartnerBank, "key" | "name" | "bic" | "country" | "countryCode" | "region">,
+): MarketInstrument[] {
+  const out: MarketInstrument[] = []
+  const currencies = bankCurrencies(bank as PartnerBank)
+  for (const t of MARKET_INSTRUMENT_TYPES) {
+    // Two distinct offerings per bank × type.
+    for (let i = 1; i <= 2; i++) {
+      const rng = mulberry32(hashSeed(`${bank.key}|${t.code}|${i}`))
+      const isinPrefix = t.code === "MTN" ? "XS" : bank.countryCode
+      out.push({
+        id: `MKT-${bank.key.toUpperCase()}-${t.code}-${i}`,
+        bankKey: bank.key,
+        bankName: bank.name,
+        bankBic: bank.bic,
+        bankCountry: bank.country,
+        region: bank.region,
+        rating: pick(rng, RATINGS),
+        type: t.code,
+        typeFull: t.full,
+        purpose: t.purpose,
+        faceValue: pick(rng, FACE_VALUES),
+        currency: pick(rng, currencies),
+        tenorMonths: pick(rng, TENORS),
+        isin: deterministicIsin(isinPrefix, rng),
+        commonCode: deterministicCommonCode(rng),
+        assignable: t.assignable,
+        monetizable: t.monetizable,
+        // ~1 in 6 shown as reserved for realism.
+        available: rng() > 0.16,
+      })
+    }
   }
+  return out
 }
 
 /**
- * Build the full marketplace catalogue. Deterministic: the same bank/type/index
+ * Build the full marketplace catalogue across the ENTIRE worldwide partner-bank
+ * directory (~110 banks, every region). Deterministic: the same bank/type/index
  * always yields the same identifiers, face value, rating and currency.
  */
 export function buildMarketplaceCatalogue(): MarketInstrument[] {
   const out: MarketInstrument[] = []
-  for (const [bankKey, bank] of Object.entries(ISSUING_BANKS) as [string, IssuingBankProfile][]) {
-    const currencies = bankCurrency(bank.countryCode)
-    for (const t of MARKET_INSTRUMENT_TYPES) {
-      // Two distinct offerings per bank × type.
-      for (let i = 1; i <= 2; i++) {
-        const rng = mulberry32(hashSeed(`${bankKey}|${t.code}|${i}`))
-        const isinPrefix = t.code === "MTN" ? "XS" : bank.countryCode
-        out.push({
-          id: `MKT-${bankKey.toUpperCase()}-${t.code}-${i}`,
-          bankKey,
-          bankName: bank.name,
-          bankBic: bank.bic,
-          bankCountry: bank.country,
-          rating: pick(rng, RATINGS),
-          type: t.code,
-          typeFull: t.full,
-          purpose: t.purpose,
-          faceValue: pick(rng, FACE_VALUES),
-          currency: pick(rng, currencies),
-          tenorMonths: pick(rng, TENORS),
-          isin: deterministicIsin(isinPrefix, rng),
-          commonCode: deterministicCommonCode(rng),
-          assignable: t.assignable,
-          monetizable: t.monetizable,
-          // ~1 in 6 shown as reserved for realism.
-          available: rng() > 0.16,
-        })
-      }
-    }
-  }
+  for (const bank of PARTNER_BANKS) out.push(...offeringsForBank(bank))
   return out
+}
+
+// --- Custom (user-typed) issuing bank --------------------------------------
+// Lets a client search for an instrument from ANY bank in the world, even one
+// not in the curated directory. A deterministic, structurally-valid BIC and a
+// neutral international ISIN prefix are synthesised from the typed name so the
+// generated instruments look authentic and stay stable across renders.
+
+/** Deterministically synthesise a plausible BIC stem from a bank name. */
+function synthesiseBic(name: string, rng: () => number): string {
+  const letters = name.toUpperCase().replace(/[^A-Z]/g, "")
+  const stem = (letters + "BANK").slice(0, 4)
+  const loc = NSIN_ALPHABET.slice(10) // A–Z only
+  const l1 = loc[Math.floor(rng() * 26)]
+  const l2 = loc[Math.floor(rng() * 26)]
+  // XX = international/undetermined country placeholder.
+  return `${stem}XX${l1}${l2}`
+}
+
+/** Build a stable key for a typed custom bank name. */
+export function customBankKey(name: string): string {
+  return `custom-${hashSeed(name.trim().toLowerCase()).toString(36)}`
+}
+
+/**
+ * Generate a full instrument set for an arbitrary, user-typed issuing bank that
+ * is not in the curated directory. Returns an empty array for a blank name.
+ */
+export function buildCustomBankInstruments(name: string): MarketInstrument[] {
+  const clean = name.trim()
+  if (!clean) return []
+  const key = customBankKey(clean)
+  const rng = mulberry32(hashSeed(`bic|${clean.toLowerCase()}`))
+  const bic = synthesiseBic(clean, rng)
+  return offeringsForBank({
+    key,
+    name: clean,
+    bic,
+    country: "International",
+    // Neutral international ISIN prefix (Euroclear/Clearstream) for cross-border issuers.
+    countryCode: "XS",
+    region: "Europe",
+  })
 }
 
 /** Human label for a tenor in months (instruments are "1 year and 1 day" style). */
