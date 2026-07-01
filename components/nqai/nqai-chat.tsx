@@ -55,8 +55,13 @@ import { usePdfViewer } from "@/lib/pdf-viewer"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { generateNqaiDocumentPdf } from "@/lib/nqai-document-pdf"
 
-/** Client-accepted upload types and the limit, mirrored by the upload route. */
-const ACCEPTED_UPLOAD = ".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.csv,application/pdf,image/png,image/jpeg,image/webp,image/gif,text/plain,text/csv"
+/** Client-accepted upload types and the limit, mirrored by the upload route.
+ *  Office/rich-text/tiff/bin are extracted or converted server-side into a
+ *  model-ingestible payload (text or PNG). */
+const ACCEPTED_UPLOAD =
+  ".pdf,.doc,.docx,.rtf,.txt,.csv,.gif,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bin," +
+  "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document," +
+  "application/rtf,text/rtf,text/plain,text/csv,image/gif,image/jpeg,image/png,image/webp,image/tiff,application/octet-stream"
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 interface PendingAttachment {
