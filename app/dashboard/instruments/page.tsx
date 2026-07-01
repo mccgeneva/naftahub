@@ -1199,7 +1199,7 @@ export default function InstrumentsPage() {
         <TabsContent value="isin-tools" className="space-y-4">
           <IsinTools
             title="ISIN validation, lookup &amp; market data"
-            description="Check any ISIN's format and ISO 6166 check digit instantly, resolve it to live OpenFIGI market reference data (issuer, FIGI, ticker, exchange, type), or search issuers and tickers."
+            description="Check any ISIN's format and ISO 6166 check digit instantly, resolve it to live Bloomberg market reference data (issuer, Bloomberg ID, ticker, exchange, type), or search issuers and tickers."
             onLog={logActivity}
           />
 
