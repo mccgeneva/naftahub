@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Landmark, Loader2, ShieldCheck } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -18,6 +18,7 @@ import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
 import { adminIssueInstrument } from "@/app/actions/approvals"
 import { buildInstrumentIdentifiers } from "@/lib/instrument-identifiers"
+import { IsinTools } from "@/components/instruments/isin-tools"
 import { partnerBankByKey } from "@/lib/partner-banks"
 import { BankCombobox } from "@/components/admin/bank-combobox"
 import { useActivityLog } from "@/components/activity-tracker"
@@ -65,6 +66,17 @@ export function InstrumentIssuer() {
 
   const selectedClient = clients.find((c) => c.id === targetUserId)
 
+  // Generate the identifier set (incl. a valid ISIN) as soon as a bank + type are
+  // chosen, so the admin can verify the EXACT ISIN that will be issued before
+  // committing. Memoised on [bank, type] so the ISIN is stable while the admin
+  // reviews it — and the very same object is used at issue time.
+  const previewIdentifiers = useMemo(() => {
+    const meta = TYPE_META[instrumentType]
+    if (!issuingBank || !meta) return null
+    return buildInstrumentIdentifiers(issuingBank, meta.short)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [issuingBank, instrumentType])
+
   const reset = () => {
     setInstrumentType("")
     setFaceValue("")
@@ -98,7 +110,9 @@ export function InstrumentIssuer() {
     const expiry = new Date(now)
     expiry.setFullYear(expiry.getFullYear() + 1)
     const issuer = partnerBankByKey(issuingBank)?.name ?? "—"
-    const identifiers = buildInstrumentIdentifiers(issuingBank, meta.short, now)
+    // Reuse the previewed/verified identifier set so the issued ISIN is exactly
+    // the one the admin validated; fall back to a fresh set defensively.
+    const identifiers = previewIdentifiers ?? buildInstrumentIdentifiers(issuingBank, meta.short, now)
 
     const instrument = {
       id: `${meta.short}-${now.getTime().toString().slice(-6)}`,
@@ -257,6 +271,17 @@ export function InstrumentIssuer() {
             Issuance is recorded on the approvals backbone and delivered to the client&apos;s portfolio across devices. The client view is read-only.
           </p>
         </div>
+
+        {/* Verify the exact ISIN that will be issued against live market data */}
+        {previewIdentifiers ? (
+          <IsinTools
+            defaultIsin={previewIdentifiers.isin}
+            title="Verify the ISIN to be issued"
+            description="This is the ISIN that will be attached to the issued instrument. Its format and ISO 6166 check digit are valid; resolve it against OpenFIGI to confirm market status. Private SBLC / BG / MTN instruments are delivered bank-to-bank via SWIFT MT760 and are not exchange-listed."
+            onLog={logActivity}
+            logCategory="Administration / Instruments"
+          />
+        ) : null}
 
         <Button onClick={handleIssue} disabled={submitting} className="w-full sm:w-auto">
           {submitting ? (
