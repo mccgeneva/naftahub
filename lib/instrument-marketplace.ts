@@ -201,7 +201,10 @@ function offeringsForBank(
     // Two distinct offerings per bank × type.
     for (let i = 1; i <= 2; i++) {
       const rng = mulberry32(hashSeed(`${bank.key}|${t.code}|${i}`))
-      const isinPrefix = t.code === "MTN" ? "XS" : bank.countryCode
+      // All marketplace instruments are internationally cleared (Euroclear/Clearstream),
+      // so they carry the neutral international "XS" ISIN prefix — the standard for
+      // cross-border bank-issued securities — rather than a domestic country prefix.
+      const isinPrefix = "XS"
       out.push({
         id: `MKT-${bank.key.toUpperCase()}-${t.code}-${i}`,
         bankKey: bank.key,
