@@ -277,7 +277,7 @@ export function InstrumentIssuer() {
           <IsinTools
             defaultIsin={previewIdentifiers.isin}
             title="Verify the ISIN to be issued"
-            description="This is the ISIN that will be attached to the issued instrument. Its format and ISO 6166 check digit are valid; resolve it against OpenFIGI to confirm market status. Private SBLC / BG / MTN instruments are delivered bank-to-bank via SWIFT MT760 and are not exchange-listed."
+            description="This is the ISIN that will be attached to the issued instrument. Its format and ISO 6166 check digit are valid; resolve it against Bloomberg to confirm market status. Private SBLC / BG / MTN instruments are delivered bank-to-bank via SWIFT MT760 and are not exchange-listed."
             onLog={logActivity}
             logCategory="Administration / Instruments"
           />

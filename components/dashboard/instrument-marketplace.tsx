@@ -170,13 +170,13 @@ export function InstrumentMarketplace() {
         setVerify({
           loading: false,
           listed: true,
-          note: `FIGI ${m.figi}${m.securityType ? ` · ${m.securityType}` : ""}${m.marketSector ? ` · ${m.marketSector}` : ""}`,
+          note: `Bloomberg ID ${m.figi}${m.securityType ? ` · ${m.securityType}` : ""}${m.marketSector ? ` · ${m.marketSector}` : ""}`,
         })
       } else {
         setVerify({
           loading: false,
           listed: false,
-          note: "Valid ISIN · private bilateral instrument (not exchange-listed on OpenFIGI).",
+          note: "Valid ISIN · private bilateral instrument (not exchange-listed on Bloomberg).",
         })
       }
     } catch {
@@ -259,9 +259,9 @@ export function InstrumentMarketplace() {
             <div>
               <h3 className="text-sm font-semibold text-foreground">Securities reference lookup</h3>
               <p className="text-xs text-muted-foreground text-pretty">
-                Live OpenFIGI search — enter an issuer, ticker or ISIN. A name/ticker search returns the official{" "}
-                <span className="font-medium text-foreground">FIGI</span> (Bloomberg&apos;s global identifier); ISINs are
-                not distributed through securities search. To validate a specific ISIN, use the{" "}
+                Live <span className="font-medium text-foreground">Bloomberg</span> reference search — enter an issuer,
+                ticker or ISIN. A name/ticker search returns the official Bloomberg security identifier; ISINs are not
+                distributed through securities search. To validate a specific ISIN, use the{" "}
                 <span className="font-medium text-foreground">ISIN Tools</span> tab.
               </p>
             </div>
@@ -275,7 +275,7 @@ export function InstrumentMarketplace() {
                 onKeyDown={(e) => e.key === "Enter" && runFigiSearch()}
                 placeholder="e.g. HSBC, AAPL, or US0378331005"
                 className="pl-9"
-                aria-label="OpenFIGI search query"
+                      aria-label="Bloomberg search query"
               />
             </div>
             <Button onClick={runFigiSearch} disabled={figiLoading || !figiQuery.trim()} className="gap-1.5">
@@ -295,7 +295,7 @@ export function InstrumentMarketplace() {
                     <tr>
                       <th className="px-3 py-2 font-medium">Name</th>
                       <th className="px-3 py-2 font-medium">Ticker</th>
-                      <th className="px-3 py-2 font-medium">FIGI</th>
+                      <th className="px-3 py-2 font-medium">Bloomberg ID</th>
                       <th className="px-3 py-2 font-medium">Type</th>
                     </tr>
                   </thead>
@@ -317,8 +317,8 @@ export function InstrumentMarketplace() {
           ) : null}
           {figiResults && figiResults.length > 0 && !figiError ? (
             <p className="text-[11px] text-muted-foreground text-pretty">
-              FIGI is Bloomberg&apos;s open global security identifier. Securities search does not return ISINs — switch
-              to the ISIN Tools tab to validate or resolve a specific ISIN.
+              Results show Bloomberg&apos;s official global security identifier. Securities search does not return ISINs
+              — switch to the ISIN Tools tab to validate or resolve a specific ISIN.
             </p>
           ) : null}
         </CardContent>
@@ -523,7 +523,7 @@ export function InstrumentMarketplace() {
                     className="h-7 gap-1 text-xs"
                   >
                     {verify?.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                    Verify on OpenFIGI
+                    Verify on Bloomberg
                   </Button>
                 </div>
                 {verify && !verify.loading && verify.note ? (

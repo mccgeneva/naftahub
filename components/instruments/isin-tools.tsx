@@ -130,7 +130,7 @@ export function IsinTools({
           note:
             data.listed && matches.length
               ? undefined
-              : "Valid ISIN — private bilateral instrument (not exchange-listed on OpenFIGI). SBLC / BG / most private MTNs are delivered bank-to-bank via SWIFT MT760 and carry an ISIN without an exchange listing.",
+              : "Valid ISIN — private bilateral instrument (not exchange-listed on Bloomberg). SBLC / BG / most private MTNs are delivered bank-to-bank via SWIFT MT760 and carry an ISIN without an exchange listing.",
         }
         setIsinResult(resolution)
         onLog?.({
@@ -138,7 +138,9 @@ export function IsinTools({
           category: logCategory,
           details: {
             summary: `ISIN ${upper} checked — format ${formatValid ? "valid" : "invalid"}, market status: ${
-              resolution.listed ? `exchange-listed (${matches[0]?.figi ?? "FIGI"})` : "valid, not exchange-listed"
+              resolution.listed
+                ? `exchange-listed (${matches[0]?.figi ?? "Bloomberg ID"})`
+                : "valid, not exchange-listed"
             }.`,
             isin: upper,
             formatValid,
@@ -153,7 +155,7 @@ export function IsinTools({
           action: `Searched securities reference for "${q}"`,
           category: logCategory,
           details: {
-            summary: `OpenFIGI securities search for "${q}" returned ${matches.length} match(es).`,
+            summary: `Bloomberg securities search for "${q}" returned ${matches.length} match(es).`,
             query: q,
             resultCount: matches.length,
           },
@@ -272,7 +274,7 @@ export function IsinTools({
                     className="grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-md border border-border bg-background p-3 text-xs"
                   >
                     <Detail label="Instrument" value={m.name ?? m.securityDescription} span />
-                    <Detail label="FIGI" value={m.figi} mono />
+                    <Detail label="Bloomberg ID" value={m.figi} mono />
                     <Detail label="Ticker" value={m.ticker} mono />
                     <Detail label="Exchange" value={m.exchCode} />
                     <Detail label="Type" value={m.securityType2 ?? m.securityType} />
@@ -297,7 +299,7 @@ export function IsinTools({
                   <tr>
                     <th className="px-3 py-2 font-medium">Name</th>
                     <th className="px-3 py-2 font-medium">Ticker</th>
-                    <th className="px-3 py-2 font-medium">FIGI</th>
+                    <th className="px-3 py-2 font-medium">Bloomberg ID</th>
                     <th className="hidden px-3 py-2 font-medium sm:table-cell">Type</th>
                   </tr>
                 </thead>
