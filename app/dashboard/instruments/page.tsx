@@ -65,6 +65,7 @@ import { usePdfViewer } from "@/lib/pdf-viewer"
 import { toast } from "sonner"
 import { useInstrumentRequests, type Instrument } from "@/lib/instrument-requests-store"
 import { InstrumentMarketplace } from "@/components/dashboard/instrument-marketplace"
+import { IsinTools } from "@/components/instruments/isin-tools"
 import { resolveTransferRecipient } from "@/app/actions/transfers"
 import type { TransferDirectoryEntry } from "@/lib/users"
 import { useLeverageRequests } from "@/lib/leverage-requests-store"
@@ -705,6 +706,7 @@ export default function InstrumentsPage() {
         <TabsList>
           <TabsTrigger value="portfolio">My Portfolio</TabsTrigger>
           <TabsTrigger value="marketplace">Marketplace</TabsTrigger>
+          <TabsTrigger value="isin-tools">ISIN Tools</TabsTrigger>
         </TabsList>
 
         <TabsContent value="portfolio" className="space-y-6">
@@ -1192,6 +1194,52 @@ export default function InstrumentsPage() {
 
         <TabsContent value="marketplace">
           <InstrumentMarketplace />
+        </TabsContent>
+
+        <TabsContent value="isin-tools" className="space-y-4">
+          <IsinTools
+            title="ISIN validation, lookup &amp; market data"
+            description="Check any ISIN's format and ISO 6166 check digit instantly, resolve it to live OpenFIGI market reference data (issuer, FIGI, ticker, exchange, type), or search issuers and tickers."
+            onLog={logActivity}
+          />
+
+          {/* One-tap verification of the client's own portfolio ISINs */}
+          {(() => {
+            const withIsin = instruments.filter((i) => i.isin)
+            if (withIsin.length === 0) return null
+            return (
+              <Card className="border-border bg-card">
+                <CardContent className="space-y-3 p-5">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="h-4 w-4 text-primary" />
+                    <h3 className="text-sm font-semibold text-foreground">Verify your instruments</h3>
+                  </div>
+                  <p className="text-xs text-muted-foreground text-pretty">
+                    Copy any of your portfolio ISINs into the tool above to confirm its identifiers.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {withIsin.map((i) => (
+                      <button
+                        key={i.id}
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(i.isin!)
+                          toast.success("ISIN copied", {
+                            description: `${i.type} ${i.id} — ${i.isin}. Paste it into the ISIN tool above to verify.`,
+                          })
+                        }}
+                        className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-xs transition-colors hover:border-primary/40 hover:bg-muted/50"
+                      >
+                        <Badge className="font-mono text-[10px]">{i.type}</Badge>
+                        <span className="font-mono text-foreground">{i.isin}</span>
+                        <Copy className="h-3 w-3 text-muted-foreground" />
+                      </button>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })()}
         </TabsContent>
       </Tabs>
 
