@@ -106,9 +106,19 @@ export default function BankAccountsPage() {
       setAddError("Bank Name is required.")
       return
     }
-    const ibanCheck = validateIban(newIban)
-    if (!ibanCheck.valid) {
-      setAddError(`IBAN: ${ibanCheck.error}`)
+    // IBAN is optional: many countries (China, US, Canada, Japan, etc.) do not
+    // use IBANs and settle via SWIFT/BIC + a domestic account number. Only
+    // validate the IBAN when one was actually entered; otherwise require an
+    // account number so the account still has a usable beneficiary identifier.
+    const hasIban = newIban.trim().length > 0
+    if (hasIban) {
+      const ibanCheck = validateIban(newIban)
+      if (!ibanCheck.valid) {
+        setAddError(`IBAN: ${ibanCheck.error}`)
+        return
+      }
+    } else if (!newAccountNumber.trim()) {
+      setAddError("Enter an IBAN, or an Account Number for banks that do not use IBAN.")
       return
     }
     const bicCheck = validateBic(newSwift)
@@ -127,7 +137,7 @@ export default function BankAccountsPage() {
       accountType: newAccountType || null,
       country: countryName,
       countryCode: newCountry || null,
-      iban: newIban.trim(),
+      iban: newIban.trim() || null,
       swift: newSwift.trim().toUpperCase(),
       currency: newCurrency || null,
       accountNumber: newAccountNumber.trim() || null,
@@ -135,9 +145,13 @@ export default function BankAccountsPage() {
       rating: newRating || null,
       branchAddress: newBranchAddress.trim() || null,
     }
+    // Use whichever beneficiary identifier the account actually has.
+    const beneficiaryRef = newIban.trim()
+      ? `IBAN ${newIban.trim()}`
+      : `Account No. ${newAccountNumber.trim()}`
     const summary = `Register ${newBankName.trim()}${
       newCurrency ? ` (${newCurrency})` : ""
-    } — IBAN ${newIban.trim()}, SWIFT ${newSwift.trim().toUpperCase()}, ${countryName}.`
+    } — ${beneficiaryRef}, SWIFT ${newSwift.trim().toUpperCase()}, ${countryName}.`
 
     setSubmitting(true)
 
@@ -149,7 +163,8 @@ export default function BankAccountsPage() {
         summary: "Client submitted a request to register a new bank account on the platform.",
         bank: newBankName.trim(),
         country: countryName,
-        iban: newIban.trim(),
+        iban: newIban.trim() || "—",
+        accountNumber: newAccountNumber.trim() || "—",
         submittedAt: new Date().toLocaleString("en-GB"),
       },
     })
@@ -307,9 +322,9 @@ export default function BankAccountsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <VerifiedBankField
                   id="new-account-iban"
-                  label="IBAN"
+                  label="IBAN (optional)"
                   kind="iban"
-                  placeholder="e.g., CH93 0027 3273 0786 5420 0"
+                  placeholder="Leave blank if bank has no IBAN"
                   value={newIban}
                   onChange={setNewIban}
                   onResolved={handleResolvedBank}
@@ -591,29 +606,39 @@ export default function BankAccountsPage() {
               )}
 
               <div className="pt-2 border-t border-zinc-800 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">IBAN</span>
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs font-mono text-zinc-400 truncate max-w-[140px]">
-                      {account.iban}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-5 w-5"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        copyToClipboard(account.iban, `iban-${account.id}`)
-                      }}
-                    >
-                      {copiedField === `iban-${account.id}` ? (
-                        <Check className="h-3 w-3 text-emerald-400" />
-                      ) : (
-                        <Copy className="h-3 w-3 text-muted-foreground" />
-                      )}
-                    </Button>
-                  </div>
-                </div>
+                {(() => {
+                  // Show the IBAN when present, otherwise fall back to the
+                  // domestic Account Number (banks in China, US, etc. have no IBAN).
+                  const hasIban = account.iban && account.iban !== "—"
+                  const label = hasIban ? "IBAN" : "Account No."
+                  const value = hasIban ? account.iban : account.accountNumber
+                  const fieldKey = `ident-${account.id}`
+                  return (
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">{label}</span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs font-mono text-zinc-400 truncate max-w-[140px]">
+                          {value}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            copyToClipboard(value, fieldKey)
+                          }}
+                        >
+                          {copiedField === fieldKey ? (
+                            <Check className="h-3 w-3 text-emerald-400" />
+                          ) : (
+                            <Copy className="h-3 w-3 text-muted-foreground" />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                })()}
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-muted-foreground">SWIFT</span>
                   <div className="flex items-center gap-1">
