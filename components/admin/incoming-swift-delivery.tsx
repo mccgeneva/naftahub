@@ -573,6 +573,10 @@ export function IncomingSwiftDelivery() {
                                   <SelectValue placeholder="Choose type…" />
                                 </SelectTrigger>
                                 <SelectContent>
+                                  <SelectGroup>
+                                    <SelectLabel>Blocked-Funds Guarantee</SelectLabel>
+                                    <SelectItem value="MT760">Blocked-Funds SWIFT MT760 (MT760)</SelectItem>
+                                  </SelectGroup>
                                   {instrumentTypesByCategory().map((group) => (
                                     <SelectGroup key={group.category}>
                                       <SelectLabel>{group.category}</SelectLabel>
