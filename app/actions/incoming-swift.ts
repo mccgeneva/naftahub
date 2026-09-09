@@ -887,18 +887,22 @@ export async function recordGuaranteeInstrumentAdmin(
     if (!currency) return { ok: false, error: "Enter the instrument currency." }
 
     // Resolve the chosen instrument type from the catalog (assignable/monetizable
-    // rules per type). Falls back to the MT760 blocked-funds treatment when the
-    // admin does not pick a type AND the message is an MT760 guarantee.
-    const typeMeta = overrides?.instrumentTypeCode
-      ? findInstrumentType(overrides.instrumentTypeCode)
-      : undefined
-    if (overrides?.instrumentTypeCode && !typeMeta) {
+    // rules per type). The sentinel code "MT760" (or no type on an MT760 message)
+    // books the blocked-funds guarantee treatment: monetizable + pledgeable but
+    // NOT assignable. typeMeta stays undefined for that path.
+    const BLOCKED_FUNDS_CODE = "MT760"
+    const wantsBlockedFunds = overrides?.instrumentTypeCode === BLOCKED_FUNDS_CODE
+    const typeMeta =
+      overrides?.instrumentTypeCode && !wantsBlockedFunds
+        ? findInstrumentType(overrides.instrumentTypeCode)
+        : undefined
+    if (overrides?.instrumentTypeCode && !wantsBlockedFunds && !typeMeta) {
       return { ok: false, error: "Unknown instrument type." }
     }
-    if (!typeMeta && parsed.type !== "MT760") {
+    if (!typeMeta && !wantsBlockedFunds && parsed.type !== "MT760") {
       return {
         ok: false,
-        error: "Choose the instrument type (BG / SBLC / DLC / MTN / Bond) to book this printout.",
+        error: "Choose the instrument type (Blocked-Funds MT760 / BG / SBLC / DLC / MTN / Bond) to book this printout.",
       }
     }
 
