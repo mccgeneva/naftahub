@@ -97,6 +97,7 @@ export const PARTNER_BANKS: PartnerBank[] = [
   { key: "wellsfargo", name: "Wells Fargo", country: "United States", countryCode: "US", bic: "WFBIUS6S", currencies: ["USD"], region: "Americas" },
   { key: "usbank", name: "U.S. Bank", country: "United States", countryCode: "US", bic: "USBKUS44", currencies: ["USD"], region: "Americas" },
   { key: "pnc", name: "PNC Bank", country: "United States", countryCode: "US", bic: "PNCCUS33", currencies: ["USD"], region: "Americas" },
+  { key: "butterfieldky", name: "Butterfield Bank (Cayman) Limited", country: "Cayman Islands", countryCode: "KY", bic: "BNTBKYKY", currencies: ["USD", "KYD", "GBP", "EUR"], region: "Americas" },
   { key: "truist", name: "Truist Bank", country: "United States", countryCode: "US", bic: "BRBTUS33", currencies: ["USD"], region: "Americas" },
   { key: "goldman", name: "Goldman Sachs", country: "United States", countryCode: "US", bic: "GSCMUS33", currencies: ["USD", "EUR", "GBP"], region: "Americas" },
   { key: "morganstanley", name: "Morgan Stanley", country: "United States", countryCode: "US", bic: "MSNYUS33", currencies: ["USD", "EUR"], region: "Americas" },
