@@ -1,7 +1,7 @@
 "use server"
 
 import { query, isDatabaseConfigured } from "@/lib/db"
-import { adminActionAuthorized } from "@/lib/admin-auth"
+import { adminActionAuthorized, isAdminEmail } from "@/lib/admin-auth"
 import { type UserProfile } from "@/lib/users"
 import { resolveAccountProfileById, resolveCurrentSession, resolveDataOwnerIdFor } from "@/lib/session-user"
 import { getDynamicUserByEmail } from "@/lib/admin-users-db"
@@ -331,7 +331,14 @@ export async function sendInstantTransfer(input: {
     // cashback (resolved for the fee-bearer = the recipient) reduces the fee, so
     // the recipient receives MORE. Both the standard fee and the cashback are
     // recorded for display + audit.
-    const standardTransferFee = internalTransferFee(amount, await getFeeTiers())
+    //
+    // EXEMPTION: when the operator/treasury (an admin account) funds a client —
+    // e.g. topping up a Master Account to help cover charges — no fee is taken,
+    // so the client receives the FULL amount. Charging the client 2% on money
+    // the platform is giving them is illogical and made a €20,000 top-up land
+    // as €19,600.
+    const senderIsAdmin = isAdminEmail(senderProfile.email)
+    const standardTransferFee = senderIsAdmin ? 0 : internalTransferFee(amount, await getFeeTiers())
     const transferCashback = await applyCashbackForOwner(recipientOwnerId, "transaction", standardTransferFee)
     const transferFee = transferCashback.netFee
     const netCredit = Math.round((amount - transferFee) * 100) / 100
