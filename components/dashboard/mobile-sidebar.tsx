@@ -33,9 +33,10 @@ import {
   MessageSquareText,
   Network,
   Wallet,
-  type LucideIcon,
   PiggyBank,
+  type LucideIcon,
 } from "lucide-react"
+import { PersistentSessionToggleItem } from "./persistent-session-toggle-item"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
@@ -241,8 +242,13 @@ export function MobileSidebar() {
           <p className="mt-1 text-[10px] text-muted-foreground">Unlimited trading volume</p>
         </div>
 
+        {/* Stay signed in — session preference, right next to Sign out */}
+        <div className="mt-3 rounded-lg border border-sidebar-border p-2">
+          <PersistentSessionToggleItem />
+        </div>
+
         {/* Sign Out — always reachable from the mobile navigation */}
-        <form action="/api/logout" method="POST" className="mt-3">
+        <form action="/api/logout" method="POST" className="mt-2">
           <Button
             type="submit"
             variant="ghost"
