@@ -1,7 +1,22 @@
 "use client"
 
 import { useRef, useState } from "react"
-import { Copy, Check, Download, Share2, Landmark, Info, Wallet, ShieldCheck, ArrowDownLeft, Lock } from "lucide-react"
+import useSWR from "swr"
+import {
+  Copy,
+  Check,
+  Download,
+  Share2,
+  Landmark,
+  Info,
+  Wallet,
+  ShieldCheck,
+  ArrowDownLeft,
+  Lock,
+  ArrowUpRight,
+  Clock,
+  Loader2,
+} from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
  import { Input } from "@/components/ui/input"
@@ -27,6 +42,7 @@ import { useActivityLog } from "@/components/activity-tracker"
 import { useLedger } from "@/lib/ledger-store"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { addLedgerEntryForUserAdmin } from "@/app/actions/ledger"
+import { getMyTopUpRequests, confirmTopUpSent } from "@/app/actions/approvals"
 import { getActiveUserId } from "@/lib/user-scope"
 import { VerifiedBankField } from "@/components/verified-bank-field"
 import type { BankInfo } from "@/lib/iban-swift"
@@ -77,6 +93,30 @@ export default function ReceiveFundsPage() {
   const [reqAmount, setReqAmount] = useState("")
   const [reqCurrency, setReqCurrency] = useState("EUR")
   const [reqReference, setReqReference] = useState("")
+
+  // Open top-up requests the administrator has asked this client to fund. Poll
+  // so a fresh ask (or an admin credit) reflects without a manual reload.
+  const { data: topUps, mutate: mutateTopUps } = useSWR("my-top-up-requests", () => getMyTopUpRequests(), {
+    refreshInterval: 20000,
+  })
+  const [confirmingTopUp, setConfirmingTopUp] = useState<string | null>(null)
+
+  const handleConfirmTopUp = async (approvalId: string) => {
+    setConfirmingTopUp(approvalId)
+    try {
+      const res = await confirmTopUpSent(approvalId)
+      if (!res.ok) {
+        toast.error(res.error)
+        return
+      }
+      toast.success("Thanks — MCC Capital has been notified", {
+        description: "We'll credit your account once the funds are verified.",
+      })
+      await mutateTopUps()
+    } finally {
+      setConfirmingTopUp(null)
+    }
+  }
 
   // Read-only balance. Incoming payments can only be credited by MCC Capital's
   // operations desk (administrator) after the funds settle on the platform
@@ -256,6 +296,88 @@ export default function ReceiveFundsPage() {
           Share these account details with the payer to receive an incoming transfer. You do not move money here &mdash; the sender uses them to credit your account.
         </p>
       </div>
+
+      {/* Administrator top-up requests — clear instructions + confirm action */}
+      {topUps && topUps.length > 0 && (
+        <div className="space-y-4">
+          {topUps.map((t) => {
+            const declared = Boolean(t.declaredAt)
+            const busy = confirmingTopUp === t.approvalId
+            return (
+              <Card key={t.approvalId} className="border-amber-500/40 bg-amber-500/5">
+                <CardHeader className="pb-3">
+                  <div className="flex items-start gap-3">
+                    <div className="rounded-lg bg-amber-500/15 p-2 text-amber-500">
+                      <ArrowUpRight className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <CardTitle className="text-base leading-snug text-balance">
+                        Action needed: top up your Master Account
+                      </CardTitle>
+                      <CardDescription className="text-pretty">
+                        MCC Capital asked you to add funds to close your {t.label.toLowerCase()}{" "}
+                        <span className="text-foreground">&ldquo;{t.title}&rdquo;</span>.
+                      </CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-wrap items-end justify-between gap-2 rounded-lg bg-background/60 px-3 py-3">
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Amount to top up</p>
+                      <p className="text-2xl font-bold text-foreground">{formatCurrency(t.amount, t.currency)}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Payment reference</p>
+                      <p className="font-mono text-sm font-medium text-foreground">{t.reference}</p>
+                    </div>
+                  </div>
+
+                  {t.note && (
+                    <p className="rounded-md border border-border bg-background/40 p-2 text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">Note from MCC Capital:</span> {t.note}
+                    </p>
+                  )}
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-foreground">What to do</p>
+                    <ol className="space-y-1.5 text-xs text-muted-foreground">
+                      <li>
+                        <span className="font-semibold text-foreground">1.</span> Wire{" "}
+                        {formatCurrency(t.amount, t.currency)} to your receiving account shown below, quoting reference{" "}
+                        <span className="font-mono text-foreground">{t.reference}</span>.
+                      </li>
+                      <li>
+                        <span className="font-semibold text-foreground">2.</span> Tap &ldquo;I&apos;ve sent the
+                        funds&rdquo; so MCC Capital can verify and credit your Master Account.
+                      </li>
+                      <li>
+                        <span className="font-semibold text-foreground">3.</span> Once credited, your {t.label.toLowerCase()} continues automatically.
+                      </li>
+                    </ol>
+                  </div>
+
+                  {declared ? (
+                    <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
+                      <Clock className="h-4 w-4 shrink-0 text-primary" />
+                      <span>Thanks &mdash; awaiting MCC Capital to verify and credit your top-up.</span>
+                    </div>
+                  ) : (
+                    <Button
+                      onClick={() => handleConfirmTopUp(t.approvalId)}
+                      disabled={busy}
+                      className="w-full gap-2 sm:w-auto"
+                    >
+                      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                      I&apos;ve sent the funds
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })}
+        </div>
+      )}
 
       {/* Info banner to distinguish from Send Payment */}
       <div className="flex items-start gap-3 rounded-lg border border-border bg-secondary/30 p-4">
