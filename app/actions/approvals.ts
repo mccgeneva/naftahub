@@ -4183,6 +4183,145 @@ export async function adminRejectLeverageSwitchOff(
   }
 }
 
+/**
+ * Settle a leverage line's reserved audit-fee + PPI HOLDS into real completed
+ * debits (charging the client now). Shared by the explicit "Charge fees" admin
+ * action and the approve/execute path — idempotent, since upserting the same
+ * `LEV-AUDIT-<id>` / `LEV-PPI-<id>` ids flips hold→completed in place. Also
+ * releases legacy appeal holds and resolves a PPI appeal. Returns the amounts
+ * charged and the (possibly re-persisted) approval. Does NOT notify or credit.
+ */
+async function applyLeverageChargeSettlement(
+  input: ApprovalRequest,
+): Promise<{ updated: ApprovalRequest; auditFee: number; finalPpi: number; feeCurrency: string }> {
+  let updated = input
+  const lrec = (updated.payload?.record ?? {}) as Record<string, unknown>
+  const equity = Number(lrec.equity)
+  const ratio = Number(lrec.leverageRatio)
+  const feeCurrency = String(lrec.currency || updated.currency || BASE_CURRENCY)
+  const charges = leverageApplicationCharges(equity, ratio, readStampedTrustScore(lrec))
+  const negotiated = Number(lrec.negotiatedPpi)
+  const finalPpi = Number.isFinite(negotiated) && negotiated >= 0 ? negotiated : charges.ppi
+  const ownerId = await resolveDataOwnerIdFor(updated.userId)
+  const fmtPpi = (n: number) =>
+    `${feeCurrency} ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  if (charges.auditFee > 0) {
+    await upsertLedgerEntry(ownerId, {
+      id: `LEV-AUDIT-${updated.id}`,
+      direction: "debit",
+      amount: charges.auditFee,
+      currency: feeCurrency,
+      status: "completed",
+      date: new Date().toISOString(),
+      counterparty: "MCC Capital — Leverage Audit & Compliance",
+      bank: "MCC Capital",
+      reference: updated.id,
+      comment: `Non-refundable audit, compliance & Treasury-partner verification fee (${fmtPpi(charges.auditFee)}) for leverage application ${updated.id}. Charged by the administrator.`,
+      category: "Leverage Audit Fee",
+    })
+  }
+  if (finalPpi > 0) {
+    await upsertLedgerEntry(ownerId, {
+      id: `LEV-PPI-${updated.id}`,
+      direction: "debit",
+      amount: finalPpi,
+      currency: feeCurrency,
+      status: "completed",
+      date: new Date().toISOString(),
+      counterparty: "MCC Capital — Payment Protection Insurance",
+      bank: "MCC Capital",
+      reference: updated.id,
+      comment: `PPI insurance premium (${fmtPpi(finalPpi)}) charged for leverage line ${updated.id}${
+        Number.isFinite(negotiated) ? " (administrator-reduced cost)" : ""
+      }.`,
+      category: "Leverage PPI Insurance",
+    })
+  } else {
+    await deleteLedgerEntry(ownerId, `LEV-PPI-${updated.id}`).catch(() => {})
+  }
+  await deleteLedgerEntry(ownerId, `LEV-PPI-APPEAL-${updated.id}`).catch(() => {})
+  await deleteLedgerEntry(ownerId, `LEV-AUDIT-APPEAL-${updated.id}`).catch(() => {})
+  if (lrec.ppiAppeal === true && !lrec.appealResolvedAt) {
+    const resolved = await updateApprovalPayload(updated.id, {
+      ...(updated.payload ?? {}),
+      record: { ...lrec, appealResolvedAt: new Date().toISOString(), appealDecision: "approved", appealPpiFinal: finalPpi },
+    })
+    if (resolved) updated = resolved
+  }
+  return { updated, auditFee: charges.auditFee, finalPpi, feeCurrency }
+}
+
+/**
+ * STEP 1 of the two-step leverage flow: the administrator CHARGES the audit &
+ * compliance + PPI fees first (settles the reserved holds to real debits). The
+ * line STAYS pending — the borrowed funds are only credited later, when the
+ * admin executes it via Approve (which is gated on `feesChargedAt`). This
+ * makes the deduction an explicit, visible step so money is never credited
+ * before the platform's charges are taken.
+ */
+export async function adminChargeLeverageFees(
+  passcode: string,
+  id: string,
+): Promise<{ ok: true; charged: number; currency: string } | { ok: false; error: string }> {
+  if (!(await adminOk(passcode))) return { ok: false, error: "Administrator authorization failed." }
+  try {
+    const existing = await getApprovalById(id)
+    if (!existing) return { ok: false, error: "Request not found." }
+    if (existing.kind !== "leverage") return { ok: false, error: "This action applies only to leverage lines." }
+    if (existing.status !== "pending" && existing.status !== "awaiting_master") {
+      return { ok: false, error: "This leverage line has already been decided." }
+    }
+    const rec = (existing.payload?.record ?? {}) as Record<string, unknown>
+    if (rec.feesChargedAt) return { ok: false, error: "The fees for this leverage line have already been charged." }
+
+    const settled = await applyLeverageChargeSettlement(existing)
+    let updated = settled.updated
+    const latestRec = (updated.payload?.record ?? {}) as Record<string, unknown>
+    const persisted = await updateApprovalPayload(updated.id, {
+      ...(updated.payload ?? {}),
+      record: { ...latestRec, feesChargedAt: new Date().toISOString() },
+    })
+    if (persisted) updated = persisted
+
+    const total = Math.round((settled.auditFee + settled.finalPpi + Number.EPSILON) * 100) / 100
+    const fmt = `${settled.feeCurrency} ${total.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    try {
+      const ownerId = await resolveDataOwnerIdFor(updated.userId)
+      await insertNotification({
+        userId: ownerId,
+        tone: "info",
+        title: `Leverage charges applied — ${fmt}`,
+        body: `MCC Capital charged the audit & compliance fee${
+          settled.finalPpi > 0 ? " + PPI premium" : ""
+        } (${fmt}) for your leverage line "${updated.title}". It will be executed and the borrowed funds credited once the administrator completes final approval.`,
+        href: "/dashboard/leverage",
+      })
+    } catch (err) {
+      console.log("[v0] adminChargeLeverageFees notify failed:", (err as Error).message)
+    }
+    try {
+      const target = await resolveAccountProfileById(updated.userId)
+      await logActivity({
+        action: `Administrator charged leverage audit + PPI fees (${fmt}) for ${target.fullName} on line ${updated.id}`,
+        category: "Administration / Approvals",
+        user: "Administrator",
+        details: {
+          referenceId: updated.id,
+          targetAccount: `${target.fullName} — ${target.email}`,
+          summary: updated.summary || updated.title,
+          charged: fmt,
+        },
+      })
+    } catch (err) {
+      console.log("[v0] adminChargeLeverageFees activity log failed:", (err as Error).message)
+    }
+    return { ok: true, charged: total, currency: settled.feeCurrency }
+  } catch (err) {
+    console.log("[v0] adminChargeLeverageFees failed:", (err as Error).message)
+    return { ok: false, error: "Could not charge the leverage fees. Please try again." }
+  }
+}
+
 export async function adminDecideApproval(
   passcode: string,
   id: string,
@@ -4199,6 +4338,21 @@ export async function adminDecideApproval(
     if (!existing) return { ok: false, error: "Request not found." }
     if (existing.status !== "pending" && existing.status !== "awaiting_master") {
       return { ok: false, error: "This request has already been decided." }
+    }
+
+    // TWO-STEP leverage flow: the audit & compliance + PPI fees must be CHARGED
+    // first (the explicit "Charge fees" step, which settles the reserved holds
+    // into real debits and stamps `feesChargedAt`). Only then can the line be
+    // EXECUTED here — crediting the borrowed funds. This enforces "charge the
+    // money first, then execute the job".
+    if (decision === "approved" && existing.kind === "leverage") {
+      const lrec = (existing.payload?.record ?? {}) as Record<string, unknown>
+      if (!lrec.feesChargedAt) {
+        return {
+          ok: false,
+          error: "Charge the audit & compliance + PPI fees first, then execute this leverage line.",
+        }
+      }
     }
 
     // HARD fund-availability gate. Before committing an APPROVAL that reserves
@@ -4301,78 +4455,21 @@ export async function adminDecideApproval(
           console.log("[v0] leverage activation stamp failed:", (err as Error).message)
         }
 
-        // CHARGE SETTLEMENT — approve: at submit the audit fee and PPI were
-        // reserved as HOLDS (`LEV-AUDIT-<id>` / `LEV-PPI-<id>`). Now that an
-        // administrator has reviewed and APPROVED the line, settle BOTH to real
-        // completed charges (the PPI at the admin-negotiated amount if one was
-        // set, else the original). Upserting the same ids flips them hold→
-        // completed in place. Idempotent on retry.
+        // EXECUTE: the fees were already CHARGED in the separate "Charge fees"
+        // step (the approve above is gated on `feesChargedAt`). Re-run the
+        // idempotent settlement as a safety net — it flips any lingering hold→
+        // completed and resolves a PPI appeal — then notify the client the line
+        // is approved and the borrowed funds are credited.
         try {
-          const lrec = (updated.payload?.record ?? {}) as Record<string, unknown>
-          const equity = Number(lrec.equity)
-          const ratio = Number(lrec.leverageRatio)
-          const feeCurrency = String(lrec.currency || updated.currency || BASE_CURRENCY)
-          const charges = leverageApplicationCharges(equity, ratio, readStampedTrustScore(lrec))
-          const negotiated = Number(lrec.negotiatedPpi)
-          const finalPpi = Number.isFinite(negotiated) && negotiated >= 0 ? negotiated : charges.ppi
+          const settled = await applyLeverageChargeSettlement(updated)
+          updated = settled.updated
           const ownerId = await resolveDataOwnerIdFor(updated.userId)
-          const fmtPpi = (n: number) =>
-            `${feeCurrency} ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-          if (charges.auditFee > 0) {
-            await upsertLedgerEntry(ownerId, {
-              id: `LEV-AUDIT-${updated.id}`,
-              direction: "debit",
-              amount: charges.auditFee,
-              currency: feeCurrency,
-              status: "completed",
-              date: new Date().toISOString(),
-              counterparty: "MCC Capital — Leverage Audit & Compliance",
-              bank: "MCC Capital",
-              reference: updated.id,
-              comment: `Non-refundable audit, compliance & Treasury-partner verification fee (${fmtPpi(charges.auditFee)}) for leverage application ${updated.id}. Charged on administrator approval.`,
-              category: "Leverage Audit Fee",
-            })
-          }
-          if (finalPpi > 0) {
-            await upsertLedgerEntry(ownerId, {
-              id: `LEV-PPI-${updated.id}`,
-              direction: "debit",
-              amount: finalPpi,
-              currency: feeCurrency,
-              status: "completed",
-              date: new Date().toISOString(),
-              counterparty: "MCC Capital — Payment Protection Insurance",
-              bank: "MCC Capital",
-              reference: updated.id,
-              comment: `PPI insurance premium (${fmtPpi(finalPpi)}) charged on approval of leverage line ${updated.id}${
-                Number.isFinite(negotiated) ? " (administrator-reduced cost)" : ""
-              }.`,
-              category: "Leverage PPI Insurance",
-            })
-          } else {
-            // A negotiated-to-zero PPI: release any residual hold.
-            await deleteLedgerEntry(ownerId, `LEV-PPI-${updated.id}`).catch(() => {})
-          }
-          // Release any legacy appeal-specific holds from earlier builds.
-          await deleteLedgerEntry(ownerId, `LEV-PPI-APPEAL-${updated.id}`).catch(() => {})
-          await deleteLedgerEntry(ownerId, `LEV-AUDIT-APPEAL-${updated.id}`).catch(() => {})
-          if (lrec.ppiAppeal === true && !lrec.appealResolvedAt) {
-            const resolved = await updateApprovalPayload(updated.id, {
-              ...(updated.payload ?? {}),
-              record: { ...lrec, appealResolvedAt: new Date().toISOString(), appealDecision: "approved", appealPpiFinal: finalPpi },
-            })
-            if (resolved) updated = resolved
-          }
           try {
             await insertNotification({
               userId: ownerId,
               tone: "success",
-              title: "Leverage line approved",
-              body: `Your leverage application (${updated.id}) was approved. The reserved charges are now settled — ${fmtPpi(
-                charges.auditFee,
-              )} audit & compliance + ${fmtPpi(finalPpi)} PPI${
-                Number.isFinite(negotiated) ? " (administrator-reduced)" : ""
-              } debited to your Master Account.`,
+              title: "Leverage line approved & executed",
+              body: `Your leverage application (${updated.id}) is approved. The audit & compliance charges are settled and the borrowed funds are now credited to your Master Account — the line is live.`,
               href: "/dashboard/leverage",
             })
           } catch {

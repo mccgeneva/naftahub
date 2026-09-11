@@ -43,6 +43,7 @@ import {
   User,
   Wallet,
   ArrowDownLeft,
+  Coins,
   PackageCheck,
   PackageX,
   Ban,
@@ -82,6 +83,7 @@ import {
   adminConfirmYieldTermination,
   adminRequestAccountTopUp,
   adminCreditTopUp,
+  adminChargeLeverageFees,
   type DealHoldState,
 } from "@/app/actions/approvals"
 import { adminDecideCardRequest } from "@/app/actions/cards"
@@ -874,6 +876,24 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     await mutate()
   }
 
+  // STEP 1 of the two-step leverage flow: charge the audit + PPI fees now. The
+  // line stays pending; the admin then executes it via Approve (gated on this).
+  const [chargingId, setChargingId] = useState<string | null>(null)
+  const handleChargeFees = async (req: ApprovalRequest) => {
+    setChargingId(req.id)
+    try {
+      const res = await adminChargeLeverageFees(ADMIN_PASSCODE, req.id)
+      if (!res.ok) {
+        toast.error(res.error)
+        return
+      }
+      toast.success(`Fees charged — ${formatMoney2(res.charged, res.currency)} debited. You can now execute the line.`)
+      await mutate()
+    } finally {
+      setChargingId(null)
+    }
+  }
+
   // Reserve negotiation dialog (monetization). The admin agrees a lower blocked
   // reserve; the exceeded amount is released back to the client's available
   // balance immediately, and only the agreed reserve stays blocked.
@@ -1372,6 +1392,21 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
               // blocked equity+PPI reserve; available while pending or approved.
               const mon = monetizationReserveInfo(req)
               const canNegotiateReserve = !!mon && (req.status === "pending" || req.status === "approved")
+              // Two-step leverage: fees must be charged before the line can be
+              // executed (credited). `needsFeeCharge` disables the execute button.
+              const isLeverage = req.kind === "leverage"
+              const leverageRec = ((req.payload as { record?: Record<string, unknown> } | undefined)?.record ??
+                {}) as Record<string, unknown>
+              const leverageFeesCharged = Boolean(leverageRec.feesChargedAt)
+              const needsFeeCharge = isLeverage && !leverageFeesCharged
+              const leverageCharges = isLeverage
+                ? leverageApplicationCharges(
+                    Number(leverageRec.equity),
+                    Number(leverageRec.leverageRatio),
+                    readStampedTrustScore(leverageRec),
+                  )
+                : null
+              const leverageFeeCurrency = String(leverageRec.currency || req.currency || "EUR")
               // An open top-up the admin asked the client to fund (not yet
               // credited). `declared` = the client tapped "I've sent the funds".
               const topUp = (() => {
@@ -1553,6 +1588,42 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                             )}
                         </div>
                       )}
+                      {isPending && isLeverage && leverageCharges && (
+                        <div
+                          className={`mt-1.5 rounded-md border p-2.5 ${
+                            leverageFeesCharged
+                              ? "border-emerald-500/30 bg-emerald-500/5"
+                              : "border-amber-500/30 bg-amber-500/5"
+                          }`}
+                        >
+                          <div
+                            className={`mb-1 flex items-center gap-1.5 text-[11px] font-medium ${
+                              leverageFeesCharged
+                                ? "text-emerald-600 dark:text-emerald-400"
+                                : "text-amber-600 dark:text-amber-400"
+                            }`}
+                          >
+                            <Coins className="h-3.5 w-3.5" />
+                            {leverageFeesCharged ? "Fees charged" : "Fees not charged yet"}
+                          </div>
+                          <div className="text-[11px] text-muted-foreground">
+                            Audit &amp; compliance{" "}
+                            <span className="font-medium text-foreground">
+                              {formatMoney2(leverageCharges.auditFee, leverageFeeCurrency)}
+                            </span>
+                            {leverageCharges.ppi > 0 && (
+                              <>
+                                {" "}
+                                + PPI{" "}
+                                <span className="font-medium text-foreground">
+                                  {formatMoney2(leverageCharges.ppi, leverageFeeCurrency)}
+                                </span>
+                              </>
+                            )}{" "}
+                            · {leverageFeesCharged ? "ready to execute & credit" : "charge before executing"}
+                          </div>
+                        </div>
+                      )}
                       {topUp && (
                         <div className="mt-1.5 rounded-md border border-sky-500/30 bg-sky-500/5 p-2.5">
                           <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-sky-600 dark:text-sky-400">
@@ -1656,21 +1727,41 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                           <ArrowDownLeft className="h-3.5 w-3.5" /> Credit top-up
                         </Button>
                       )}
+                      {needsFeeCharge && (
+                        <Button
+                          size="sm"
+                          className="h-8 gap-1"
+                          disabled={acting || chargingId === req.id}
+                          onClick={() => handleChargeFees(req)}
+                          title="Charge the audit & compliance + PPI fees to the client now. Required before executing the leverage line."
+                        >
+                          {chargingId === req.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Coins className="h-3.5 w-3.5" />
+                          )}
+                          Charge fees
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         variant="outline"
                         className="h-8 gap-1 text-emerald-600"
-                        disabled={acting || fundingNeedsDiscussion}
+                        disabled={acting || fundingNeedsDiscussion || needsFeeCharge}
                         onClick={() => (req.kind === "card" ? openCardApprove(req) : approveOne(req.id))}
                         title={
-                          fundingNeedsDiscussion
-                            ? "Open the discussion with the applicant before activating this facility."
-                            : req.kind === "card"
-                              ? "Enter the card number, expiry and CVV to issue this card."
-                              : undefined
+                          needsFeeCharge
+                            ? "Charge the audit & PPI fees first, then execute this leverage line."
+                            : fundingNeedsDiscussion
+                              ? "Open the discussion with the applicant before activating this facility."
+                              : req.kind === "card"
+                                ? "Enter the card number, expiry and CVV to issue this card."
+                                : isLeverage
+                                  ? "Execute the leverage line and credit the borrowed funds."
+                                  : undefined
                         }
                       >
-                        <Check className="h-3.5 w-3.5" /> Approve
+                        <Check className="h-3.5 w-3.5" /> {isLeverage ? "Execute & credit" : "Approve"}
                       </Button>
                       <Button
                         size="sm"
