@@ -89,7 +89,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <TreasuryProvider>
       <InternalLoanProvider>
       <GatewayProvider>
-      <SessionGuard />
+      <SessionGuard persistent={identity.kind === "dynamic" && identity.profile.persistentSession === true} />
       <PointerEventsGuard />
       <FundingCapitalReconciler />
       <TreasuryFinancingReconciler />

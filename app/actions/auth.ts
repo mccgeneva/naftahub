@@ -7,14 +7,15 @@ import {
   SESSION_COOKIE,
   SESSION_META_COOKIE,
   SESSION_MAX_AGE,
+  PERSISTENT_SESSION_MAX_AGE,
   IMPERSONATION_COOKIE,
-  sessionCookieOptions,
-  sessionMetaCookieOptions,
+  sessionCookieOptionsFor,
+  sessionMetaCookieOptionsFor,
   freshLoginCookieOptions,
-  userCookieOptions,
+  userCookieOptionsFor,
   expiredCookieOptions,
 } from "@/lib/auth"
-import { signSessionMeta } from "@/lib/session-token"
+import { signSessionMeta, verifySessionMeta } from "@/lib/session-token"
 import { USER_COOKIE } from "@/lib/user-scope"
 import { getDynamicUserByEmail, getDynamicUserById, updateDynamicUserProfile } from "@/lib/admin-users-db"
 import { resolveCurrentSession } from "@/lib/session-user"
@@ -115,6 +116,8 @@ interface AuthMatch {
   company: string
   /** Accounts can be suspended/inactive, which denies access. */
   active: boolean
+  /** The account opted into a persistent ("never log out") session. */
+  persist: boolean
 }
 
 /**
@@ -133,6 +136,7 @@ async function findAuthMatchByEmail(email: string): Promise<AuthMatch | undefine
         fullName: dyn.profile.fullName || dyn.profile.company || dyn.email,
         company: dyn.profile.company || "",
         active: dyn.status === "active",
+        persist: dyn.profile.persistentSession === true,
       }
     }
   } catch {
@@ -184,20 +188,26 @@ async function establishSession(
   opts?: { selfieDataUrl?: string },
 ): Promise<void> {
   const cookieStore = await cookies()
+  // Honour the account's "never log out" preference. The demo account is
+  // stateless and can never be persistent.
+  const persist = matchedUser.id !== DEMO_USER_ID && matchedUser.persist === true
   // The session cookie carries this user's unique token (the security
   // boundary), and a separate readable cookie records which user it is so the
   // client can show the right identity and isolate the right data.
-  cookieStore.set(SESSION_COOKIE, matchedUser.sessionToken, sessionCookieOptions)
-  cookieStore.set(USER_COOKIE, matchedUser.id, userCookieOptions)
+  cookieStore.set(SESSION_COOKIE, matchedUser.sessionToken, sessionCookieOptionsFor(persist))
+  cookieStore.set(USER_COOKIE, matchedUser.id, userCookieOptionsFor(persist))
 
   // Issue the signed session-metadata cookie (server-enforced absolute expiry).
+  // A persistent session records `persist: true` and a far-future `exp`; the
+  // proxy/resolver then never idle- or absolute-expire it.
   const nowMs = Date.now()
   const metaToken = await signSessionMeta({
     iat: nowMs,
-    exp: nowMs + SESSION_MAX_AGE * 1000,
+    exp: nowMs + (persist ? PERSISTENT_SESSION_MAX_AGE : SESSION_MAX_AGE) * 1000,
     seen: nowMs,
+    persist,
   })
-  cookieStore.set(SESSION_META_COOKIE, metaToken, sessionMetaCookieOptions)
+  cookieStore.set(SESSION_META_COOKIE, metaToken, sessionMetaCookieOptionsFor(persist))
   cookieStore.set(FRESH_LOGIN_COOKIE, "1", freshLoginCookieOptions)
   // A genuine login is always a clean, non-impersonated session — clear any
   // lingering impersonation marker so the new session resolves to this account.
@@ -226,6 +236,71 @@ async function establishSession(
 async function establishSessionAndRedirect(matchedUser: AuthMatch, email: string): Promise<never> {
   await establishSession(matchedUser, email)
   redirect(POST_LOGIN_PATH)
+}
+
+/**
+ * Read the signed-in account's persistent-session ("stay signed in") preference.
+ * Used by the profile toggle to seed its initial state. Fails closed to `false`.
+ */
+export async function getPersistentSession(): Promise<boolean> {
+  try {
+    const session = await resolveCurrentSession()
+    if (!session || session.kind !== "dynamic") return false
+    const rec = await getDynamicUserById(session.id)
+    return rec?.profile.persistentSession === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Turn the persistent ("never log out") session on or off for the signed-in
+ * account. Persists the preference on the account profile AND re-issues the
+ * CURRENT session cookies so the change takes effect immediately — enabling it
+ * makes this session persistent right away; disabling it reverts to the standard
+ * 8h absolute / 15-min idle session. Not available to the stateless demo account
+ * or while an administrator is impersonating.
+ */
+export async function setPersistentSession(
+  enabled: boolean,
+): Promise<{ ok: boolean; persistent: boolean; error?: string }> {
+  const session = await resolveCurrentSession()
+  if (!session) return { ok: false, persistent: false, error: "Your session has expired. Please sign in again." }
+  if (session.impersonator) {
+    return { ok: false, persistent: false, error: "This preference can't be changed during a maintenance session." }
+  }
+  if (session.kind !== "dynamic" || session.id === DEMO_USER_ID) {
+    return { ok: false, persistent: false, error: "This account can't use a persistent session." }
+  }
+
+  const rec = await getDynamicUserById(session.id)
+  if (!rec) return { ok: false, persistent: false, error: "Account not found." }
+
+  // Persist the preference so it also applies to every FUTURE login.
+  const nextProfile = { ...rec.profile, persistentSession: enabled }
+  await updateDynamicUserProfile(session.id, { profile: nextProfile })
+
+  // Re-issue the CURRENT session cookies so the change is effective now.
+  const cookieStore = await cookies()
+  const token = cookieStore.get(SESSION_COOKIE)?.value
+  const existingMeta = await verifySessionMeta(cookieStore.get(SESSION_META_COOKIE)?.value)
+  const nowMs = Date.now()
+  const iat = existingMeta?.iat ?? nowMs
+  const exp = nowMs + (enabled ? PERSISTENT_SESSION_MAX_AGE : SESSION_MAX_AGE) * 1000
+  const metaToken = await signSessionMeta({ iat, exp, seen: nowMs, persist: enabled })
+  cookieStore.set(SESSION_META_COOKIE, metaToken, sessionMetaCookieOptionsFor(enabled))
+  if (token) cookieStore.set(SESSION_COOKIE, token, sessionCookieOptionsFor(enabled))
+  cookieStore.set(USER_COOKIE, session.id, userCookieOptionsFor(enabled))
+
+  await logActivity({
+    action: enabled ? "Enabled persistent session (stay signed in)" : "Disabled persistent session",
+    category: "Authentication / Security",
+    user: rec.profile.fullName || rec.profile.company || rec.email,
+    userId: session.id,
+    details: { result: enabled ? "persistent" : "standard" },
+  })
+
+  return { ok: true, persistent: enabled }
 }
 
 /**
@@ -402,6 +477,7 @@ export async function completeFaceLogin(
       fullName: rec.profile.fullName || rec.profile.company || rec.email,
       company: rec.profile.company || "",
       active: true,
+      persist: rec.profile.persistentSession === true,
     },
     rec.email,
     { selfieDataUrl: selfieImage },
@@ -597,6 +673,7 @@ export async function verifyIdentityAndLogin(
         fullName: name,
         company: rec.profile.company || "",
         active: true,
+        persist: rec.profile.persistentSession === true,
       },
       rec.email,
       { selfieDataUrl: input.selfieImage },
@@ -749,6 +826,8 @@ export async function verifyDemoDocumentAndLogin(
         fullName: name,
         company: rec.profile.company || "",
         active: true,
+        // The demo account is stateless and never persistent.
+        persist: false,
       },
       rec.email,
     )

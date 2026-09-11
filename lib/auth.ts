@@ -37,6 +37,13 @@ export const SESSION_MAX_AGE = 60 * 60 * 8
 // forward on every authenticated request, so active users are never disrupted.
 export const SESSION_IDLE_MAX_AGE = 60 * 15 // 15 minutes
 
+// Cookie lifetime for a PERSISTENT ("never log out") session. 400 days is the
+// maximum a browser will honour for a cookie `maxAge` (per the cookie spec), so
+// the session survives browser restarts for as long as browsers allow. The
+// "never expires" behaviour itself is enforced by the signed metadata cookie's
+// `persist` flag (server-side), independent of this browser-side lifetime.
+export const PERSISTENT_SESSION_MAX_AGE = 60 * 60 * 24 * 400 // ~400 days
+
 // Cookie attributes. The v0 preview renders the app inside a cross-origin
 // iframe, where browsers only store/send cookies marked `SameSite=None; Secure`.
 // `SameSite=Lax` cookies are dropped in that third-party context, which made the
@@ -109,6 +116,26 @@ export const userCookieOptions = {
   path: "/",
   maxAge: SESSION_IDLE_MAX_AGE,
 } as const
+
+// Cookie `maxAge` for a given persistence choice: the long persistent lifetime
+// when the user opted in, otherwise the standard idle-bounded window.
+export function sessionMaxAgeFor(persist: boolean): number {
+  return persist ? PERSISTENT_SESSION_MAX_AGE : SESSION_IDLE_MAX_AGE
+}
+
+// Persistence-aware variants of the session cookie option objects. When
+// `persist` is true they carry the long 400-day `maxAge` so the browser keeps
+// the cookies across restarts; otherwise they behave exactly like the standard
+// idle-bounded options above.
+export function sessionCookieOptionsFor(persist: boolean) {
+  return { ...sessionCookieOptions, maxAge: sessionMaxAgeFor(persist) }
+}
+export function sessionMetaCookieOptionsFor(persist: boolean) {
+  return { ...sessionMetaCookieOptions, maxAge: sessionMaxAgeFor(persist) }
+}
+export function userCookieOptionsFor(persist: boolean) {
+  return { ...userCookieOptions, maxAge: sessionMaxAgeFor(persist) }
+}
 
 // Attributes for EXPIRING (clearing) a cookie. A cookie is only overwritten /
 // removed by the browser when the clearing `Set-Cookie` matches the original on

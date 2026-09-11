@@ -4,9 +4,9 @@ import {
   SESSION_COOKIE,
   SESSION_META_COOKIE,
   SESSION_IDLE_MAX_AGE,
-  sessionCookieOptions,
-  sessionMetaCookieOptions,
-  userCookieOptions,
+  sessionCookieOptionsFor,
+  sessionMetaCookieOptionsFor,
+  userCookieOptionsFor,
   expiredCookieOptions,
 } from "@/lib/auth"
 import { USER_COOKIE } from "@/lib/user-scope"
@@ -92,11 +92,15 @@ export async function proxy(request: NextRequest) {
     // still ends the session. Re-issue all session cookies with a refreshed
     // maxAge.
     const res = NextResponse.next()
-    const slid = await signSessionMeta({ iat: meta!.iat, exp: meta!.exp, seen: now })
-    res.cookies.set(SESSION_META_COOKIE, slid, sessionMetaCookieOptions)
-    res.cookies.set(SESSION_COOKIE, token!, sessionCookieOptions)
+    // Carry the persistent flag forward. A persistent session keeps its long
+    // cookie lifetime and never idle/absolute-expires (see evaluateSessionMeta);
+    // a standard session slides its idle window as before.
+    const persist = meta!.persist === true
+    const slid = await signSessionMeta({ iat: meta!.iat, exp: meta!.exp, seen: now, persist })
+    res.cookies.set(SESSION_META_COOKIE, slid, sessionMetaCookieOptionsFor(persist))
+    res.cookies.set(SESSION_COOKIE, token!, sessionCookieOptionsFor(persist))
     const userId = request.cookies.get(USER_COOKIE)?.value
-    if (userId) res.cookies.set(USER_COOKIE, userId, userCookieOptions)
+    if (userId) res.cookies.set(USER_COOKIE, userId, userCookieOptionsFor(persist))
 
     // CRITICAL (cross-user isolation): authenticated dashboard responses are
     // per-user and must NEVER be cached or reused. Without this, a shared CDN /
