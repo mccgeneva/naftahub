@@ -7,6 +7,7 @@ import useSWR from "swr"
 import { Bell, User, LogOut, Settings, HelpCircle, Menu, BookOpen, ShieldCheck, Cpu } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { GlobalSearch } from "./global-search"
+import { PersistentSessionToggleItem } from "./persistent-session-toggle-item"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -423,6 +424,13 @@ export function DashboardHeader() {
                 </Link>
               </DropdownMenuItem>
             )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={(e) => e.preventDefault()}
+              className="cursor-default p-0 focus:bg-transparent"
+            >
+              <PersistentSessionToggleItem />
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <form action="/api/logout" method="POST">
               <DropdownMenuItem
