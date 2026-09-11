@@ -42,6 +42,7 @@ import {
   RefreshCw,
   User,
   Wallet,
+  ArrowDownLeft,
   PackageCheck,
   PackageX,
   Ban,
@@ -80,6 +81,7 @@ import {
   adminAdjustMonetizationReserve,
   adminConfirmYieldTermination,
   adminRequestAccountTopUp,
+  adminCreditTopUp,
   type DealHoldState,
 } from "@/app/actions/approvals"
 import { adminDecideCardRequest } from "@/app/actions/cards"
@@ -831,6 +833,47 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     setTopUpTarget(null)
   }
 
+  // Credit (authorize) a top-up the client has funded. Confirms via a dialog
+  // prefilled with the requested amount; crediting posts to the client's Master
+  // Account and marks the marker done, after which the admin approves the deal.
+  const [creditTopUpTarget, setCreditTopUpTarget] = useState<{
+    id: string
+    label: string
+    amount: number
+    currency: string
+    declared: boolean
+  } | null>(null)
+  const [creditTopUpValue, setCreditTopUpValue] = useState("")
+  const [creditTopUpNote, setCreditTopUpNote] = useState("")
+
+  const openCreditTopUp = (
+    req: ApprovalRequest,
+    info: { amount: number; currency: string; declared: boolean },
+  ) => {
+    setCreditTopUpValue(info.amount ? info.amount.toFixed(2) : "")
+    setCreditTopUpNote("")
+    setCreditTopUpTarget({ id: req.id, label: req.title, amount: info.amount, currency: info.currency, declared: info.declared })
+  }
+
+  const confirmCreditTopUp = async () => {
+    if (!creditTopUpTarget) return
+    const amount = Number(creditTopUpValue.replace(/,/g, ""))
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Enter a valid amount to credit.")
+      return
+    }
+    setActing(true)
+    const res = await adminCreditTopUp(ADMIN_PASSCODE, creditTopUpTarget.id, amount, creditTopUpNote.trim() || undefined)
+    setActing(false)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    toast.success(`Top-up credited — ${formatMoney2(res.credited, res.currency)} added to the client's Master Account.`)
+    setCreditTopUpTarget(null)
+    await mutate()
+  }
+
   // Reserve negotiation dialog (monetization). The admin agrees a lower blocked
   // reserve; the exceeded amount is released back to the client's available
   // balance immediately, and only the agreed reserve stays blocked.
@@ -1329,6 +1372,20 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
               // blocked equity+PPI reserve; available while pending or approved.
               const mon = monetizationReserveInfo(req)
               const canNegotiateReserve = !!mon && (req.status === "pending" || req.status === "approved")
+              // An open top-up the admin asked the client to fund (not yet
+              // credited). `declared` = the client tapped "I've sent the funds".
+              const topUp = (() => {
+                const t = (req.payload as { topUpRequest?: Record<string, unknown> } | undefined)?.topUpRequest
+                if (!t || t.creditedAt) return null
+                const amount = Number(t.amount)
+                if (!Number.isFinite(amount) || amount <= 0) return null
+                return {
+                  amount,
+                  currency: String(t.currency || req.currency || "EUR"),
+                  declared: Boolean(t.declaredAt),
+                  reference: String(t.reference || ""),
+                }
+              })()
               // Yield / PPP early-termination request — present only on an approved
               // program whose client asked to resign. The admin negotiates the exit
               // cost and confirms, which terminates the program.
@@ -1496,6 +1553,23 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                             )}
                         </div>
                       )}
+                      {topUp && (
+                        <div className="mt-1.5 rounded-md border border-sky-500/30 bg-sky-500/5 p-2.5">
+                          <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-sky-600 dark:text-sky-400">
+                            <Wallet className="h-3.5 w-3.5" />
+                            Top-up requested
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                            <span className="text-muted-foreground">Amount:</span>
+                            <span className="font-medium text-foreground">{formatMoney2(topUp.amount, topUp.currency)}</span>
+                            {topUp.declared ? (
+                              <span className="text-emerald-600 dark:text-emerald-400">· client confirmed — verify &amp; credit</span>
+                            ) : (
+                              <span className="text-muted-foreground">· awaiting the client to send funds</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
                       <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-muted-foreground">
                         <span>
                           {clientLabel(req.userId)} · submitted {formatDate(req.createdAt)}
@@ -1570,6 +1644,18 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                       >
                         <Wallet className="h-3.5 w-3.5" /> Request top-up
                       </Button>
+                      {topUp && (
+                        <Button
+                          size="sm"
+                          variant={topUp.declared ? "default" : "outline"}
+                          className={topUp.declared ? "h-8 gap-1" : "h-8 gap-1 text-sky-600"}
+                          disabled={acting}
+                          onClick={() => openCreditTopUp(req, topUp)}
+                          title="Credit the requested top-up to the client's Master Account to authorize this transaction."
+                        >
+                          <ArrowDownLeft className="h-3.5 w-3.5" /> Credit top-up
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         variant="outline"
@@ -2100,6 +2186,62 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
             <Button className="gap-1" onClick={confirmTopUp} disabled={acting}>
               {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}
               Send top-up request
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={creditTopUpTarget !== null} onOpenChange={(o) => !o && !acting && setCreditTopUpTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArrowDownLeft className="h-4 w-4 text-emerald-500" />
+              Credit account top-up
+            </DialogTitle>
+            <DialogDescription className="text-pretty">
+              Credit the requested top-up to the client&apos;s Master Account. This posts the funds so their balance
+              can cover the transaction — then approve the request to proceed.
+            </DialogDescription>
+          </DialogHeader>
+          {creditTopUpTarget && (
+            <div className="space-y-3">
+              <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                Request: <span className="text-foreground">{creditTopUpTarget.label}</span>
+                {!creditTopUpTarget.declared && (
+                  <span className="mt-1 block text-amber-600 dark:text-amber-400">
+                    The client hasn&apos;t confirmed sending the funds yet — only credit once you&apos;ve verified receipt.
+                  </span>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="credit-topup-amount">Amount to credit ({creditTopUpTarget.currency})</Label>
+                <MoneyInput
+                  id="credit-topup-amount"
+                  value={creditTopUpValue}
+                  onValueChange={setCreditTopUpValue}
+                  className="text-base md:text-sm"
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="credit-topup-note">Note (optional)</Label>
+                <Textarea
+                  id="credit-topup-note"
+                  value={creditTopUpNote}
+                  onChange={(e) => setCreditTopUpNote(e.target.value)}
+                  placeholder="Receipt reference, sending bank…"
+                  className="min-h-16 text-base md:text-sm"
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreditTopUpTarget(null)} disabled={acting}>
+              Cancel
+            </Button>
+            <Button className="gap-1" onClick={confirmCreditTopUp} disabled={acting}>
+              {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowDownLeft className="h-4 w-4" />}
+              Credit top-up
             </Button>
           </DialogFooter>
         </DialogContent>

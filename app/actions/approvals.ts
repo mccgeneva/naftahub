@@ -5161,9 +5161,32 @@ export async function adminRequestAccountTopUp(
     const fmt = `${ccy} ${amt.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     const label = KIND_LABELS[existing.kind] ?? "request"
     const trimmedNote = (note ?? "").trim()
+
+    // Persist a DURABLE top-up marker on the approval so both sides can act on
+    // it: the client sees it on the Receive Funds page (with instructions +
+    // reference) and confirms once they've sent the funds; the admin sees the
+    // status on the pending card and credits it to authorize the transaction.
+    const prevPayload = (existing.payload ?? {}) as Record<string, unknown>
+    const prevTopUp = (prevPayload.topUpRequest ?? {}) as Record<string, unknown>
+    await updateApprovalPayload(approvalId, {
+      ...prevPayload,
+      topUpRequest: {
+        amount: amt,
+        currency: ccy,
+        note: trimmedNote || undefined,
+        requestedAt: new Date().toISOString(),
+        // A re-ask clears any prior client confirmation / credit.
+        declaredAt: undefined,
+        creditedAt: undefined,
+        reference: `MCC-TOPUP-${approvalId.slice(-8).toUpperCase()}`,
+        requestedByAdmin: true,
+        _prevReference: prevTopUp.reference,
+      },
+    })
+
     const body =
       `To close your ${label.toLowerCase()} ("${existing.title}"), please top up your Master Account with ${fmt}. ` +
-      `Once the funds are available we can proceed with this transaction.` +
+      `Open Receive Funds to see the wiring details and reference, then tap "I've sent the funds" so we can credit and proceed.` +
       (trimmedNote ? ` Note from the administrator: ${trimmedNote}` : "")
     await insertNotification({
       userId: existing.userId,
@@ -5193,6 +5216,213 @@ export async function adminRequestAccountTopUp(
   } catch (err) {
     console.log("[v0] adminRequestAccountTopUp failed:", (err as Error).message)
     return { ok: false, error: "Could not send the top-up request." }
+  }
+}
+
+export type MyTopUpRequest = {
+  approvalId: string
+  kind: ApprovalKind
+  label: string
+  title: string
+  amount: number
+  currency: string
+  note?: string
+  reference: string
+  requestedAt: string
+  declaredAt?: string
+}
+
+/**
+ * Client-facing: the OPEN top-up requests the administrator has asked the
+ * signed-in client (or any account in their environment) to fund, so the
+ * Receive Funds page can show a clear instruction banner. Excludes any that
+ * have already been credited or whose underlying request is no longer pending.
+ */
+export async function getMyTopUpRequests(): Promise<MyTopUpRequest[]> {
+  try {
+    const session = await resolveCurrentSession()
+    if (!session) return []
+    const memberIds = await resolveEnvironmentMemberIds(session.id)
+    const all = await listApprovalsForUsers(memberIds)
+    const out: MyTopUpRequest[] = []
+    for (const req of all) {
+      const t = (req.payload as { topUpRequest?: Record<string, unknown> } | undefined)?.topUpRequest
+      if (!t || t.creditedAt) continue
+      if (req.status !== "pending" && req.status !== "awaiting_master") continue
+      const amount = Number(t.amount)
+      if (!Number.isFinite(amount) || amount <= 0) continue
+      out.push({
+        approvalId: req.id,
+        kind: req.kind,
+        label: KIND_LABELS[req.kind] ?? "request",
+        title: req.title,
+        amount,
+        currency: String(t.currency || req.currency || BASE_CURRENCY),
+        note: t.note ? String(t.note) : undefined,
+        reference: String(t.reference || `MCC-TOPUP-${req.id.slice(-8).toUpperCase()}`),
+        requestedAt: String(t.requestedAt || req.createdAt),
+        declaredAt: t.declaredAt ? String(t.declaredAt) : undefined,
+      })
+    }
+    return out
+  } catch (err) {
+    console.log("[v0] getMyTopUpRequests failed:", (err as Error).message)
+    return []
+  }
+}
+
+/**
+ * Client confirms they have sent the top-up funds. Stamps `declaredAt` on the
+ * marker (so the admin card shows "client confirmed") and notifies the admins.
+ * Moves no money — the admin still verifies and credits.
+ */
+export async function confirmTopUpSent(
+  approvalId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const session = await resolveCurrentSession()
+    if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
+    const existing = await getApprovalById(approvalId)
+    if (!existing) return { ok: false, error: "Request not found." }
+    const memberIds = await resolveEnvironmentMemberIds(session.id)
+    if (!memberIds.includes(existing.userId)) {
+      return { ok: false, error: "You are not authorized to act on this request." }
+    }
+    const payload = (existing.payload ?? {}) as Record<string, unknown>
+    const topUp = payload.topUpRequest as Record<string, unknown> | undefined
+    if (!topUp) return { ok: false, error: "No top-up was requested for this transaction." }
+    if (topUp.creditedAt) return { ok: false, error: "This top-up was already credited." }
+
+    await updateApprovalPayload(approvalId, {
+      ...payload,
+      topUpRequest: { ...topUp, declaredAt: new Date().toISOString() },
+    })
+
+    const ccy = String(topUp.currency || existing.currency || BASE_CURRENCY)
+    const amt = Number(topUp.amount) || 0
+    const fmt = `${ccy} ${amt.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    let who = existing.userId
+    try {
+      const profile = await resolveAccountProfileById(existing.userId)
+      who = `${profile.fullName}${profile.company && profile.company !== "—" ? ` (${profile.company})` : ""}`
+    } catch {
+      // fall back to the id
+    }
+    try {
+      const admins = await Promise.all(adminEmails().map((e) => getDynamicUserByEmail(e).catch(() => undefined)))
+      const seen = new Set<string>()
+      for (const admin of admins) {
+        if (!admin || seen.has(admin.id)) continue
+        seen.add(admin.id)
+        await insertNotification({
+          userId: admin.id,
+          tone: "warning",
+          title: `Top-up sent — verify & credit ${fmt}`,
+          body: `${who} confirmed they have topped up ${fmt} to close "${existing.title}". Open the request in Pending Approvals to credit and continue.`,
+          href: "/dashboard/admin",
+        })
+      }
+    } catch (err) {
+      console.log("[v0] confirmTopUpSent admin notify failed:", (err as Error).message)
+    }
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] confirmTopUpSent failed:", (err as Error).message)
+    return { ok: false, error: "Could not send your confirmation. Please try again." }
+  }
+}
+
+/**
+ * Administrator AUTHORIZES a top-up: credits the client's Master Account with
+ * the requested amount and marks the marker credited. This is the "authorize
+ * the transaction" step the admin performs after the client tops up. The credit
+ * id is deterministic (`TOPUP-<approvalId>`) so a retry never double-credits.
+ * The underlying request stays pending — the admin still Approves it afterwards
+ * now that the client can cover the charges.
+ */
+export async function adminCreditTopUp(
+  passcode: string,
+  approvalId: string,
+  amountOverride?: number,
+  note?: string,
+): Promise<{ ok: true; credited: number; currency: string } | { ok: false; error: string }> {
+  if (!(await adminOk(passcode))) return { ok: false, error: "Administrator authorization failed." }
+  try {
+    const existing = await getApprovalById(approvalId)
+    if (!existing) return { ok: false, error: "Request not found." }
+    const payload = (existing.payload ?? {}) as Record<string, unknown>
+    const topUp = payload.topUpRequest as Record<string, unknown> | undefined
+    if (!topUp) return { ok: false, error: "No top-up was requested for this transaction." }
+    if (topUp.creditedAt) return { ok: false, error: "This top-up was already credited." }
+
+    const ccy = String(topUp.currency || existing.currency || BASE_CURRENCY).toUpperCase()
+    const requested = Number(topUp.amount)
+    const amt =
+      amountOverride != null && Number.isFinite(amountOverride) && amountOverride > 0
+        ? Math.round((amountOverride + Number.EPSILON) * 100) / 100
+        : requested
+    if (!Number.isFinite(amt) || amt <= 0) return { ok: false, error: "Enter a valid amount to credit." }
+
+    const ownerId = await resolveDataOwnerIdFor(existing.userId)
+    const reference = String(topUp.reference || `MCC-TOPUP-${approvalId.slice(-8).toUpperCase()}`)
+    const trimmedNote = (note ?? "").trim()
+    await upsertLedgerEntry(ownerId, {
+      id: `TOPUP-${approvalId}`,
+      direction: "credit",
+      amount: amt,
+      currency: ccy,
+      status: "completed",
+      date: new Date().toISOString(),
+      counterparty: "Master Account top-up",
+      reference,
+      comment:
+        `Account top-up credited by MCC Capital to fund "${existing.title}".` +
+        (trimmedNote ? ` ${trimmedNote}` : ""),
+      category: "Account Top-up",
+    })
+
+    await updateApprovalPayload(approvalId, {
+      ...payload,
+      topUpRequest: {
+        ...topUp,
+        creditedAt: new Date().toISOString(),
+        creditedAmount: amt,
+      },
+    })
+
+    const fmt = `${ccy} ${amt.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    try {
+      await insertNotification({
+        userId: existing.userId,
+        tone: "success",
+        title: `Top-up credited — ${fmt}`,
+        body: `MCC Capital credited ${fmt} to your Master Account for "${existing.title}". Your request can now proceed.`,
+        href: KIND_HREF[existing.kind] ?? "/dashboard",
+      })
+    } catch (err) {
+      console.log("[v0] adminCreditTopUp client notify failed:", (err as Error).message)
+    }
+    try {
+      const target = await resolveAccountProfileById(existing.userId)
+      await logActivity({
+        action: `Administrator credited a ${fmt} account top-up for ${target.fullName} to fund ${KIND_LABELS[existing.kind] ?? "a request"} ${approvalId}`,
+        category: "Administration / Approvals",
+        user: "Administrator",
+        details: {
+          referenceId: approvalId,
+          targetAccount: `${target.fullName} — ${target.email}`,
+          summary: existing.summary || existing.title,
+          creditedAmount: fmt,
+          note: trimmedNote || "(none)",
+        },
+      })
+    } catch (err) {
+      console.log("[v0] adminCreditTopUp activity log failed:", (err as Error).message)
+    }
+    return { ok: true, credited: amt, currency: ccy }
+  } catch (err) {
+    console.log("[v0] adminCreditTopUp failed:", (err as Error).message)
+    return { ok: false, error: "Could not credit the top-up. Please try again." }
   }
 }
 
