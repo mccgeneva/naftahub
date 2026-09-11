@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input"
 import { applyCashback, formatCashbackPct } from "@/lib/fee-cashback"
 import { instrumentTypesByCategory } from "@/lib/instrument-marketplace"
 import { parseSwiftMessage } from "@/lib/swift-mt"
+import { MoneyInput } from "@/components/ui/money-input"
 import {
   Select,
   SelectContent,
@@ -594,13 +595,10 @@ export function IncomingSwiftDelivery() {
                               <label htmlFor={`face-${m.id}`} className="text-xs text-muted-foreground">
                                 Face value
                               </label>
-                              <Input
+                              <MoneyInput
                                 id={`face-${m.id}`}
-                                inputMode="decimal"
                                 value={bookFace[m.id] ?? ""}
-                                onChange={(e) =>
-                                  setBookFace((p) => ({ ...p, [m.id]: e.target.value.replace(/[^0-9.,]/g, "") }))
-                                }
+                                onValueChange={(raw) => setBookFace((p) => ({ ...p, [m.id]: raw }))}
                                 placeholder="0"
                                 className="h-10 text-base"
                               />
