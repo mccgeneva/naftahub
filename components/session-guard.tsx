@@ -99,13 +99,18 @@ function isEmbeddedPreview(): boolean {
  * The auth cookie is httpOnly, so termination calls the `expireSession` server
  * action to actually delete it; this component handles detection and UX.
  */
-export function SessionGuard() {
+export function SessionGuard({ persistent = false }: { persistent?: boolean }) {
   const router = useRouter()
   const endedRef = useRef(false)
   const warnedRef = useRef(false)
   const lastKeepaliveRef = useRef(0)
 
   useEffect(() => {
+    // Persistent ("never log out") session: the server never idle/absolute-
+    // expires it and its cookies are long-lived, so the client guard must NOT
+    // terminate on tab-close, inactivity, or lifetime. Stand down entirely.
+    if (persistent) return
+
     const now = Date.now()
 
     // Ping the server keepalive so it slides the session's idle window forward.
@@ -337,7 +342,7 @@ export function SessionGuard() {
       document.removeEventListener("visibilitychange", onResume)
       window.removeEventListener("pageshow", onResume)
     }
-  }, [router])
+  }, [router, persistent])
 
   return null
 }

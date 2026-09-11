@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { ProfileAvatarEditor } from "@/components/dashboard/profile-avatar-editor"
 import { CopyValueButton } from "@/components/dashboard/copy-value-button"
 import { FaceIdManager } from "@/components/dashboard/face-id-manager"
+import { PersistentSessionCard } from "@/components/dashboard/persistent-session-card"
 import { ApiAccess } from "@/components/settings/api-access"
 import { DebitProfileCard } from "@/components/dashboard/debits/debit-profile-card"
 import { Separator } from "@/components/ui/separator"
@@ -138,6 +139,9 @@ export default function ProfilePage() {
           <ApiAccess />
         </CardContent>
       </Card>
+
+      {/* Session — stay signed in (persistent, never auto-logout) */}
+      <PersistentSessionCard />
 
       {/* Security — Face ID */}
       <FaceIdManager />

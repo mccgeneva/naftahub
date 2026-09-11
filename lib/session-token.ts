@@ -27,6 +27,13 @@ export interface SessionMeta {
   exp: number
   /** Last-seen (ms since epoch) — slides forward on each request for idle tracking. */
   seen: number
+  /**
+   * When true, this is a user-opted PERSISTENT ("never log out") session: it is
+   * never idle-expired and never hits the absolute cap. Because the token is
+   * HMAC-signed, the client cannot set/forge this flag — only the server issues
+   * it after reading the account's stored preference.
+   */
+  persist?: boolean
 }
 
 // Signing secret. Prefer an env-configured secret; fall back to a build-time
@@ -190,6 +197,10 @@ export function evaluateSessionMeta(
   now: number = Date.now(),
 ): SessionValidity {
   if (!meta) return "invalid"
+  // A persistent ("never log out") session is exempt from both the absolute
+  // expiry and the idle window. The flag is inside the signed payload, so it
+  // cannot be forged by the client.
+  if (meta.persist) return "valid"
   if (now >= meta.exp) return "expired"
   if (now - meta.seen >= idleMaxAgeMs) return "idle"
   return "valid"

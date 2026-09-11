@@ -99,6 +99,12 @@ export interface SerializableUserProfile {
   masterName?: string
   /** Login email of the Master account (denormalised for audit / display). */
   masterEmail?: string
+  // --- Session preferences --------------------------------------------------
+  /** When true, this account opted into a PERSISTENT ("never log out") session:
+   *  login issues long-lived, signed session cookies that do not idle-expire or
+   *  hit the 8h absolute cap, and the client-side guard stands down. User-set
+   *  from the profile page; absent ⇒ standard idle/absolute session. */
+  persistentSession?: boolean
 }
 
 // Pick a sensible icon for a profile row based on its label so hydrated dynamic
