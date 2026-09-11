@@ -79,6 +79,7 @@ import {
   adminAdjustLeveragePpi,
   adminAdjustMonetizationReserve,
   adminConfirmYieldTermination,
+  adminRequestAccountTopUp,
   type DealHoldState,
 } from "@/app/actions/approvals"
 import { adminDecideCardRequest } from "@/app/actions/cards"
@@ -779,6 +780,55 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     )
     setPpiTarget(null)
     mutate()
+  }
+
+  // Top-up request dialog. When the client can't yet cover the PPI + charges,
+  // the admin asks them to top up their Master Account with a specific amount
+  // (prefilled with the total charges for a leverage line) to close the deal.
+  const [topUpTarget, setTopUpTarget] = useState<{ id: string; label: string; currency: string } | null>(null)
+  const [topUpValue, setTopUpValue] = useState("")
+  const [topUpNote, setTopUpNote] = useState("")
+
+  const openTopUp = (req: ApprovalRequest) => {
+    const rec = ((req.payload as { record?: Record<string, unknown> } | undefined)?.record ?? {}) as Record<
+      string,
+      unknown
+    >
+    const currency = String(rec.currency || req.currency || "EUR")
+    // Prefill with the total leverage charges (audit + PPI) — the amount the
+    // client needs to fit — when this is a leverage line; blank otherwise.
+    let suggested = ""
+    if (req.kind === "leverage") {
+      const total = leverageApplicationCharges(Number(rec.equity), Number(rec.leverageRatio), readStampedTrustScore(rec)).total
+      if (total > 0) suggested = total.toFixed(2)
+    }
+    setTopUpValue(suggested)
+    setTopUpNote("")
+    setTopUpTarget({ id: req.id, label: req.title, currency })
+  }
+
+  const confirmTopUp = async () => {
+    if (!topUpTarget) return
+    const amount = Number(topUpValue.replace(/,/g, ""))
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Enter a valid top-up amount.")
+      return
+    }
+    setActing(true)
+    const res = await adminRequestAccountTopUp(
+      ADMIN_PASSCODE,
+      topUpTarget.id,
+      amount,
+      topUpTarget.currency,
+      topUpNote.trim() || undefined,
+    )
+    setActing(false)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    toast.success(`Top-up request sent — asked the client for ${formatMoney2(amount, topUpTarget.currency)}.`)
+    setTopUpTarget(null)
   }
 
   // Reserve negotiation dialog (monetization). The admin agrees a lower blocked
@@ -1513,6 +1563,16 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                       <Button
                         size="sm"
                         variant="outline"
+                        className="h-8 gap-1 text-sky-600"
+                        disabled={acting}
+                        onClick={() => openTopUp(req)}
+                        title="Ask the client to top up their Master Account with a specific amount so this transaction can be closed."
+                      >
+                        <Wallet className="h-3.5 w-3.5" /> Request top-up
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
                         className="h-8 gap-1 text-emerald-600"
                         disabled={acting || fundingNeedsDiscussion}
                         onClick={() => (req.kind === "card" ? openCardApprove(req) : approveOne(req.id))}
@@ -1984,6 +2044,62 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
             <Button variant="destructive" onClick={confirmReject} disabled={acting || !rejectReason.trim()}>
               {acting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <X className="mr-1 h-4 w-4" />}
               Confirm rejection
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Request client top-up dialog */}
+      <Dialog open={topUpTarget !== null} onOpenChange={(o) => !o && !acting && setTopUpTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Wallet className="h-4 w-4 text-sky-500" />
+              Request account top-up
+            </DialogTitle>
+            <DialogDescription className="text-pretty">
+              Ask the client to top up their Master Account so this transaction can be closed. They receive a
+              notification with the amount and a link to fund their account. No money moves and the request stays
+              pending until you approve it.
+            </DialogDescription>
+          </DialogHeader>
+          {topUpTarget && (
+            <div className="space-y-3">
+              <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                Request: <span className="text-foreground">{topUpTarget.label}</span>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="topup-amount">Amount to top up ({topUpTarget.currency})</Label>
+                <MoneyInput
+                  id="topup-amount"
+                  value={topUpValue}
+                  onValueChange={setTopUpValue}
+                  className="text-base md:text-sm"
+                  autoFocus
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Prefilled with the total PPI + charges for a leverage line — adjust to the exact shortfall if needed.
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="topup-note">Note (optional)</Label>
+                <Textarea
+                  id="topup-note"
+                  value={topUpNote}
+                  onChange={(e) => setTopUpNote(e.target.value)}
+                  placeholder="Add context for the client…"
+                  className="min-h-16 text-base md:text-sm"
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTopUpTarget(null)} disabled={acting}>
+              Cancel
+            </Button>
+            <Button className="gap-1" onClick={confirmTopUp} disabled={acting}>
+              {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}
+              Send top-up request
             </Button>
           </DialogFooter>
         </DialogContent>

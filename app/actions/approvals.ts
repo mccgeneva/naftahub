@@ -5137,6 +5137,65 @@ export async function adminRevokeCommodityDeal(
  * the special treatment. The negotiated value is persisted on the record so the
  * reject-refund path knows the effective (net) premium to return.
  */
+/**
+ * Ask the client to top up their Master Account with a specific amount so a
+ * pending request (e.g. a leverage line whose PPI + charges they can't yet
+ * cover) can be closed. Sends a bell notification to the client with the amount
+ * and a link to the Receive page. Moves no money and does not decide the
+ * request — it is a nudge alongside "Negotiate PPI".
+ */
+export async function adminRequestAccountTopUp(
+  passcode: string,
+  approvalId: string,
+  amount: number,
+  currency: string,
+  note?: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await adminOk(passcode))) return { ok: false, error: "Administrator authorization failed." }
+  try {
+    const existing = await getApprovalById(approvalId)
+    if (!existing) return { ok: false, error: "Request not found." }
+    const amt = Math.round((Number(amount) + Number.EPSILON) * 100) / 100
+    if (!Number.isFinite(amt) || amt <= 0) return { ok: false, error: "Enter a valid top-up amount." }
+    const ccy = String(currency || existing.currency || BASE_CURRENCY).toUpperCase()
+    const fmt = `${ccy} ${amt.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    const label = KIND_LABELS[existing.kind] ?? "request"
+    const trimmedNote = (note ?? "").trim()
+    const body =
+      `To close your ${label.toLowerCase()} ("${existing.title}"), please top up your Master Account with ${fmt}. ` +
+      `Once the funds are available we can proceed with this transaction.` +
+      (trimmedNote ? ` Note from the administrator: ${trimmedNote}` : "")
+    await insertNotification({
+      userId: existing.userId,
+      tone: "warning",
+      title: `Top up your Master Account — ${fmt}`,
+      body,
+      href: "/dashboard/receive",
+    })
+    try {
+      const target = await resolveAccountProfileById(existing.userId)
+      await logActivity({
+        action: `Administrator asked ${target.fullName} to top up their Master Account with ${fmt} to close ${label} ${approvalId}`,
+        category: "Administration / Approvals",
+        user: "Administrator",
+        details: {
+          referenceId: approvalId,
+          targetAccount: `${target.fullName} — ${target.email}`,
+          summary: existing.summary || existing.title,
+          topUpRequested: fmt,
+          note: trimmedNote || "(none)",
+        },
+      })
+    } catch (err) {
+      console.log("[v0] top-up request activity log failed:", (err as Error).message)
+    }
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] adminRequestAccountTopUp failed:", (err as Error).message)
+    return { ok: false, error: "Could not send the top-up request." }
+  }
+}
+
 export async function adminAdjustLeveragePpi(
   passcode: string,
   id: string,
