@@ -179,6 +179,7 @@ export default function PaymentsPage() {
   const { beneficiaries } = useBeneficiaries()
   const logActivity = useActivityLog()
   const { show } = usePdfViewer()
+  const holder = useHolderIdentity()
   const { holderName, holderCompany, holderAddress, holderRepresentative } = useHolderIdentity()
   const { balanceFor, subAccountBalanceFor, entries } = useLedger()
   const { requests, addRequest } = usePaymentRequests()
@@ -519,6 +520,8 @@ export default function PaymentsPage() {
       iban: payment.iban,
       fee: payment.fee,
       uetr: payment.uetr,
+      accountHolder: holder.holderName,
+      accountHolderAddress: holder.holderAddress,
     }))
     logActivity({
       action: `Downloaded receipt for payment ${payment.id}`,

@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils"
 import { useLedger, type LedgerEntry } from "@/lib/ledger-store"
 import { generateReceiptPdf } from "@/lib/receipt-pdf"
+import { useHolderIdentity } from "@/lib/holder-identity"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 
 const currencySymbols: Record<string, string> = {
@@ -49,6 +50,7 @@ export function RecentTransactions() {
   const { entries } = useLedger()
   const router = useRouter()
   const { show } = usePdfViewer()
+  const holder = useHolderIdentity()
   const [selected, setSelected] = useState<LedgerEntry | null>(null)
 
   // Derive the latest activity from the persisted ledger so recorded incoming
@@ -97,6 +99,8 @@ export function RecentTransactions() {
       bic: bicMatch?.[1],
       iban: e.account,
       notes: e.comment,
+      accountHolder: holder.holderName,
+      accountHolderAddress: holder.holderAddress,
     }))
   }
 

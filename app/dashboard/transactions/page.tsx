@@ -121,6 +121,7 @@ export default function TransactionsPage() {
   const router = useRouter()
   const { entries } = useLedger()
   const { show } = usePdfViewer()
+  const holder = useHolderIdentity()
 
   // Account-holder identity + registered address printed at the top of the
   // exported PDF ("PREPARED FOR" block), shared with every other extract page.
@@ -384,6 +385,8 @@ export default function TransactionsPage() {
       bic: bicMatch?.[1],
       iban: entry?.account || (txn.account !== "MCC Capital" ? txn.account : undefined),
       notes: entry?.comment,
+      accountHolder: holder.holderName,
+      accountHolderAddress: holder.holderAddress,
     }))
     logActivity({
       action: `Downloaded receipt for ${txn.id}`,
