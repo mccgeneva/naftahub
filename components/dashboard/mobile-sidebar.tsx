@@ -89,19 +89,19 @@ const navGroups: NavGroup[] = [
   {
     label: "Trading & Instruments",
     items: [
-      { title: "NAFTAhub Trading", href: "/dashboard/trading", icon: Cpu, badge: "NQAi" },
-      { title: "SWIFT Services", href: "/dashboard/swift", icon: Globe },
-      { title: "Bank Instruments", href: "/dashboard/instruments", icon: FileText, badge: "New" },
-      { title: "SKR Trading", href: "/dashboard/skr", icon: ShieldCheck, badge: "SKR" },
-      { title: "Institutional Desk", href: "/dashboard/institutional", icon: Banknote, badge: "DOF" },
-      { title: "Securities Settlement", href: "/dashboard/dtc", icon: Layers, badge: "DTC" },
-      { title: "Euroclear Settlement", href: "/dashboard/euroclear", icon: Landmark, badge: "ICSD" },
       {
         title: "Commodity Trading",
         href: "/dashboard/commodity",
         icon: Ship,
         logo: "/images/naftahub-logo.png",
       },
+      { title: "NAFTAhub Trading", href: "/dashboard/trading", icon: Cpu, logo: "/images/nqai-logo.png" },
+      { title: "SWIFT Services", href: "/dashboard/swift", icon: Globe },
+      { title: "Bank Instruments", href: "/dashboard/instruments", icon: FileText, badge: "New" },
+      { title: "SKR Trading", href: "/dashboard/skr", icon: ShieldCheck, badge: "SKR" },
+      { title: "Institutional Desk", href: "/dashboard/institutional", icon: Banknote, badge: "DOF" },
+      { title: "Securities Settlement", href: "/dashboard/dtc", icon: Layers, badge: "DTC" },
+      { title: "Euroclear Settlement", href: "/dashboard/euroclear", icon: Landmark, badge: "ICSD" },
       { title: "Leverage & Risk", href: "/dashboard/leverage", icon: Gauge, badge: "1:30" },
       { title: "Treasury Services", href: "/dashboard/treasury", icon: ShieldCheck, badge: "Deposit" },
       { title: "Yield / PPP", href: "/dashboard/ppp", icon: TrendingUp },
@@ -222,7 +222,7 @@ export function MobileSidebar() {
                           <span className="flex-1">{item.title}</span>
                           {item.logo && (
                             <span className="flex h-5 shrink-0 items-center rounded bg-white px-1">
-                              <img src={item.logo} alt="NAFTAhub" className="h-3 w-auto" />
+                              <img src={item.logo || "/placeholder.svg"} alt={item.title} className="h-3 w-auto" />
                             </span>
                           )}
                           {item.badge && (
