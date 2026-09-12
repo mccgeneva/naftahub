@@ -447,47 +447,56 @@ export default function AccountDetailPage() {
                         const isIn = e.direction === "credit"
                         const isHold = e.status === "hold"
                         return (
-                          <li
-                            key={e.id}
-                            className="flex items-start gap-3 rounded-lg border border-border bg-secondary/40 p-3"
-                          >
-                            <div
-                              className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
-                                isIn ? "bg-emerald-500/15" : "bg-rose-500/15"
-                              }`}
+                          <li key={e.id}>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                router.push(`/dashboard/transactions/${encodeURIComponent(e.id)}`)
+                              }
+                              className="flex w-full items-start gap-3 rounded-lg border border-border bg-secondary/40 p-3 text-left transition-colors hover:bg-secondary active:bg-secondary"
+                              aria-label={`View receipt for ${e.counterparty || e.category || (isIn ? "incoming" : "outgoing")} transaction`}
                             >
-                              {isIn ? (
-                                <ArrowDownLeft className="h-4 w-4 text-emerald-400" />
-                              ) : (
-                                <ArrowUpRight className="h-4 w-4 text-rose-400" />
-                              )}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-medium text-foreground">
-                                {e.counterparty || e.category || (isIn ? "Incoming" : "Outgoing")}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {new Date(e.date).toLocaleDateString("en-GB", {
-                                  year: "numeric",
-                                  month: "short",
-                                  day: "numeric",
-                                })}
-                                {e.category ? ` · ${e.category}` : ""}
-                              </p>
-                              {isHold && (
-                                <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
-                                  <Lock className="h-2.5 w-2.5" /> Reserved
+                              <div
+                                className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                                  isIn ? "bg-emerald-500/15" : "bg-rose-500/15"
+                                }`}
+                              >
+                                {isIn ? (
+                                  <ArrowDownLeft className="h-4 w-4 text-emerald-400" />
+                                ) : (
+                                  <ArrowUpRight className="h-4 w-4 text-rose-400" />
+                                )}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-medium text-foreground">
+                                  {e.counterparty || e.category || (isIn ? "Incoming" : "Outgoing")}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {new Date(e.date).toLocaleDateString("en-GB", {
+                                    year: "numeric",
+                                    month: "short",
+                                    day: "numeric",
+                                  })}
+                                  {e.category ? ` · ${e.category}` : ""}
+                                </p>
+                                {isHold && (
+                                  <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
+                                    <Lock className="h-2.5 w-2.5" /> Reserved
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                <span
+                                  className={`text-sm font-semibold tabular-nums whitespace-nowrap ${
+                                    isIn ? "text-emerald-400" : "text-foreground"
+                                  }`}
+                                >
+                                  {isIn ? "+" : "−"}
+                                  {formatCurrency(e.amount, e.currency)}
                                 </span>
-                              )}
-                            </div>
-                            <span
-                              className={`shrink-0 text-sm font-semibold tabular-nums whitespace-nowrap ${
-                                isIn ? "text-emerald-400" : "text-foreground"
-                              }`}
-                            >
-                              {isIn ? "+" : "−"}
-                              {formatCurrency(e.amount, e.currency)}
-                            </span>
+                                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                              </div>
+                            </button>
                           </li>
                         )
                       })}
