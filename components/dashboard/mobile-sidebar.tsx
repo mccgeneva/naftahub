@@ -48,6 +48,8 @@ type NavItem = {
   href: string
   icon: LucideIcon
   badge?: string
+  /** Optional brand logo image (path under /public) shown on the row. */
+  logo?: string
   /** Only rendered for authorized administrators. */
   adminOnly?: boolean
 }
@@ -94,7 +96,13 @@ const navGroups: NavGroup[] = [
       { title: "Institutional Desk", href: "/dashboard/institutional", icon: Banknote, badge: "DOF" },
       { title: "Securities Settlement", href: "/dashboard/dtc", icon: Layers, badge: "DTC" },
       { title: "Euroclear Settlement", href: "/dashboard/euroclear", icon: Landmark, badge: "ICSD" },
-      { title: "Commodity Trading", href: "/dashboard/commodity", icon: Ship, badge: "POP/POF" },
+      {
+        title: "Commodity Trading",
+        href: "/dashboard/commodity",
+        icon: Ship,
+        badge: "POP/POF",
+        logo: "/images/naftahub-logo.png",
+      },
       { title: "Leverage & Risk", href: "/dashboard/leverage", icon: Gauge, badge: "1:30" },
       { title: "Treasury Services", href: "/dashboard/treasury", icon: ShieldCheck, badge: "Deposit" },
       { title: "Yield / PPP", href: "/dashboard/ppp", icon: TrendingUp },
@@ -213,6 +221,11 @@ export function MobileSidebar() {
                         >
                           <item.icon className="h-4 w-4 shrink-0" />
                           <span className="flex-1">{item.title}</span>
+                          {item.logo && (
+                            <span className="flex h-5 shrink-0 items-center rounded bg-white px-1">
+                              <img src={item.logo} alt="NAFTAhub" className="h-3 w-auto" />
+                            </span>
+                          )}
                           {item.badge && (
                             <Badge
                               variant="secondary"
