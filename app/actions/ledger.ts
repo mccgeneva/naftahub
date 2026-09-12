@@ -283,14 +283,24 @@ export async function sendInstantTransfer(input: {
   }
 
   try {
-    // Server-side balance enforcement: never allow an overdraft. The 2% fee is
-    // deducted from the RECIPIENT (below), so the sender only needs the amount.
+    // The transfer fee is borne by the SENDER (added on top): the recipient
+    // receives the FULL amount and the sender is debited amount + fee. Cashback
+    // is resolved for the fee-bearer (now the SENDER). An operator/treasury
+    // (admin) transfer to a client stays fee-free.
+    const senderIsAdmin = isAdminEmail(session.profile.email)
+    const standardTransferFee = senderIsAdmin ? 0 : internalTransferFee(amount, await getFeeTiers())
+    const transferCashback = await applyCashbackForOwner(senderOwnerId, "transaction", standardTransferFee)
+    const transferFee = transferCashback.netFee
+    const totalDebit = Math.round((amount + transferFee) * 100) / 100
+
+    // Server-side balance enforcement: never allow an overdraft. The sender must
+    // cover the amount PLUS the fee.
     const senderEntries = await readLedger(senderOwnerId)
     const available = availableBalanceFor(senderEntries, currency)
-    if (amount > available) {
+    if (totalDebit > available) {
       return {
         ok: false,
-        error: `Insufficient funds. This transfer needs ${currency} ${amount.toLocaleString("en-US")} but only ${currency} ${available.toLocaleString("en-US")} is available.`,
+        error: `Insufficient funds. This transfer needs ${currency} ${totalDebit.toLocaleString("en-US")} (amount + fee) but only ${currency} ${available.toLocaleString("en-US")} is available.`,
       }
     }
 
@@ -326,36 +336,24 @@ export async function sendInstantTransfer(input: {
     const recipientLabel = `${recipient.profile.fullName || recipient.profile.company || recipient.email} (${recipient.email})`
     const note = (input.note || "").trim()
 
-    // Tiered internal-transfer fee, DEDUCTED FROM THE RECIPIENT: the sender is
-    // debited the full amount and the recipient receives the net. Admin-set
-    // cashback (resolved for the fee-bearer = the recipient) reduces the fee, so
-    // the recipient receives MORE. Both the standard fee and the cashback are
-    // recorded for display + audit.
-    //
-    // EXEMPTION: when the operator/treasury (an admin account) funds a client —
-    // e.g. topping up a Master Account to help cover charges — no fee is taken,
-    // so the client receives the FULL amount. Charging the client 2% on money
-    // the platform is giving them is illogical and made a €20,000 top-up land
-    // as €19,600.
-    const senderIsAdmin = isAdminEmail(senderProfile.email)
-    const standardTransferFee = senderIsAdmin ? 0 : internalTransferFee(amount, await getFeeTiers())
-    const transferCashback = await applyCashbackForOwner(recipientOwnerId, "transaction", standardTransferFee)
-    const transferFee = transferCashback.netFee
-    const netCredit = Math.round((amount - transferFee) * 100) / 100
+    // The recipient receives the FULL amount; the sender bears the fee (posted
+    // as a separate debit below). The standard fee and any cashback are recorded
+    // for display + audit. (The admin-exemption and cashback fee-bearer were
+    // resolved above where the fee is computed.)
     const feeEffectivePct =
       amount > 0 ? `${((transferFee / amount) * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}%` : ""
     const feeNote =
       transferCashback.originalFee > 0
-        ? ` A transfer fee of ${currency} ${transferFee.toLocaleString("en-US")} (${feeEffectivePct} effective, tiered) was deducted.${cashbackNote(transferCashback, currency)}`
+        ? ` A transfer fee of ${currency} ${transferFee.toLocaleString("en-US")} (${feeEffectivePct} effective, tiered) was charged to you (the sender); the recipient received the full amount.${cashbackNote(transferCashback, currency)}`
         : ""
 
-    // Credit the recipient (shared owner ledger) the NET amount. Distinct entry
+    // Credit the recipient (shared owner ledger) the FULL amount. Distinct entry
     // id so it never collides with the sender's debit under the same
     // (user_id, entry_id) key.
     await upsertEntry(recipientOwnerId, {
       id: `${ref}-IN`,
       direction: "credit",
-      amount: netCredit,
+      amount,
       currency,
       status: "completed",
       date: nowIso,
@@ -363,11 +361,11 @@ export async function sendInstantTransfer(input: {
       account: senderProfile.email,
       bank: "MCC Capital — Internal Transfer",
       reference: ref,
-      comment: (note || `Internal transfer received from ${senderLabel}.`) + feeNote,
+      comment: note || `Internal transfer received from ${senderLabel}.`,
       category: "Internal Transfer",
     })
 
-    // Debit the sender (shared owner ledger).
+    // Debit the sender the amount (shared owner ledger).
     await upsertEntry(senderOwnerId, {
       id: `${ref}-OUT`,
       direction: "debit",
@@ -383,11 +381,29 @@ export async function sendInstantTransfer(input: {
       category: "Internal Transfer",
     })
 
+    // Debit the sender the transfer fee as its own line (when any applies).
+    if (transferFee > 0) {
+      await upsertEntry(senderOwnerId, {
+        id: `${ref}-FEE`,
+        direction: "debit",
+        amount: transferFee,
+        currency,
+        status: "completed",
+        date: nowIso,
+        counterparty: "MCC Capital — Transfer Fee",
+        account: recipient.email,
+        bank: "MCC Capital — Internal Transfer",
+        reference: ref,
+        comment: `Transfer fee (${feeEffectivePct} effective, tiered) for internal transfer ${ref} to ${recipientLabel}.${cashbackNote(transferCashback, currency)}`,
+        category: "Transfer Fee",
+      })
+    }
+
     await logActivity({
       action: `Sent an instant internal transfer of ${currency} ${amount.toLocaleString("en-US")} to ${recipient.email}`,
       category: "Payments",
       details: {
-        summary: `Instant internal P2P transfer of ${currency} ${amount.toLocaleString("en-US")} from ${senderLabel} to ${recipientLabel}. Settled in real time on the server ledger.${feeNote ? ` Transfer fee ${currency} ${transferFee.toLocaleString("en-US")} (${feeEffectivePct} effective, tiered) deducted from the recipient (net ${currency} ${netCredit.toLocaleString("en-US")}).${cashbackNote(transferCashback, currency)}` : ""} Reference: ${ref}.`,
+        summary: `Instant internal P2P transfer of ${currency} ${amount.toLocaleString("en-US")} from ${senderLabel} to ${recipientLabel}. Settled in real time on the server ledger.${feeNote ? ` Transfer fee ${currency} ${transferFee.toLocaleString("en-US")} (${feeEffectivePct} effective, tiered) charged to the sender — ${currency} ${totalDebit.toLocaleString("en-US")} debited in total; the recipient received the full ${currency} ${amount.toLocaleString("en-US")}.${cashbackNote(transferCashback, currency)}` : ""} Reference: ${ref}.`,
         referenceId: ref,
         recipientEmail: recipient.email,
         amount: `${currency} ${amount.toLocaleString("en-US")}`,
@@ -401,13 +417,14 @@ export async function sendInstantTransfer(input: {
     // never undo a settled transfer). The recipient is alerted they received
     // funds; the sender gets a confirmation the transfer went out.
     const amountLabel = `${currency} ${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-    const netLabel = `${currency} ${netCredit.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    const totalLabel = `${currency} ${totalDebit.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    const feeLabel = `${currency} ${transferFee.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     try {
       await insertNotification({
         userId: recipient.id,
         tone: "success",
-        title: `Payment received — ${netLabel}`,
-        body: `You received ${netLabel} from ${senderLabel} into your Master Account.${feeNote ? ` ${feeNote.trim()}` : ""}${note ? ` Note: ${note}` : ""}`,
+        title: `Payment received — ${amountLabel}`,
+        body: `You received ${amountLabel} from ${senderLabel} into your Master Account — the full amount, no fee deducted.${note ? ` Note: ${note}` : ""}`,
         href: "/dashboard",
       })
     } catch (err) {
@@ -418,7 +435,7 @@ export async function sendInstantTransfer(input: {
         userId: session.id,
         tone: "info",
         title: `Payment sent — ${amountLabel}`,
-        body: `Your instant transfer of ${amountLabel} to ${recipientLabel} was completed.${note ? ` Note: ${note}` : ""}`,
+        body: `Your instant transfer of ${amountLabel} to ${recipientLabel} was completed.${transferFee > 0 ? ` A transfer fee of ${feeLabel} was charged — ${totalLabel} debited in total.` : ""}${note ? ` Note: ${note}` : ""}`,
         href: "/dashboard",
       })
     } catch (err) {
