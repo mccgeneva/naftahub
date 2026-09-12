@@ -663,7 +663,7 @@ export default function CommodityTradingPage() {
     const rounded = otherUnit === "bbl" ? Math.round(converted) : Math.round(converted * 1000) / 1000
     setForm((prev) => ({
       ...prev,
-      quantityAmount: rounded.toLocaleString("en-US"),
+      quantityAmount: String(rounded),
       quantityUnit: otherUnit,
     }))
   }
@@ -677,7 +677,8 @@ export default function CommodityTradingPage() {
   // Push the computed total into the Approx. value field.
   const applyComputedValue = () => {
     if (computedShipmentAmount == null) return
-    setForm((prev) => ({ ...prev, approxValue: computedShipmentAmount.toLocaleString("en-US") }))
+    // Store RAW (no separators) — the approxValue MoneyInput adds grouping for display.
+    setForm((prev) => ({ ...prev, approxValue: String(computedShipmentAmount) }))
   }
 
   // Recompute the total = qty × unit price and keep Approx. value in sync as the
@@ -686,7 +687,8 @@ export default function CommodityTradingPage() {
     const q = Number.parseFloat(qtyStr.replace(/[, ]/g, ""))
     const p = Number.parseFloat(priceStr.replace(/[, ]/g, ""))
     if (!Number.isFinite(q) || q <= 0 || !Number.isFinite(p) || p <= 0) return null
-    return (Math.round(q * p * 100) / 100).toLocaleString("en-US")
+    // RAW value; the approxValue MoneyInput handles grouping for display.
+    return String(Math.round(q * p * 100) / 100)
   }
   const handleUnitPriceChange = (v: string) => {
     setForm((prev) => {
@@ -809,7 +811,7 @@ export default function CommodityTradingPage() {
       commodity: deal.product,
       quantityAmount: deal.quantity.toLocaleString("en-US"),
       quantityUnit: deal.unit,
-      approxValue: deal.totalValue.toLocaleString("en-US"),
+        approxValue: String(deal.totalValue),
       currency: deal.currency,
       instrumentType: "Commodity",
       originCountry: deal.loadPort,
@@ -1579,12 +1581,11 @@ export default function CommodityTradingPage() {
                 <div className="space-y-2">
                   <Label htmlFor="quantity">Quantity / nominal</Label>
                   <div className="flex gap-2">
-                    <Input
+                    <MoneyInput
                       id="quantity"
                       className="flex-1"
-                      inputMode="decimal"
                       value={form.quantityAmount}
-                      onChange={(e) => handleQuantityChange(e.target.value)}
+                      onValueChange={handleQuantityChange}
                       placeholder={form.quantityUnit === "bbl" ? "e.g. 2,000,000" : "e.g. 100,000"}
                     />
                     {unitEditable ? (
@@ -1634,12 +1635,11 @@ export default function CommodityTradingPage() {
                 <div className="space-y-2">
                   <Label htmlFor="unitPrice">Unit price (per {form.quantityUnit.toUpperCase()})</Label>
                   <div className="flex gap-2">
-                    <Input
+                    <MoneyInput
                       id="unitPrice"
                       className="flex-1"
-                      inputMode="decimal"
                       value={form.unitPrice}
-                      onChange={(e) => handleUnitPriceChange(e.target.value)}
+                      onValueChange={handleUnitPriceChange}
                       placeholder={form.quantityUnit === "bbl" ? "e.g. 78.50" : "e.g. 685.00"}
                     />
                     <span className="flex w-28 shrink-0 items-center justify-center rounded-md border border-input bg-muted text-sm font-medium text-muted-foreground">
@@ -2058,7 +2058,7 @@ export default function CommodityTradingPage() {
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="fco-unitprice">Unit price ({fco.currency})</Label>
-                      <Input id="fco-unitprice" inputMode="decimal" value={fco.unitPrice} onChange={(e) => setFcoField("unitPrice", e.target.value)} placeholder="per MT / bbl" />
+                      <MoneyInput id="fco-unitprice" value={fco.unitPrice} onValueChange={(v) => setFcoField("unitPrice", v)} placeholder="per MT / bbl" />
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="fco-trialval">Trial cargo value ({fco.currency})</Label>
@@ -2734,11 +2734,10 @@ export default function CommodityTradingPage() {
                     Unit price ({editTarget.currency} /{" "}
                     {parseQuantityString(editForm.quantity || editTarget.quantity)?.unit === "bbl" ? "BBL" : "MT"})
                   </Label>
-                  <Input
+                  <MoneyInput
                     id="edit-unit"
-                    inputMode="decimal"
                     value={editForm.unitPrice}
-                    onChange={(e) => setEditForm((p) => ({ ...p, unitPrice: e.target.value }))}
+                    onValueChange={(v) => setEditForm((p) => ({ ...p, unitPrice: v }))}
                     placeholder="e.g. 92.51"
                   />
                 </div>
@@ -2820,11 +2819,10 @@ export default function CommodityTradingPage() {
                     Unit price ({amendTarget.currency} /{" "}
                     {parseQuantityString(amendForm.quantity || amendTarget.quantity)?.unit === "bbl" ? "BBL" : "MT"})
                   </Label>
-                  <Input
+                  <MoneyInput
                     id="amend-value"
-                    inputMode="decimal"
                     value={amendForm.value}
-                    onChange={(e) => setAmendForm((p) => ({ ...p, value: e.target.value }))}
+                    onValueChange={(v) => setAmendForm((p) => ({ ...p, value: v }))}
                     placeholder="e.g. 685.00"
                   />
                 </div>
