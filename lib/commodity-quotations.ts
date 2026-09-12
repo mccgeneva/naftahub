@@ -26,6 +26,8 @@ export interface PetroleumProduct {
   /** Stable id used for filtering. */
   id: string
   name: string
+  /** Short plain-language spec so buyers pick exactly the right grade. */
+  description: string
   category: ProductCategory
   /** Pricing unit, e.g. "bbl" (barrel) or "MT" (metric tonne). */
   unit: "bbl" | "MT"
@@ -82,42 +84,42 @@ export const PORTS: Port[] = [
 
 export const PRODUCTS: PetroleumProduct[] = [
   // Crude grades (per barrel)
-  { id: "brent", name: "Brent Blend", category: "Crude Oil", unit: "bbl", base: 82.4, volatility: 0.018 },
-  { id: "wti", name: "WTI (West Texas Intermediate)", category: "Crude Oil", unit: "bbl", base: 78.1, volatility: 0.019 },
-  { id: "dubai", name: "Dubai Crude", category: "Crude Oil", unit: "bbl", base: 80.2, volatility: 0.017 },
-  { id: "oman", name: "Oman Crude", category: "Crude Oil", unit: "bbl", base: 80.6, volatility: 0.017 },
-  { id: "arab-light", name: "Arab Light", category: "Crude Oil", unit: "bbl", base: 83.9, volatility: 0.016 },
-  { id: "bonny-light", name: "Bonny Light", category: "Crude Oil", unit: "bbl", base: 83.2, volatility: 0.02 },
-  { id: "urals", name: "Urals", category: "Crude Oil", unit: "bbl", base: 69.8, volatility: 0.024 },
-  { id: "espo", name: "ESPO Blend", category: "Crude Oil", unit: "bbl", base: 79.3, volatility: 0.021 },
-  { id: "maya", name: "Maya Heavy", category: "Crude Oil", unit: "bbl", base: 72.9, volatility: 0.022 },
+  { id: "brent", name: "Brent Blend", description: "Light sweet North Sea benchmark, ~38° API, low sulphur.", category: "Crude Oil", unit: "bbl", base: 82.4, volatility: 0.018 },
+  { id: "wti", name: "WTI (West Texas Intermediate)", description: "US light sweet benchmark, ~39.6° API, very low sulphur.", category: "Crude Oil", unit: "bbl", base: 78.1, volatility: 0.019 },
+  { id: "dubai", name: "Dubai Crude", description: "Medium sour Middle East benchmark for Asian exports.", category: "Crude Oil", unit: "bbl", base: 80.2, volatility: 0.017 },
+  { id: "oman", name: "Oman Crude", description: "Medium sour DME-traded Middle East export grade.", category: "Crude Oil", unit: "bbl", base: 80.6, volatility: 0.017 },
+  { id: "arab-light", name: "Arab Light", description: "Saudi light sour benchmark crude, ~33° API.", category: "Crude Oil", unit: "bbl", base: 83.9, volatility: 0.016 },
+  { id: "bonny-light", name: "Bonny Light", description: "Nigerian light sweet crude, ~35° API, very low sulphur.", category: "Crude Oil", unit: "bbl", base: 83.2, volatility: 0.02 },
+  { id: "urals", name: "Urals", description: "Russian medium sour export blend, ~31° API.", category: "Crude Oil", unit: "bbl", base: 69.8, volatility: 0.024 },
+  { id: "espo", name: "ESPO Blend", description: "East Siberian medium sweet crude for Asian markets.", category: "Crude Oil", unit: "bbl", base: 79.3, volatility: 0.021 },
+  { id: "maya", name: "Maya Heavy", description: "Mexican heavy sour crude, ~22° API.", category: "Crude Oil", unit: "bbl", base: 72.9, volatility: 0.022 },
 
   // LPG & gas (per MT)
-  { id: "lpg-propane", name: "LPG — Propane", category: "LPG & Gas", unit: "MT", base: 612, volatility: 0.025 },
-  { id: "lpg-butane", name: "LPG — Butane", category: "LPG & Gas", unit: "MT", base: 638, volatility: 0.025 },
+  { id: "lpg-propane", name: "LPG — Propane", description: "Propane (C3) for heating, autogas and petrochemical feed.", category: "LPG & Gas", unit: "MT", base: 612, volatility: 0.025 },
+  { id: "lpg-butane", name: "LPG — Butane", description: "Butane (C4) for blending, heating and petrochemical feed.", category: "LPG & Gas", unit: "MT", base: 638, volatility: 0.025 },
 
   // Light distillates (per MT)
-  { id: "naphtha", name: "Naphtha", category: "Light Distillates", unit: "MT", base: 686, volatility: 0.022 },
-  { id: "gasoline-92", name: "Gasoline RON 92", category: "Light Distillates", unit: "MT", base: 742, volatility: 0.021 },
-  { id: "gasoline-95", name: "Gasoline RON 95", category: "Light Distillates", unit: "MT", base: 776, volatility: 0.021 },
-  { id: "gasoline-98", name: "Gasoline RON 98", category: "Light Distillates", unit: "MT", base: 812, volatility: 0.021 },
+  { id: "naphtha", name: "Naphtha", description: "Steam-cracker and gasoline blending feedstock.", category: "Light Distillates", unit: "MT", base: 686, volatility: 0.022 },
+  { id: "gasoline-92", name: "Gasoline RON 92", description: "Regular unleaded motor gasoline, 92 octane.", category: "Light Distillates", unit: "MT", base: 742, volatility: 0.021 },
+  { id: "gasoline-95", name: "Gasoline RON 95", description: "Premium unleaded gasoline, 95 octane (Euro spec).", category: "Light Distillates", unit: "MT", base: 776, volatility: 0.021 },
+  { id: "gasoline-98", name: "Gasoline RON 98", description: "Super premium unleaded gasoline, 98 octane.", category: "Light Distillates", unit: "MT", base: 812, volatility: 0.021 },
 
   // Middle distillates (per MT)
-  { id: "jet-a1", name: "Jet A-1 / Aviation Kerosene", category: "Middle Distillates", unit: "MT", base: 772, volatility: 0.019 },
-  { id: "en590", name: "Diesel EN590 10ppm", category: "Middle Distillates", unit: "MT", base: 764, volatility: 0.019 },
-  { id: "ulsd", name: "ULSD (Ultra-Low Sulphur Diesel)", category: "Middle Distillates", unit: "MT", base: 758, volatility: 0.019 },
-  { id: "gasoil-50", name: "Gasoil 50ppm", category: "Middle Distillates", unit: "MT", base: 745, volatility: 0.019 },
+  { id: "jet-a1", name: "Jet A-1 / Aviation Kerosene", description: "Aviation kerosene, −47°C freeze point, global jet spec.", category: "Middle Distillates", unit: "MT", base: 772, volatility: 0.019 },
+  { id: "en590", name: "Diesel EN590 10ppm", description: "Euro-V automotive diesel, 10 ppm sulphur (ULSD spec).", category: "Middle Distillates", unit: "MT", base: 764, volatility: 0.019 },
+  { id: "ulsd", name: "ULSD (Ultra-Low Sulphur Diesel)", description: "Distillate road diesel, ≤15 ppm sulphur.", category: "Middle Distillates", unit: "MT", base: 758, volatility: 0.019 },
+  { id: "gasoil-50", name: "Gasoil 50ppm", description: "Automotive gas oil / diesel, 50 ppm sulphur.", category: "Middle Distillates", unit: "MT", base: 745, volatility: 0.019 },
 
   // Fuel oils & residuals (per MT)
-  { id: "vlsfo", name: "VLSFO 0.5%", category: "Fuel Oils & Residuals", unit: "MT", base: 601, volatility: 0.02 },
-  { id: "hsfo-380", name: "Fuel Oil 380 CST (HSFO)", category: "Fuel Oils & Residuals", unit: "MT", base: 482, volatility: 0.023 },
-  { id: "hsfo-180", name: "Fuel Oil 180 CST", category: "Fuel Oils & Residuals", unit: "MT", base: 498, volatility: 0.023 },
-  { id: "mgo", name: "Marine Gasoil (MGO)", category: "Fuel Oils & Residuals", unit: "MT", base: 783, volatility: 0.019 },
+  { id: "vlsfo", name: "VLSFO 0.5%", description: "Very low sulphur fuel oil, ≤0.5% (IMO 2020 marine spec).", category: "Fuel Oils & Residuals", unit: "MT", base: 601, volatility: 0.02 },
+  { id: "hsfo-380", name: "Fuel Oil 380 CST (HSFO)", description: "High sulphur residual bunker fuel, 380 cSt viscosity.", category: "Fuel Oils & Residuals", unit: "MT", base: 482, volatility: 0.023 },
+  { id: "hsfo-180", name: "Fuel Oil 180 CST", description: "Residual bunker fuel oil, 180 cSt viscosity.", category: "Fuel Oils & Residuals", unit: "MT", base: 498, volatility: 0.023 },
+  { id: "mgo", name: "Marine Gasoil (MGO)", description: "Pure distillate marine bunker fuel (DMA grade).", category: "Fuel Oils & Residuals", unit: "MT", base: 783, volatility: 0.019 },
 
   // Specialities (per MT)
-  { id: "bitumen", name: "Bitumen 60/70", category: "Specialities", unit: "MT", base: 421, volatility: 0.016 },
-  { id: "petcoke", name: "Petroleum Coke (Petcoke)", category: "Specialities", unit: "MT", base: 124, volatility: 0.026 },
-  { id: "base-oil", name: "Base Oil Group II", category: "Specialities", unit: "MT", base: 1142, volatility: 0.015 },
+  { id: "bitumen", name: "Bitumen 60/70", description: "Penetration-grade 60/70 paving bitumen binder.", category: "Specialities", unit: "MT", base: 421, volatility: 0.016 },
+  { id: "petcoke", name: "Petroleum Coke (Petcoke)", description: "Solid carbon fuel / anode feedstock from refining.", category: "Specialities", unit: "MT", base: 124, volatility: 0.026 },
+  { id: "base-oil", name: "Base Oil Group II", description: "Hydro-processed Group II lubricant base stock.", category: "Specialities", unit: "MT", base: 1142, volatility: 0.015 },
 ]
 
 export const PRODUCT_CATEGORIES: ProductCategory[] = [

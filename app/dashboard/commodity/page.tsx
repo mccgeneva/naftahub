@@ -1533,8 +1533,18 @@ export default function CommodityTradingPage() {
                             {cat}
                           </SelectLabel>
                           {PETROLEUM_PRODUCTS.filter((p) => p.category === cat).map((p) => (
-                            <SelectItem key={p.id} value={p.id}>
-                              {p.name} · {p.unit.toUpperCase()}
+                            <SelectItem key={p.id} value={p.id} className="py-2">
+                              <span className="flex flex-col gap-0.5">
+                                <span className="flex flex-wrap items-center gap-1.5">
+                                  <span className="font-medium">{p.name}</span>
+                                  <span className="rounded bg-secondary px-1 text-[10px] font-medium text-muted-foreground">
+                                    {p.unit.toUpperCase()}
+                                  </span>
+                                </span>
+                                {p.description && (
+                                  <span className="text-xs text-muted-foreground text-pretty">{p.description}</span>
+                                )}
+                              </span>
                             </SelectItem>
                           ))}
                         </SelectGroup>
