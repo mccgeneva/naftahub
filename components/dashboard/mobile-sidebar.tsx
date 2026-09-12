@@ -100,7 +100,6 @@ const navGroups: NavGroup[] = [
         title: "Commodity Trading",
         href: "/dashboard/commodity",
         icon: Ship,
-        badge: "POP/POF",
         logo: "/images/naftahub-logo.png",
       },
       { title: "Leverage & Risk", href: "/dashboard/leverage", icon: Gauge, badge: "1:30" },
