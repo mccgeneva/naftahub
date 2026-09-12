@@ -193,7 +193,7 @@ export default function SendMoneyPage() {
     return Number.isFinite(v) && v > 0 ? v : 0
   })()
   const previewFee = internalTransferFee(amountValueEntered)
-  const previewNet = amountValueEntered - previewFee
+  const previewTotal = amountValueEntered + previewFee
   const previewFeePct =
     amountValueEntered > 0
       ? `${((previewFee / amountValueEntered) * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}%`
@@ -334,13 +334,13 @@ export default function SendMoneyPage() {
       setFormError("Please enter a valid amount greater than 0.")
       return
     }
-    // 2% fee is DEDUCTED FROM THE RECIPIENT (server-side): the sender pays only
-    // the amount; the recipient receives the net.
+    // The fee is borne by the SENDER (added on top): the recipient receives the
+    // FULL amount; the sender is debited amount + fee.
     const instantFee = internalTransferFee(amountValue)
-    const instantNet = amountValue - instantFee
-    if (amountValue > availableBalance) {
+    const instantTotal = amountValue + instantFee
+    if (instantTotal > availableBalance) {
       setFormError(
-        `Insufficient funds. This transfer needs ${formatCurrency(amountValue, currency)} but only ${formatCurrency(availableBalance, currency)} is available.`,
+        `Insufficient funds. This transfer needs ${formatCurrency(instantTotal, currency)} (amount + fee) but only ${formatCurrency(availableBalance, currency)} is available.`,
       )
       return
     }
@@ -374,9 +374,9 @@ export default function SendMoneyPage() {
     refresh()
 
     toast.success("Transfer sent instantly", {
-      description: `${formatCurrency(amountValue, currency)} sent to ${recipient.displayName} (${recipient.email}).${
+      description: `${formatCurrency(amountValue, currency)} sent to ${recipient.displayName} (${recipient.email}) — they receive the full amount.${
         instantFee > 0
-          ? ` A transaction fee of ${formatCurrency(instantFee, currency)} was deducted — they receive ${formatCurrency(instantNet, currency)}.`
+          ? ` A transfer fee of ${formatCurrency(instantFee, currency)} was charged to you (${formatCurrency(instantTotal, currency)} debited in total).`
           : ""
       }`,
     })
@@ -396,13 +396,13 @@ export default function SendMoneyPage() {
       setFormError("Enter a valid amount greater than 0.")
       return
     }
-    // 2% fee is DEDUCTED FROM THE RECIPIENT on the credit leg (server-side): the
-    // sender is debited only the amount.
+    // The fee is borne by the SENDER (added on top): the recipient receives the
+    // FULL amount; the sender is debited amount + fee once approved.
     const approvalFee = internalTransferFee(amountValue)
-    const approvalNet = amountValue - approvalFee
-    if (amountValue > availableBalance) {
+    const approvalTotal = amountValue + approvalFee
+    if (approvalTotal > availableBalance) {
       setFormError(
-        `Insufficient balance. This transfer needs ${formatCurrency(amountValue, currency)} but only ${formatCurrency(availableBalance, currency)} is available.`,
+        `Insufficient balance. This transfer needs ${formatCurrency(approvalTotal, currency)} (amount + fee) but only ${formatCurrency(availableBalance, currency)} is available.`,
       )
       return
     }
@@ -426,8 +426,8 @@ export default function SendMoneyPage() {
       notes: note.trim(),
       currency,
       amount: amountValue,
-      fee: 0,
-      total: amountValue,
+      fee: approvalFee,
+      total: approvalTotal,
       payeeSource: APPROVAL_SOURCE,
     })
 
@@ -435,7 +435,7 @@ export default function SendMoneyPage() {
       action: `Submitted internal transfer of ${formatted} to ${to} for Administrator approval`,
       category: "Transfers",
       details: {
-        summary: `Submitted an internal transfer request of ${formatted} to "${to}" for mandatory Administrator approval.${approvalFee > 0 ? ` A transaction fee of ${formatCurrency(approvalFee, currency)} applies to the recipient — they will receive ${formatCurrency(approvalNet, currency)} once approved.` : ""} No funds have left the account yet — they will only be debited once the request is approved. Reference: ${requestId}.`,
+        summary: `Submitted an internal transfer request of ${formatted} to "${to}" for mandatory Administrator approval.${approvalFee > 0 ? ` A transfer fee of ${formatCurrency(approvalFee, currency)} is added on top and charged to you — ${formatCurrency(approvalTotal, currency)} will be debited once approved; the recipient receives the full ${formatted}.` : ""} No funds have left the account yet — they will only be debited once the request is approved. Reference: ${requestId}.`,
         reference: requestId,
         recipient: to,
         amount: formatted,
@@ -444,7 +444,7 @@ export default function SendMoneyPage() {
     })
 
     toast.success("Transfer submitted for approval", {
-      description: `Your transfer of ${formatted} to ${to} is pending Administrator approval.${approvalFee > 0 ? ` A transaction fee of ${formatCurrency(approvalFee, currency)} is deducted from the recipient — they receive ${formatCurrency(approvalNet, currency)}.` : ""} Funds will only be debited once it is approved.`,
+      description: `Your transfer of ${formatted} to ${to} is pending Administrator approval.${approvalFee > 0 ? ` A transfer fee of ${formatCurrency(approvalFee, currency)} is added on top and charged to you (${formatCurrency(approvalTotal, currency)} total); the recipient receives the full ${formatted}.` : ""} Funds will only be debited once it is approved.`,
     })
     resetForm()
   }
@@ -761,20 +761,20 @@ export default function SendMoneyPage() {
             {previewFee > 0 && (
               <div className="space-y-1 rounded-lg border border-border bg-secondary/30 p-3 text-xs">
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">You send (debited from your account)</span>
+                  <span className="text-muted-foreground">Amount to recipient</span>
                   <span className="font-medium text-foreground">{formatCurrency(amountValueEntered, currency)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Transfer fee ({previewFeePct} effective, paid by recipient)</span>
-                  <span className="font-medium text-foreground">− {formatCurrency(previewFee, currency)}</span>
+                  <span className="text-muted-foreground">Transfer fee ({previewFeePct} effective, paid by you)</span>
+                  <span className="font-medium text-foreground">+ {formatCurrency(previewFee, currency)}</span>
                 </div>
                 <div className="flex items-center justify-between border-t border-border pt-1">
-                  <span className="text-muted-foreground">Recipient receives</span>
-                  <span className="font-semibold text-foreground">{formatCurrency(previewNet, currency)}</span>
+                  <span className="text-muted-foreground">Total debited from you</span>
+                  <span className="font-semibold text-foreground">{formatCurrency(previewTotal, currency)}</span>
                 </div>
                 <p className="pt-1 text-[11px] text-muted-foreground">
-                  A tiered transaction fee is deducted from the recipient — you are debited only{" "}
-                  {formatCurrency(amountValueEntered, currency)}.
+                  The recipient receives the full {formatCurrency(amountValueEntered, currency)} — the tiered transfer
+                  fee is added on top and charged to you.
                 </p>
               </div>
             )}

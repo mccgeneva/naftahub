@@ -34,19 +34,19 @@ export function incomingTransactionFee(grossInAccountCurrency: number, tiers?: F
 // Platform-wide INTERNAL P2P TRANSFER FEE.
 //
 // A flat 2% fee is charged on internal account-to-account transfers between two
-// MCC accounts (the /dashboard/send flow). It is DEDUCTED FROM THE RECIPIENT:
-// the sender is debited the full amount and the recipient receives the net 98%.
-// (Outgoing EXTERNAL/SWIFT payments carry their own separate 2% platform fee
-// charged on top of the amount — that is unchanged and unrelated to this.)
+// MCC accounts (the /dashboard/send flow). It is BORNE BY THE SENDER (added on
+// top): the recipient receives the FULL amount and the sender is debited
+// amount + fee. (Outgoing EXTERNAL/SWIFT payments carry their own separate
+// platform fee charged on top of the amount — same principle, unrelated code.)
 
 export const INTERNAL_TRANSFER_FEE_RATE = 0.02
 export const INTERNAL_TRANSFER_FEE_LABEL = "up to 2%"
 
 /**
  * The internal-transfer fee, computed on the transfer amount using the marginal
- * tiered table, deducted from the recipient's credit. Rounded to 2 decimals.
- * Returns 0 for a non-positive / non-finite base so it can never manufacture a
- * negative credit. Pass the live `tiers` on the server; omit for the default.
+ * tiered table, charged on top of the amount to the SENDER. Rounded to 2
+ * decimals. Returns 0 for a non-positive / non-finite base. Pass the live
+ * `tiers` on the server; omit for the default.
  */
 export function internalTransferFee(amount: number, tiers?: FeeTier[]): number {
   return calculateTieredFee(amount, tiers).totalFee
