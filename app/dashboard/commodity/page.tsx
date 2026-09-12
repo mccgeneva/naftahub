@@ -282,6 +282,41 @@ function leadingNumber(raw: string): string {
   return m ? m[0].replace(/,+$/, "") : ""
 }
 
+// Auto-derive the three FCO commercial values so the trader never leaves them
+// at 0.00. Trial cargo value = unit price × trial quantity; contract period
+// value = unit price × one delivery lot (leading number of the contract
+// quantity); annual contract value = the period value × the number of lots
+// implied by the "x N" multiplier on the contract quantity, else the month
+// count in the contract duration, else 12 (capped at 12 for a one-year figure).
+// Returns raw (un-grouped) strings — the MoneyInput adds display grouping.
+function computeFcoValues(f: FcoInput): Partial<FcoInput> {
+  const toNum = (s: string) => {
+    const n = Number.parseFloat((leadingNumber(s) || "").replace(/,/g, ""))
+    return Number.isFinite(n) ? n : 0
+  }
+  const round2 = (n: number) => String(Math.round(n * 100) / 100)
+  const price = toNum(f.unitPrice)
+  const trialQ = toNum(f.trialQuantity)
+  const periodQ = toNum(f.contractQuantity)
+
+  const xMatch = f.contractQuantity.match(/x\s*([\d.,]+)/i)
+  const durMatch = f.contractDuration.match(/([\d.,]+)\s*month/i)
+  const rawPeriods = xMatch
+    ? Number.parseFloat(xMatch[1].replace(/,/g, ""))
+    : durMatch
+      ? Number.parseFloat(durMatch[1].replace(/,/g, ""))
+      : 12
+  const periods = Number.isFinite(rawPeriods) && rawPeriods > 0 ? Math.min(rawPeriods, 12) : 12
+
+  const out: Partial<FcoInput> = {}
+  if (price > 0 && trialQ > 0) out.trialCargoValue = round2(price * trialQ)
+  if (price > 0 && periodQ > 0) {
+    out.contractPeriodValue = round2(price * periodQ)
+    out.annualContractValue = round2(price * periodQ * periods)
+  }
+  return out
+}
+
 // A New-deal (and its FCO offer) is in-progress local state, so a device
 // back-gesture / PWA resume that remounts this page would otherwise WIPE
 // everything the trader typed — including after issuing an FCO, leaving them
@@ -576,6 +611,14 @@ export default function CommodityTradingPage() {
   const [showFco, setShowFco] = useState(false)
   const setFcoField = <K extends keyof FcoInput>(key: K, value: FcoInput[K]) =>
     setFco((prev) => ({ ...prev, [key]: value }))
+
+  // Set a value-driving source field (unit price / quantities / duration) and
+  // immediately recompute the trial, period and annual values from it.
+  const setFcoSource = <K extends keyof FcoInput>(key: K, value: FcoInput[K]) =>
+    setFco((prev) => {
+      const next = { ...prev, [key]: value }
+      return { ...next, ...computeFcoValues(next) }
+    })
 
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -879,7 +922,8 @@ export default function CommodityTradingPage() {
         notes: g("notes") || prev.notes,
       }))
 
-      setFco((prev) => ({
+      setFco((prev) => {
+        const next = {
         ...prev,
         // Seller is always MCC Oil & Gas — never take the seller identity from
         // the buyer's LOI/ICPO.
@@ -910,7 +954,9 @@ export default function CommodityTradingPage() {
         trialCargoValue: leadingNumber(g("totalValue")) || prev.trialCargoValue,
         originCountry: g("originCountry") || g("loadPort") || prev.originCountry,
         destinationCountry: g("destinationCountry") || g("dischargePort") || prev.destinationCountry,
-      }))
+        }
+        return { ...next, ...computeFcoValues(next) }
+      })
 
       const kind = g("documentType") || "document"
       setLoiSummary(
@@ -946,7 +992,8 @@ export default function CommodityTradingPage() {
     // draft when the form field is empty. This prevents a stale/earlier draft
     // price (e.g. an LOI-imported unit price) overriding a fresh page-1 edit.
     // The seller is the fixed MCC entity, so it keeps the canonical draft value.
-    setFco((prev) => ({
+    setFco((prev) => {
+      const next = {
       ...prev,
       sellerName: prev.sellerName || form.sellerName.trim() || user.company?.trim() || user.fullName?.trim() || "",
       buyerName: form.buyerName.trim() || prev.buyerName,
@@ -958,7 +1005,9 @@ export default function CommodityTradingPage() {
       trialCargoValue: leadingNumber(form.approxValue) || prev.trialCargoValue,
       originCountry: form.originCountry.trim() || prev.originCountry,
       destinationCountry: form.destinationCountry.trim() || prev.destinationCountry,
-    }))
+      }
+      return { ...next, ...computeFcoValues(next) }
+    })
     setShowFco(true)
   }
 
@@ -1977,15 +2026,15 @@ export default function CommodityTradingPage() {
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
                       <Label htmlFor="fco-trialqty">Trial quantity</Label>
-                      <Input id="fco-trialqty" value={fco.trialQuantity} onChange={(e) => setFcoField("trialQuantity", e.target.value)} placeholder="e.g. 50,000 MT" />
+                      <Input id="fco-trialqty" value={fco.trialQuantity} onChange={(e) => setFcoSource("trialQuantity", e.target.value)} placeholder="e.g. 50,000 MT" />
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="fco-contractqty">Contract quantity</Label>
-                      <Input id="fco-contractqty" value={fco.contractQuantity} onChange={(e) => setFcoField("contractQuantity", e.target.value)} placeholder="e.g. 100,000 MT x 12" />
+                      <Input id="fco-contractqty" value={fco.contractQuantity} onChange={(e) => setFcoSource("contractQuantity", e.target.value)} placeholder="e.g. 100,000 MT x 12" />
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="fco-duration">Contract duration</Label>
-                      <Input id="fco-duration" value={fco.contractDuration} onChange={(e) => setFcoField("contractDuration", e.target.value)} placeholder="e.g. 12 months" />
+                      <Input id="fco-duration" value={fco.contractDuration} onChange={(e) => setFcoSource("contractDuration", e.target.value)} placeholder="e.g. 12 months" />
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="fco-delivery">Delivery term</Label>
@@ -2058,7 +2107,7 @@ export default function CommodityTradingPage() {
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="fco-unitprice">Unit price ({fco.currency})</Label>
-                      <MoneyInput id="fco-unitprice" value={fco.unitPrice} onValueChange={(v) => setFcoField("unitPrice", v)} placeholder="per MT / bbl" />
+                      <MoneyInput id="fco-unitprice" value={fco.unitPrice} onValueChange={(v) => setFcoSource("unitPrice", v)} placeholder="per MT / bbl" />
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="fco-trialval">Trial cargo value ({fco.currency})</Label>
