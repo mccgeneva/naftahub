@@ -20,6 +20,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { MoneyInput } from "@/components/ui/money-input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -636,7 +637,8 @@ function RequestProductDialog({
     const converted = convertQuantity(qtyNum, qtyUnit, otherUnit, product)
     const rounded =
       otherUnit === "bbl" ? Math.round(converted) : Math.round(converted * 1000) / 1000
-    setQuantity(rounded.toLocaleString("en-US"))
+    // Store the RAW value; MoneyInput adds grouping separators for display.
+    setQuantity(String(rounded))
     setQtyUnit(otherUnit)
   }
 
@@ -764,10 +766,9 @@ function RequestProductDialog({
               <div className="space-y-1.5">
                 <Label className="text-xs">Quantity required ({formatUnit(qtyUnit)})</Label>
                 <div className="relative">
-                  <Input
-                    inputMode="decimal"
+                  <MoneyInput
                     value={quantity}
-                    onChange={(e) => setQuantity(e.target.value)}
+                    onValueChange={setQuantity}
                     placeholder={qtyUnit === "bbl" ? "e.g. 1,000,000" : "e.g. 50,000"}
                     className="h-9 pr-14"
                   />
