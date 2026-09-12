@@ -85,6 +85,12 @@ import { useCurrentUser } from "@/lib/use-current-user"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { generateFcoPdf, type FcoInput } from "@/lib/fco-pdf"
 import {
+  DEAL_DOC_BUILDERS,
+  MCC_OIL_GAS_SELLER,
+  SELLER_PAYMENT_INSTRUMENT,
+  type DealDocBuilder,
+} from "@/lib/deal-documents-pdf"
+import {
   useCommodityDeals,
   DEAL_STAGES,
   POP_DOC_TYPES,
@@ -225,17 +231,10 @@ const emptyDeal = {
 // Canonical selling entity for every FCO. The seller is always MCC Oil & Gas —
 // pre-filling these fixed coordinates prevents the address ever absorbing an
 // email (or other mismapped data) and saves the trader re-typing them.
-const MCC_OIL_GAS_SELLER = {
-  name: "MCC Oil & Gas",
-  address: "Rue du Rhône 8, 1204 Geneva, Switzerland",
-  email: "sales@mccoilgas.com",
-}
-
-// Payment model imposed by the SELLER (not taken from the buyer's LOI/ICPO):
-// buyer's 2% commitment deposit, then 100% by SWIFT MT103 at delivery after
-// independent inspection, against which the buyer withdraws the product.
-const SELLER_PAYMENT_INSTRUMENT =
-  "Buyer remits a 2% commitment deposit; 100% of the cargo value is paid by SWIFT MT103 telegraphic transfer at destination after independent inspection (SGS Full POP), against which the Buyer withdraws the product. The 2% deposit is credited in full against the final invoice."
+// The canonical MCC Oil & Gas seller identity and the seller-imposed payment
+// model now live in lib/deal-documents-pdf.ts (single source of truth) and are
+// imported above, so the FCO and the full ICPO→Execution document set always
+// share exactly the same coordinates and cannot drift apart.
 
 // Editable Full Corporate Offer draft. Only the commercial/party fields are
 // editable — the transaction procedure and key conditions (incl. "no upfront
@@ -404,6 +403,82 @@ function WorkflowStepper({ deal }: { deal: CommodityDeal }) {
   )
 }
 
+// Per-deal document suite: one clickable action per stage of the standard
+// transaction sequence that builds that stage's professional PDF from the
+// deal's real data (ICPO, FCO, Contract/SPA, POP, POF, Execution). POP/POF are
+// clearly-marked DRAFT templates — never a platform-issued instrument.
+function DealDocumentSuite({ deal }: { deal: CommodityDeal }) {
+  const pdf = usePdfViewer()
+  const logDoc = useActivityLog()
+  const [busyKey, setBusyKey] = useState<string | null>(null)
+
+  const handleBuild = (builder: DealDocBuilder) => {
+    setBusyKey(builder.key)
+    try {
+      const generated = builder.build(deal)
+      pdf.show(generated)
+      toast.success(`${builder.label} generated`, {
+        description: builder.draft
+          ? "Draft template — preview, print or download. Not a platform-issued instrument."
+          : "Preview, print or download the document.",
+      })
+      logDoc({
+        action: `Client built the ${builder.label} document for deal ${deal.id}`,
+        category: "Commodity Trading",
+        details: {
+          summary: `Client generated the ${builder.label} (${builder.description}) for ${deal.commodity || "a commodity"} deal ${deal.id}. Standard compliance spine preserved: no payment/bank account before a signed SPA; inspection & title precede MT103 payment; no buyer upfront fee.`,
+          decision: `${builder.label} generated`,
+        },
+      })
+    } catch (err) {
+      toast.error(`The ${builder.label} could not be generated.`)
+      console.log("[v0] deal document generation error:", err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-secondary/20 p-3">
+      <div className="mb-1.5 flex items-center gap-2">
+        <FileSignature className="h-4 w-4 text-primary" />
+        <p className="text-sm font-medium text-foreground">Deal document suite</p>
+      </div>
+      <p className="mb-3 text-xs text-muted-foreground text-pretty">
+        Build each stage&apos;s professional document from this deal&apos;s data — from ICPO through to
+        execution. POP and POF are draft templates only, never a platform-issued instrument.
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {DEAL_DOC_BUILDERS.map((builder, i) => (
+          <button
+            key={builder.key}
+            type="button"
+            onClick={() => handleBuild(builder)}
+            disabled={busyKey !== null}
+            className="flex min-h-11 items-start gap-3 rounded-lg border border-border bg-card p-3 text-left transition-colors hover:border-primary/40 hover:bg-secondary/40 disabled:opacity-60"
+          >
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+              {busyKey === builder.key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : i + 1}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="flex flex-wrap items-center gap-1.5">
+                <span className="text-sm font-medium text-foreground">{builder.label}</span>
+                {builder.draft && (
+                  <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                    Draft
+                  </span>
+                )}
+              </span>
+              <span className="mt-0.5 block text-xs text-muted-foreground text-pretty">{builder.description}</span>
+            </span>
+            <FileText className="ml-auto h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function CommodityTradingPage() {
   const logActivity = useActivityLog()
   const {
@@ -444,6 +519,19 @@ export default function CommodityTradingPage() {
     const valid = ["quotations", "spot", "workflow", "pop", "pof"]
     return requested && valid.includes(requested) ? requested : "quotations"
   })
+
+  // Tapping a stage on the top explainer card jumps into the Deal Workflow,
+  // where each tracked deal exposes its full document suite. Points the trader
+  // at the first deal (or prompts them to create one).
+  const handleSequenceStageTap = (label: string) => {
+    if (deals.length === 0) {
+      setTab("workflow")
+      toast.info(`Create a deal below, then open it to build its ${label} document.`)
+      return
+    }
+    toast.info(`Open a tracked deal below and use its document suite to build the ${label} document.`)
+    openTrackedDeal(deals[0].id)
+  }
   const [form, setForm] = useState({ ...emptyDeal })
   const [sendingBicValid, setSendingBicValid] = useState(false)
   const [receivingBicValid, setReceivingBicValid] = useState(false)
@@ -1260,7 +1348,12 @@ export default function CommodityTradingPage() {
         <CardContent>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {DEAL_STAGES.map((stage, i) => (
-              <div key={stage.key} className="flex items-start gap-3 rounded-lg border border-border bg-secondary/30 p-3">
+              <button
+                key={stage.key}
+                type="button"
+                onClick={() => handleSequenceStageTap(stage.label)}
+                className="flex min-h-11 items-start gap-3 rounded-lg border border-border bg-secondary/30 p-3 text-left transition-colors hover:border-primary/40 hover:bg-secondary/60"
+              >
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
                   {i + 1}
                 </span>
@@ -1268,7 +1361,7 @@ export default function CommodityTradingPage() {
                   <p className="text-sm font-medium text-foreground">{stage.label}</p>
                   <p className="text-xs text-muted-foreground text-pretty">{stage.description}</p>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </CardContent>
@@ -2071,6 +2164,8 @@ export default function CommodityTradingPage() {
                         </div>
 
                         <WorkflowStepper deal={deal} />
+
+                        {!deal.readOnly && <DealDocumentSuite deal={deal} />}
 
                         <div className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
                           <div className="flex items-center gap-2">
