@@ -87,7 +87,8 @@ export function CommodityQuotations() {
   const [basis, setBasis] = useState<BasisFilter>("BOTH")
   const [selectedPortId, setSelectedPortId] = useState(PORTS[14]?.id ?? PORTS[0].id) // Rotterdam
   const [selectedProductId, setSelectedProductId] = useState(PRODUCTS[0].id) // Brent
-  const [category, setCategory] = useState<ProductCategory | "All">("All")
+  // "By Port" filter: "All" | a ProductCategory | `prod:<id>` for one grade.
+  const [portFilter, setPortFilter] = useState<string>("All")
   const [search, setSearch] = useState("")
   const [tick, setTick] = useState(0)
 
@@ -110,10 +111,22 @@ export function CommodityQuotations() {
   const selectedPort = PORTS.find((p) => p.id === selectedPortId) ?? PORTS[0]
   const selectedProduct = PRODUCTS.find((p) => p.id === selectedProductId) ?? PRODUCTS[0]
 
-  // Rows for "By Port" mode: products (filtered by category + search) at one port.
+  // Single grade chosen in the "By Port" filter (via `prod:<id>`), if any.
+  const portFilterProductId = portFilter.startsWith("prod:") ? portFilter.slice(5) : null
+  // Compact, single-line label for the filter trigger (menu items stay rich).
+  const portFilterLabel = portFilterProductId
+    ? (PRODUCTS.find((p) => p.id === portFilterProductId)?.name ?? "All categories")
+    : portFilter === "All"
+      ? "All categories"
+      : portFilter
+
+  // Rows for "By Port" mode: products (filtered by category/grade + search) at one port.
   const portRows = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return PRODUCTS.filter((p) => category === "All" || p.category === category)
+    return PRODUCTS.filter((p) => {
+      if (portFilterProductId) return p.id === portFilterProductId
+      return portFilter === "All" || p.category === portFilter
+    })
       .filter((p) => !q || p.name.toLowerCase().includes(q))
       .map((product) => ({
         key: product.id,
@@ -122,7 +135,7 @@ export function CommodityQuotations() {
         fob: getQuote(product, selectedPort, "FOB", now),
         cif: getQuote(product, selectedPort, "CIF", now),
       }))
-  }, [category, search, selectedPort, now])
+  }, [portFilter, portFilterProductId, search, selectedPort, now])
 
   // Rows for "By Product" mode: ports (filtered by search) for one product.
   const productRows = useMemo(() => {
@@ -274,17 +287,15 @@ export function CommodityQuotations() {
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Product category</Label>
-                  <Select value={category} onValueChange={(v) => setCategory(v as ProductCategory | "All")}>
+                  <Label className="text-xs">Product / category</Label>
+                  <Select value={portFilter} onValueChange={setPortFilter}>
                     <SelectTrigger className="h-9">
-                      <SelectValue />
+                      <span className="truncate text-left">{portFilterLabel}</span>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="All">All categories</SelectItem>
-                      {PRODUCT_CATEGORIES.map((c) => (
-                        <SelectItem key={c} value={c}>
-                          {c}
-                        </SelectItem>
+                      {PRODUCT_CATEGORIES.map((cat) => (
+                        <PortFilterBlock key={cat} category={cat} />
                       ))}
                     </SelectContent>
                   </Select>
@@ -504,6 +515,37 @@ export function CommodityQuotations() {
       {/* One-click purchase request form, pre-filled from the chosen quotation. */}
       <RequestProductDialog seed={requestSeed} onClose={() => setRequestSeed(null)} />
     </div>
+  )
+}
+
+// "By Port" filter group: a category heading, an "All <category>" option, then
+// each grade in that category (name + unit + spec) so buyers can drill from a
+// category straight to the exact product they need.
+function PortFilterBlock({ category }: { category: ProductCategory }) {
+  const items = PRODUCTS.filter((p) => p.category === category)
+  if (items.length === 0) return null
+  return (
+    <>
+      <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {category}
+      </div>
+      <SelectItem value={category} className="py-2">
+        <span className="font-medium">All {category}</span>
+      </SelectItem>
+      {items.map((p) => (
+        <SelectItem key={p.id} value={`prod:${p.id}`} className="py-2">
+          <span className="flex flex-col gap-0.5">
+            <span className="flex flex-wrap items-center gap-1.5">
+              <span className="font-medium">{p.name}</span>
+              <span className="rounded bg-secondary px-1 text-[10px] font-medium text-muted-foreground">
+                {formatUnit(p.unit)}
+              </span>
+            </span>
+            <span className="text-xs text-muted-foreground text-pretty">{p.description}</span>
+          </span>
+        </SelectItem>
+      ))}
+    </>
   )
 }
 
