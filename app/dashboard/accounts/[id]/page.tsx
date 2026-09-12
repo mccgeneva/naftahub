@@ -11,6 +11,8 @@ import {
   Copy,
   Shield,
   ArrowUpRight,
+  ArrowDownLeft,
+  ArrowLeftRight,
   Download,
   Mail,
   FileText,
@@ -89,6 +91,27 @@ export default function AccountDetailPage() {
   }, [account, entries])
 
   const reservedTotal = reservedEntries.reduce((sum, e) => sum + e.amount, 0)
+
+  // Every ledger movement (credit = money IN, debit = money OUT) that belongs to
+  // THIS account, so the client sees the account's own in/out history in-place.
+  // Scoping mirrors `reservedEntries` above: a settlement (master) account owns
+  // every entry in its currency; a registered external account matches entries
+  // whose receiving reference is this account's IBAN. All statuses are shown so
+  // pending/held movements are visible too (flagged as "Reserved").
+  const accountTransactions: LedgerEntry[] = useMemo(() => {
+    if (!account) return []
+    const isRegistered = !account.id.startsWith("ACC-")
+    const target = normalizeAccountRef(account.iban)
+    return entries
+      .filter((e) => {
+        if (e.currency !== account.currency) return false
+        if (!isRegistered) return true
+        const ref = e.receivedAccount ? e.receivedAccount : e.account
+        return normalizeAccountRef(ref) === target
+      })
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 100)
+  }, [account, entries])
 
   const copyToClipboard = (text: string, field: string) => {
     navigator.clipboard.writeText(text)
@@ -384,6 +407,92 @@ export default function AccountDetailPage() {
                       </div>
                     </div>
                   </div>
+                </CardContent>
+              </Card>
+
+              {/* Per-account transaction history — money in and out of THIS
+                  account, shown right on the default tab so it's the first thing
+                  the client sees when opening the account. */}
+              <Card className="bg-secondary/40 border-border">
+                <CardContent className="p-4">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-foreground">Transaction History</p>
+                      <p className="text-xs text-muted-foreground">Money in and out of this account</p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1.5 text-xs shrink-0"
+                      onClick={handleViewStatement}
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Statement
+                    </Button>
+                  </div>
+
+                  {accountTransactions.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-10 text-center">
+                      <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-secondary">
+                        <ArrowLeftRight className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <p className="text-sm font-medium text-foreground">No transactions yet</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Money moving in or out of this account will appear here.
+                      </p>
+                    </div>
+                  ) : (
+                    <ul className="max-h-96 space-y-2 overflow-y-auto">
+                      {accountTransactions.map((e) => {
+                        const isIn = e.direction === "credit"
+                        const isHold = e.status === "hold"
+                        return (
+                          <li
+                            key={e.id}
+                            className="flex items-start gap-3 rounded-lg border border-border bg-secondary/40 p-3"
+                          >
+                            <div
+                              className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                                isIn ? "bg-emerald-500/15" : "bg-rose-500/15"
+                              }`}
+                            >
+                              {isIn ? (
+                                <ArrowDownLeft className="h-4 w-4 text-emerald-400" />
+                              ) : (
+                                <ArrowUpRight className="h-4 w-4 text-rose-400" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-medium text-foreground">
+                                {e.counterparty || e.category || (isIn ? "Incoming" : "Outgoing")}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {new Date(e.date).toLocaleDateString("en-GB", {
+                                  year: "numeric",
+                                  month: "short",
+                                  day: "numeric",
+                                })}
+                                {e.category ? ` · ${e.category}` : ""}
+                              </p>
+                              {isHold && (
+                                <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
+                                  <Lock className="h-2.5 w-2.5" /> Reserved
+                                </span>
+                              )}
+                            </div>
+                            <span
+                              className={`shrink-0 text-sm font-semibold tabular-nums whitespace-nowrap ${
+                                isIn ? "text-emerald-400" : "text-foreground"
+                              }`}
+                            >
+                              {isIn ? "+" : "−"}
+                              {formatCurrency(e.amount, e.currency)}
+                            </span>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
