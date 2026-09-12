@@ -31,13 +31,15 @@ export interface ReceiptData {
 }
 
 const BRAND = {
-  // Customer-facing receipts carry the NAFTAhub platform brand ONLY — "MCC
-  // Capital" (the internal settlement institution) must never appear on a
-  // client receipt.
-  name: "NAFTAhub",
-  tagline: "Global Commodity Trade Platform",
+  // Every platform document carries the MCC Capital letterhead (logo + wording)
+  // top-left. MCC Capital appears ONLY as the letterhead/issuing institution —
+  // never as a transacting party (sender/beneficiary are the client &
+  // counterparty) and never inside the reference/notes text, which are still
+  // sanitised via stripBrand().
+  name: "MCC Capital",
+  tagline: "MCC Banking & Trade Platform",
   address: "Rue du Rhone 14, 1204 Geneva, Switzerland",
-  email: "support@naftahub.com",
+  email: "support@mcc-capital.com",
   // Bloomberg amber + dark ink, matching the platform theme.
   gold: [245, 140, 0] as [number, number, number],
   ink: [17, 17, 17] as [number, number, number],
@@ -90,7 +92,7 @@ export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
   doc.rect(0, 0, pageWidth, 96, "F")
 
   // Brand logo mark
-  drawBrandMark(doc, "naftahub", margin, 30, 36, 36, { panel: true, radius: 6 })
+  drawBrandMark(doc, "capital", margin, 30, 36, 36, { panel: true, radius: 6 })
 
   // Brand name + tagline
   doc.setTextColor(255, 255, 255)
