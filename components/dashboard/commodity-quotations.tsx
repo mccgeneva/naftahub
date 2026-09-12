@@ -457,6 +457,11 @@ export function CommodityQuotations() {
                   </div>
                   <ChangeIndicator pct={(showCif ? row.cif : row.fob).changePct} />
                 </div>
+                {mode === "port" && (
+                  <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
+                    {row.product.description}
+                  </p>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   {showFob && (
                     <div className="rounded-lg bg-secondary/30 p-2.5">
@@ -512,8 +517,16 @@ function SelectGroupBlock({ category }: { category: ProductCategory }) {
         {category}
       </div>
       {items.map((p) => (
-        <SelectItem key={p.id} value={p.id}>
-          {p.name}
+        <SelectItem key={p.id} value={p.id} className="py-2">
+          <span className="flex flex-col gap-0.5">
+            <span className="flex flex-wrap items-center gap-1.5">
+              <span className="font-medium">{p.name}</span>
+              <span className="rounded bg-secondary px-1 text-[10px] font-medium text-muted-foreground">
+                {formatUnit(p.unit)}
+              </span>
+            </span>
+            <span className="text-xs text-muted-foreground text-pretty">{p.description}</span>
+          </span>
         </SelectItem>
       ))}
     </>
@@ -659,6 +672,9 @@ function RequestProductDialog({
                   <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Product</p>
                   <p className="text-sm font-medium text-foreground">{product.name}</p>
                   <p className="text-xs text-muted-foreground">{product.category}</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground text-pretty">
+                    {product.description}
+                  </p>
                 </div>
                 <div className="rounded-lg bg-primary/10 p-2.5">
                   <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
