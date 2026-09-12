@@ -16,6 +16,11 @@ export interface ReceiptData {
   /** Sender (for incoming) or beneficiary (for outgoing). */
   counterparty: string
   counterpartyAddress?: string
+  /** The platform CLIENT / account holder — the beneficiary for an incoming
+   *  transfer and the account holder for an outgoing one. MCC Capital is only
+   *  the platform/bank (letterhead), never a transacting party. */
+  accountHolder?: string
+  accountHolderAddress?: string
   bank?: string
   bic?: string
   iban?: string
@@ -160,10 +165,12 @@ export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
     return yy
   }
 
-  // Account holder is the platform client; counterparty is the other party.
+  // Account holder is the platform CLIENT (the signed-in user), not MCC Capital.
+  // MCC Capital appears only as the letterhead/bank, never as a transacting
+  // party. Fall back to the brand only if no holder identity was supplied.
   const clientParty = {
-    name: BRAND.name,
-    lines: [BRAND.address],
+    name: data.accountHolder || BRAND.name,
+    lines: [data.accountHolderAddress || BRAND.address],
   }
   const otherParty = {
     name: data.counterparty,

@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { useLedger } from "@/lib/ledger-store"
 import { generateReceiptPdf } from "@/lib/receipt-pdf"
+import { useHolderIdentity } from "@/lib/holder-identity"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { toast } from "sonner"
 
@@ -49,6 +50,7 @@ export default function TransactionDetailPage() {
   const router = useRouter()
   const { entries, hydrated } = useLedger()
   const { show } = usePdfViewer()
+  const holder = useHolderIdentity()
 
   const id = decodeURIComponent(params.id)
   const entry = useMemo(() => entries.find((e) => e.id === id), [entries, id])
@@ -114,6 +116,8 @@ export default function TransactionDetailPage() {
       bic: bicMatch?.[1],
       iban: entry.account,
       notes: entry.comment,
+      accountHolder: holder.holderName,
+      accountHolderAddress: holder.holderAddress,
     }))
   }
 
