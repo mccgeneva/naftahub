@@ -31,10 +31,13 @@ export interface ReceiptData {
 }
 
 const BRAND = {
-  name: "MCC Capital",
-  tagline: "MCC Banking & Trade Platform",
+  // Customer-facing receipts carry the NAFTAhub platform brand ONLY — "MCC
+  // Capital" (the internal settlement institution) must never appear on a
+  // client receipt.
+  name: "NAFTAhub",
+  tagline: "Global Commodity Trade Platform",
   address: "Rue du Rhone 14, 1204 Geneva, Switzerland",
-  email: "support@mcc-capital.com",
+  email: "support@naftahub.com",
   // Bloomberg amber + dark ink, matching the platform theme.
   gold: [245, 140, 0] as [number, number, number],
   ink: [17, 17, 17] as [number, number, number],
@@ -60,19 +63,34 @@ function formatTime(value: string): string {
   return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
 }
 
+/** Strip any "MCC Capital" mention from customer-facing text (reference, notes,
+ *  filename). The client receipt must never surface it, even when the raw
+ *  ledger reference is e.g. "MCC CAPITAL INBOUND TRANSFER". */
+function stripBrand(text: string): string {
+  return text
+    .replace(/\bMCC[\s\-]*Capital\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.;:])/g, "$1")
+    .replace(/^[\s\-–—,]+|[\s\-–—,]+$/g, "")
+    .trim()
+}
+
 export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
   const doc = new jsPDF({ unit: "pt", format: "a4" })
   const pageWidth = doc.internal.pageSize.getWidth()
   const margin = 48
   const contentWidth = pageWidth - margin * 2
   const isCredit = data.direction === "credit"
+  // Sanitised copies shown anywhere the client can see them.
+  const reference = stripBrand(data.reference) || "TRANSACTION RECEIPT"
+  const notes = data.notes ? stripBrand(data.notes) || undefined : undefined
 
   // ---- Header band -------------------------------------------------------
   doc.setFillColor(...BRAND.ink)
   doc.rect(0, 0, pageWidth, 96, "F")
 
   // Brand logo mark
-  drawBrandMark(doc, "capital", margin, 30, 36, 36, { panel: true, radius: 6 })
+  drawBrandMark(doc, "naftahub", margin, 30, 36, 36, { panel: true, radius: 6 })
 
   // Brand name + tagline
   doc.setTextColor(255, 255, 255)
@@ -92,7 +110,7 @@ export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
   doc.setTextColor(190, 192, 196)
   doc.setFont("helvetica", "normal")
   doc.setFontSize(9)
-  doc.text(`Ref: ${data.reference}`, pageWidth - margin, 64, { align: "right" })
+  doc.text(`Ref: ${reference}`, pageWidth - margin, 64, { align: "right" })
 
   // ---- Amount summary ----------------------------------------------------
   let y = 140
@@ -203,7 +221,7 @@ export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
   y += 10
 
   const rows: [string, string][] = [
-    ["Reference Number", data.reference],
+    ["Reference Number", reference],
     ...(data.uetr ? [["UETR (SWIFT gpi)", data.uetr] as [string, string]] : []),
     ["Date & Time", `${formatDate(data.date)}${formatTime(data.date) ? " · " + formatTime(data.date) : ""}`],
     ["Type", isCredit ? "Incoming Transfer (Credit)" : "Outgoing Payment (Debit)"],
@@ -245,7 +263,7 @@ export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
   }
 
   // Notes
-  if (data.notes) {
+  if (notes) {
     doc.setDrawColor(...BRAND.line)
     doc.line(margin, y, pageWidth - margin, y)
     y += 20
@@ -257,7 +275,7 @@ export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
     doc.setFont("helvetica", "normal")
     doc.setFontSize(9.5)
     doc.setTextColor(...BRAND.ink)
-    const wrapped = doc.splitTextToSize(data.notes, contentWidth)
+    const wrapped = doc.splitTextToSize(notes, contentWidth)
     doc.text(wrapped, margin, y)
     y += wrapped.length * 13 + 8
   }
@@ -287,5 +305,5 @@ export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
     { align: "right" },
   )
 
-  return { doc, filename: `receipt-${data.reference}.pdf`, title: "Payment Receipt" }
+  return { doc, filename: `receipt-${reference}.pdf`, title: "Payment Receipt" }
 }
