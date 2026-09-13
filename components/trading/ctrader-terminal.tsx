@@ -305,6 +305,134 @@ function DetailChart({
   )
 }
 
+// Auto-sliding account stats strip: cycles Balance/Equity/P&L -> margin ->
+// trading session + clock, looping every few seconds (tap or dots to switch).
+// Only this strip re-renders on the 1s clock tick, so the terminal stays fast.
+function AccountStatsCarousel({
+  balance,
+  equity,
+  openPnl,
+  freeMargin,
+  usedMargin,
+  marginLevel,
+  formatEur,
+  pnlColor,
+}: {
+  balance: number
+  equity: number
+  openPnl: number
+  freeMargin: number
+  usedMargin: number
+  marginLevel: number | null
+  formatEur: (n: number) => string
+  pnlColor: string
+}) {
+  const PAGES = 3
+  const [page, setPage] = useState(0)
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const clock = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(clock)
+  }, [])
+  useEffect(() => {
+    const slide = setInterval(() => setPage((p) => (p + 1) % PAGES), 4500)
+    return () => clearInterval(slide)
+  }, [])
+
+  // Local clock + UTC offset (matches the cTrader "Time 12:38 (UTC+2:00)" chip).
+  const timeStr = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })
+  const offMin = -now.getTimezoneOffset()
+  const oSign = offMin >= 0 ? "+" : "-"
+  const utcLabel = `UTC${oSign}${Math.floor(Math.abs(offMin) / 60)}:${String(Math.abs(offMin) % 60).padStart(2, "0")}`
+
+  // FX session: open Sunday 22:00 UTC through Friday 22:00 UTC.
+  const day = now.getUTCDay()
+  const hour = now.getUTCHours()
+  const sessionOpen = !(day === 6 || (day === 0 && hour < 22) || (day === 5 && hour >= 22))
+  const nextOpen = (() => {
+    const d = new Date(now)
+    d.setUTCDate(d.getUTCDate() + ((7 - d.getUTCDay()) % 7))
+    d.setUTCHours(22, 0, 0, 0)
+    if (d.getTime() <= now.getTime()) d.setUTCDate(d.getUTCDate() + 7)
+    return d.getTime()
+  })()
+  const uS = Math.max(0, Math.floor((nextOpen - now.getTime()) / 1000))
+  const countdown = `${Math.floor(uS / 3600)}:${String(Math.floor((uS % 3600) / 60)).padStart(2, "0")}:${String(uS % 60).padStart(2, "0")}`
+
+  const NBSP = "\u00A0"
+  const Card = ({ label, value, color, sub }: { label: string; value: string; color: string; sub?: string }) => (
+    <div className="rounded-xl px-3 py-2 text-center" style={{ backgroundColor: "#f4f4f6" }}>
+      <div className="text-[11px]" style={{ color: MUTED }}>
+        {label}
+      </div>
+      <div className="mt-0.5 text-[13px] font-semibold tabular-nums" style={{ color }}>
+        {value}
+      </div>
+      <div className="text-[10px] tabular-nums" style={{ color: MUTED }}>
+        {sub || NBSP}
+      </div>
+    </div>
+  )
+
+  return (
+    <div>
+      <div
+        className="cursor-pointer overflow-hidden"
+        role="button"
+        tabIndex={0}
+        aria-label="Account stats — tap to switch view"
+        onClick={() => setPage((p) => (p + 1) % PAGES)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") setPage((p) => (p + 1) % PAGES)
+        }}
+      >
+        <div
+          className="flex"
+          style={{ transform: `translateX(-${page * 100}%)`, transition: "transform 480ms cubic-bezier(0.4,0,0.2,1)" }}
+        >
+          {/* Page 1 — account */}
+          <div className="grid w-full shrink-0 grid-cols-3 gap-2">
+            <Card label="Balance" value={formatEur(balance)} color={INK} />
+            <Card label="Equity" value={formatEur(equity)} color={INK} />
+            <Card
+              label="Unr. net P&L"
+              value={`${openPnl >= 0 ? "" : "-"}${formatEur(Math.abs(openPnl))}`}
+              color={pnlColor}
+            />
+          </div>
+          {/* Page 2 — margin */}
+          <div className="grid w-full shrink-0 grid-cols-3 gap-2">
+            <Card label="Free margin" value={formatEur(freeMargin)} color={INK} />
+            <Card label="Used margin" value={formatEur(usedMargin)} color={INK} />
+            <Card label="Margin level" value={marginLevel != null ? `${marginLevel.toFixed(0)}%` : "—"} color={INK} />
+          </div>
+          {/* Page 3 — session + clock */}
+          <div className="grid w-full shrink-0 grid-cols-2 gap-2">
+            <Card
+              label="Trading session"
+              value={sessionOpen ? "Active" : "Inactive"}
+              color={sessionOpen ? GREEN : INK}
+              sub={sessionOpen ? "market open" : `opens in ${countdown}`}
+            />
+            <Card label="Time" value={timeStr} color={INK} sub={utcLabel} />
+          </div>
+        </div>
+      </div>
+      <div className="mt-1.5 flex items-center justify-center gap-1.5">
+        {Array.from({ length: PAGES }).map((_, i) => (
+          <button
+            key={i}
+            aria-label={`Show stats page ${i + 1}`}
+            onClick={() => setPage(i)}
+            className="h-1.5 rounded-full transition-all"
+            style={{ width: i === page ? 14 : 6, backgroundColor: i === page ? INK : "#d0d2d8" }}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // Compact watchlist row with its OWN live-price stream, so every instrument's
 // SELL/BUY/change/spread refreshes in real time (~700ms) around the real Yahoo
 // anchor (it.price, refreshed every 12s), mean-reverting so it stays truthful.
@@ -1264,21 +1392,17 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
             </button>
           )}
         </div>
-        <div className={cn("mt-2.5 grid grid-cols-3 gap-2", fullscreen && "landscape:hidden")}>
-          {[
-            { label: "Balance", value: formatEur(balance), color: INK },
-            { label: "Equity", value: formatEur(equity), color: INK },
-            { label: "Unr. net P&L", value: `${openPnl >= 0 ? "" : "-"}${formatEur(Math.abs(openPnl))}`, color: pnlColor },
-          ].map((c) => (
-            <div key={c.label} className="rounded-xl px-3 py-2 text-center" style={{ backgroundColor: "#f4f4f6" }}>
-              <div className="text-[11px]" style={{ color: MUTED }}>
-                {c.label}
-              </div>
-              <div className="mt-0.5 text-[13px] font-semibold tabular-nums" style={{ color: c.color }}>
-                {c.value}
-              </div>
-            </div>
-          ))}
+        <div className={cn("mt-2.5", fullscreen && "landscape:hidden")}>
+          <AccountStatsCarousel
+            balance={balance}
+            equity={equity}
+            openPnl={openPnl}
+            freeMargin={freeMargin}
+            usedMargin={usedMargin}
+            marginLevel={marginLevel}
+            formatEur={formatEur}
+            pnlColor={pnlColor}
+          />
         </div>
         <div className={cn("mt-2 flex items-center gap-2", fullscreen && "landscape:hidden")}>
           <button
