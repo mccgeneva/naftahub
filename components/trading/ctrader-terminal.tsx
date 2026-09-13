@@ -252,6 +252,136 @@ function DetailChart({
   )
 }
 
+// Compact watchlist row with its OWN live-price stream, so every instrument's
+// SELL/BUY/change/spread refreshes in real time (~700ms) around the real Yahoo
+// anchor (it.price, refreshed every 12s), mean-reverting so it stays truthful.
+// Only the row re-renders per tick, keeping the terminal fast (same pattern as
+// SymbolDetail). Prices stream continuously so the whole watchlist stays live.
+function WatchRow({
+  it,
+  posCount,
+  formatPrice,
+  onSelect,
+  onTrade,
+}: {
+  it: TerminalInstrument
+  posCount?: number
+  formatPrice: (v: number, decimals: number) => string
+  onSelect: (symbol: string) => void
+  onTrade: (symbol: string, side: "LONG" | "SHORT") => void
+}) {
+  const [live, setLive] = useState(it.price)
+  const anchorRef = useRef(it.price)
+  useEffect(() => {
+    anchorRef.current = it.price
+  }, [it.price])
+  useEffect(() => {
+    setLive(it.price)
+  }, [it.symbol])
+  useEffect(() => {
+    const id = setInterval(() => {
+      setLive((cur) => {
+        const base = anchorRef.current
+        if (!Number.isFinite(base) || base <= 0) return cur
+        const vol = Math.max(base * 0.0006, 1e-9)
+        const drift = (base - cur) * 0.05
+        const shock = (Math.random() - 0.5) * vol * 2
+        return cur + drift + shock
+      })
+    }, 700)
+    return () => clearInterval(id)
+  }, [it.symbol])
+
+  const livePrice = Number.isFinite(live) && live > 0 ? live : it.price
+  const pip = Math.pow(10, -it.decimals)
+  const spreadPips = 0.2 + (hashCode(it.symbol) % 34) / 10
+  const bid = livePrice
+  const ask = livePrice + spreadPips * pip
+  const liveChange = it.price > 0 ? it.change + ((livePrice - it.price) / it.price) * 100 : it.change
+  const up = liveChange >= 0
+  const abs = (liveChange / 100) * it.price
+  const rng = Math.max(Math.abs(it.change) / 100, 0.004)
+  const high = it.price * (1 + rng * 0.6)
+  const low = it.price * (1 - rng * 0.6)
+
+  return (
+    <div className="border-b border-black/5 px-4 py-3.5">
+      <button className="mb-2 flex w-full items-center gap-2 text-left" onClick={() => onSelect(it.symbol)}>
+        <span className="flex flex-col gap-[3px]">
+          <span className="block h-3 w-[3px] rounded-full" style={{ backgroundColor: GRIP }} />
+        </span>
+        <span className="text-[18px] font-bold tracking-tight">{it.symbol.replace("/", "")}</span>
+        {posCount ? (
+          <span
+            className="flex size-5 items-center justify-center rounded-full border text-[11px] font-semibold"
+            style={{ borderColor: "#d7d8dc", color: MUTED }}
+          >
+            {posCount}
+          </span>
+        ) : null}
+        <span className="ml-auto flex items-center gap-1 text-[10px] font-semibold" style={{ color: GREEN }}>
+          <span className="relative flex size-1.5">
+            <span
+              className="absolute inline-flex size-full animate-ping rounded-full opacity-75"
+              style={{ backgroundColor: GREEN }}
+            />
+            <span className="relative inline-flex size-1.5 rounded-full" style={{ backgroundColor: GREEN }} />
+          </span>
+          LIVE
+        </span>
+      </button>
+
+      <div className="flex items-end justify-between gap-3">
+        <button
+          type="button"
+          className="min-w-0 text-left"
+          aria-label={`Open ${it.symbol.replace("/", "")} trade view`}
+          onClick={() => onSelect(it.symbol)}
+        >
+          <div className="text-[15px] font-semibold" style={{ color: up ? "#5a6472" : OIL }}>
+            {up ? "+" : ""}
+            {abs.toLocaleString("en-US", { maximumFractionDigits: it.decimals })} ({up ? "+" : ""}
+            {liveChange.toFixed(2)}%)
+          </div>
+          <div className="mt-1">
+            <Sparkline symbol={it.symbol} change={it.change} />
+          </div>
+        </button>
+
+        <div className="flex-1">
+          <div className="mb-1.5 flex items-center justify-between text-[12px]" style={{ color: MUTED }}>
+            <span>H: {formatPrice(high, it.decimals)}</span>
+            <span>S: {spreadPips.toFixed(1)}</span>
+            <span>L: {formatPrice(low, it.decimals)}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => onTrade(it.symbol, "SHORT")}
+              className="rounded-lg border py-1.5 text-center"
+              style={{ borderColor: `${GREEN}55` }}
+            >
+              <div className="text-[11px] font-semibold" style={{ color: GREEN }}>
+                SELL
+              </div>
+              <PriceText value={bid} decimals={it.decimals} className="text-[17px] font-bold" />
+            </button>
+            <button
+              onClick={() => onTrade(it.symbol, "LONG")}
+              className="rounded-lg border py-1.5 text-center"
+              style={{ borderColor: `${GREEN}55` }}
+            >
+              <div className="text-[11px] font-semibold" style={{ color: GREEN }}>
+                BUY
+              </div>
+              <PriceText value={ask} decimals={it.decimals} className="text-[17px] font-bold" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Full-zoom cTrader Overview for one symbol. Owns its own live-price stream so
 // only this overlay re-renders on each tick (keeps the terminal fast). The
 // price ticks ~every 550ms around the REAL Yahoo anchor (instrument.price,
@@ -1131,6 +1261,11 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
                 NAFTAhub
                 <ChevronRight className="size-5" style={{ color: MUTED }} />
               </button>
+              <img
+                src="/images/naftahub-logo.png"
+                alt="NAFTAhub"
+                className="h-[22px] w-auto shrink-0 object-contain"
+              />
               <div className="flex items-center gap-4">
                 <button onClick={onManage} aria-label="Add instrument">
                   <Plus className="size-6" />
@@ -1142,99 +1277,19 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
             </div>
 
             <div className="bg-white">
-              {visible.map((it) => {
-                const up = it.change >= 0
-                const pip = Math.pow(10, -it.decimals)
-                const spreadPips = 0.2 + (hashCode(it.symbol) % 34) / 10
-                const bid = it.price
-                const ask = it.price + spreadPips * pip
-                const rng = Math.max(Math.abs(it.change) / 100, 0.004)
-                const high = it.price * (1 + rng * 0.6)
-                const low = it.price * (1 - rng * 0.6)
-                const abs = it.price * (it.change / 100)
-                const count = posCountBySymbol.get(it.symbol)
-                const status = marketStatus(it.category)
-                return (
-                  <div key={it.symbol} className="border-b border-black/5 px-4 py-3.5">
-                    <button
-                      className="mb-2 flex w-full items-center gap-2 text-left"
-                      onClick={() => {
-                        setSelected(it.symbol)
-                        setDetailSymbol(it.symbol)
-                      }}
-                    >
-                      <span className="flex flex-col gap-[3px]">
-                        <span className="block h-3 w-[3px] rounded-full" style={{ backgroundColor: GRIP }} />
-                      </span>
-                      <span className="text-[18px] font-bold tracking-tight">{it.symbol.replace("/", "")}</span>
-                      {count ? (
-                        <span
-                          className="flex size-5 items-center justify-center rounded-full border text-[11px] font-semibold"
-                          style={{ borderColor: "#d7d8dc", color: MUTED }}
-                        >
-                          {count}
-                        </span>
-                      ) : null}
-                      {!status.open && (
-                        <span className="ml-auto text-[11px] font-medium" style={{ color: MUTED }}>
-                          Closed
-                        </span>
-                      )}
-                    </button>
-
-                    <div className="flex items-end justify-between gap-3">
-                      <button
-                        type="button"
-                        className="min-w-0 text-left"
-                        aria-label={`Open ${it.symbol.replace("/", "")} trade view`}
-                        onClick={() => {
-                          setSelected(it.symbol)
-                          setDetailSymbol(it.symbol)
-                        }}
-                      >
-                        <div className="text-[15px] font-semibold" style={{ color: up ? "#5a6472" : OIL }}>
-                          {up ? "+" : ""}
-                          {abs.toLocaleString("en-US", { maximumFractionDigits: it.decimals })} ({up ? "+" : ""}
-                          {it.change.toFixed(2)}%)
-                        </div>
-                        <div className="mt-1">
-                          <Sparkline symbol={it.symbol} change={it.change} />
-                        </div>
-                      </button>
-
-                      <div className="flex-1">
-                        <div className="mb-1.5 flex items-center justify-between text-[12px]" style={{ color: MUTED }}>
-                          <span>H: {formatPrice(high, it.decimals)}</span>
-                          <span>S: {spreadPips.toFixed(1)}</span>
-                          <span>L: {formatPrice(low, it.decimals)}</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            onClick={() => onTrade(it.symbol, "SHORT")}
-                            className="rounded-lg border py-1.5 text-center"
-                            style={{ borderColor: `${GREEN}55` }}
-                          >
-                            <div className="text-[11px] font-semibold" style={{ color: GREEN }}>
-                              SELL
-                            </div>
-                            <PriceText value={bid} decimals={it.decimals} className="text-[17px] font-bold" />
-                          </button>
-                          <button
-                            onClick={() => onTrade(it.symbol, "LONG")}
-                            className="rounded-lg border py-1.5 text-center"
-                            style={{ borderColor: `${GREEN}55` }}
-                          >
-                            <div className="text-[11px] font-semibold" style={{ color: GREEN }}>
-                              BUY
-                            </div>
-                            <PriceText value={ask} decimals={it.decimals} className="text-[17px] font-bold" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
+              {visible.map((it) => (
+                <WatchRow
+                  key={it.symbol}
+                  it={it}
+                  posCount={posCountBySymbol.get(it.symbol)}
+                  formatPrice={formatPrice}
+                  onSelect={(sym) => {
+                    setSelected(sym)
+                    setDetailSymbol(sym)
+                  }}
+                  onTrade={onTrade}
+                />
+              ))}
               {visible.length === 0 && (
                 <div className="px-4 py-10 text-center text-[14px]" style={{ color: MUTED }}>
                   No instruments match “{query}”.
