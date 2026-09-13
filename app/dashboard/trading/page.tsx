@@ -134,19 +134,20 @@ const INSTRUMENT_META: Instrument[] = [
 
 const INSTRUMENT_SYMBOLS = INSTRUMENT_META.map((m) => m.symbol)
 
-type Position = {
+// A deployed NQAi micro-position, persisted per browser so it survives reloads.
+type StoredPosition = {
   id: string
   symbol: string
+  name: string
   side: "LONG" | "SHORT"
   lots: number
   entry: number
-  current: number
-  pnl: number
+  decimals: number
+  openedAt: string
 }
 
-// No capital is allocated to NQAi until the client funds and deploys positions.
-// Figures below derive from the real account ledger, never placeholder amounts.
-const POSITIONS: Position[] = []
+// Notional per lot, used to express a live signed P&L from the real price move.
+const NOTIONAL_PER_LOT = 10000
 
 const TIERS = [
   {
@@ -414,11 +415,15 @@ export default function TradingPage() {
   )
   const [manageOpen, setManageOpen] = useState(false)
 
-  // Quotes cover the curated board plus every custom symbol the user added, so
-  // a searched ticker gets a real live price and change too.
+  // Deployed NQAi micro-positions, persisted per browser so a deployed trade
+  // actually appears (and survives reload) under the Positions tab.
+  const [deployed, setDeployed] = usePersistentState<StoredPosition[]>("mcc.nqai.positions.v1", [])
+
+  // Quotes cover the curated board, every custom symbol the user added, and
+  // every open position, so a searched or held ticker gets a real live price.
   const quoteSymbols = useMemo(
-    () => Array.from(new Set([...INSTRUMENT_SYMBOLS, ...watchlist])),
-    [watchlist],
+    () => Array.from(new Set([...INSTRUMENT_SYMBOLS, ...watchlist, ...deployed.map((p) => p.symbol)])),
+    [watchlist, deployed],
   )
   const { quotes, refresh: refreshQuotes, updatedAt, isValidating } = useMarketQuotes(quoteSymbols)
   // Merge live price + change onto the instrument metadata; analyst signal and
@@ -764,6 +769,25 @@ export default function TradingPage() {
   const confirmTrade = () => {
     if (!tradeTarget) return
     const volume = parseFloat(lots) || 0
+    if (volume <= 0) {
+      toast.error("Enter a lot size greater than zero")
+      return
+    }
+    if (!(tradeTarget.price > 0)) {
+      toast.error("No live price yet", { description: "Wait for a market price before deploying this position." })
+      return
+    }
+    const position: StoredPosition = {
+      id: `NQ-${Date.now().toString(36).toUpperCase()}`,
+      symbol: tradeTarget.symbol,
+      name: tradeTarget.name,
+      side: tradeSide,
+      lots: volume,
+      entry: tradeTarget.price,
+      decimals: tradeTarget.decimals,
+      openedAt: new Date().toISOString(),
+    }
+    setDeployed((prev) => [position, ...prev])
     log({
       action: `Deployed NQAi ${tradeSide} micro-position on ${tradeTarget.symbol}`,
       category: "NAFTAhub Trading",
@@ -779,12 +803,31 @@ export default function TradingPage() {
       },
     })
     toast.success("Position deployed", {
-      description: `${tradeSide} ${volume.toFixed(2)} lots ${tradeTarget.symbol} routed to the NQAi engine.`,
+      description: `${tradeSide} ${volume.toFixed(2)} lots ${tradeTarget.symbol} is now live under Positions.`,
     })
     setTradeTarget(null)
+    handleTabChange("positions")
   }
 
-  const openPnl = POSITIONS.reduce((sum, p) => sum + p.pnl, 0)
+  // Deployed positions with a live, signed P&L derived from the current market
+  // price vs entry — recomputes whenever quotes refresh.
+  const livePositions = useMemo(
+    () =>
+      deployed.map((p) => {
+        const current = quotes[p.symbol]?.price ?? p.entry
+        const sign = p.side === "LONG" ? 1 : -1
+        const pnl = p.entry > 0 ? ((current - p.entry) / p.entry) * p.lots * NOTIONAL_PER_LOT * sign : 0
+        return { ...p, current, pnl }
+      }),
+    [deployed, quotes],
+  )
+
+  const closePosition = (id: string) => {
+    setDeployed((prev) => prev.filter((p) => p.id !== id))
+    toast.info("Position closed", { description: "The micro-position has been removed from your book." })
+  }
+
+  const openPnl = livePositions.reduce((sum, p) => sum + p.pnl, 0)
 
   return (
     <div className="space-y-6">
@@ -883,7 +926,7 @@ export default function TradingPage() {
                 <p className="text-xs text-muted-foreground">Available Capital</p>
                 <p className="mt-1 text-2xl font-bold text-foreground">{formatEur(availableCapital)}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {POSITIONS.length > 0 ? `Across ${POSITIONS.length} positions` : "Ready to allocate"}
+                  {livePositions.length > 0 ? `Across ${livePositions.length} positions` : "Ready to allocate"}
                 </p>
               </div>
               <div className="rounded-lg bg-primary/10 p-3">
@@ -897,11 +940,11 @@ export default function TradingPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-muted-foreground">Today&apos;s P&amp;L</p>
-                <p className={cn("mt-1 text-2xl font-bold", openPnl > 0 ? "text-green-500" : "text-foreground")}>
-                  {openPnl > 0 ? `+${formatEur(openPnl)}` : formatEur(0)}
+                <p className={cn("mt-1 text-2xl font-bold", openPnl > 0 ? "text-green-500" : openPnl < 0 ? "text-red-500" : "text-foreground")}>
+                  {openPnl > 0 ? `+${formatEur(openPnl)}` : formatEur(openPnl)}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {POSITIONS.length > 0 ? "Live session" : "No active positions"}
+                  {livePositions.length > 0 ? "Live session" : "No active positions"}
                 </p>
               </div>
               <div className={cn("rounded-lg p-3", openPnl > 0 ? "bg-green-500/10" : "bg-secondary")}>
@@ -929,7 +972,7 @@ export default function TradingPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-muted-foreground">Open Positions</p>
-                <p className="mt-1 text-2xl font-bold text-foreground">{POSITIONS.length}</p>
+                <p className="mt-1 text-2xl font-bold text-foreground">{livePositions.length}</p>
                 <p className="mt-1 text-xs text-muted-foreground">Micro-position layering</p>
               </div>
               <div className="rounded-lg bg-orange-500/10 p-3">
@@ -1231,7 +1274,7 @@ export default function TradingPage() {
               </p>
             </CardHeader>
             <CardContent className="space-y-2">
-              {POSITIONS.length === 0 ? (
+              {livePositions.length === 0 ? (
                 <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
                   <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
                     <Activity className="h-6 w-6 text-muted-foreground" />
@@ -1249,12 +1292,12 @@ export default function TradingPage() {
                   </Button>
                 </div>
               ) : (
-                POSITIONS.map((p) => (
+                livePositions.map((p) => (
                   <div
                     key={p.id}
                     className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-3"
                   >
-                    <div className="flex items-center gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
                       <Badge
                         variant="outline"
                         className={cn(
@@ -1266,18 +1309,37 @@ export default function TradingPage() {
                       >
                         {p.side}
                       </Badge>
-                      <div>
-                        <p className="text-sm font-medium text-foreground">{p.symbol}</p>
-                        <p className="text-xs text-muted-foreground">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-foreground">{p.symbol}</p>
+                        <p className="truncate text-xs text-muted-foreground">
                           {p.lots.toFixed(2)} lots · {p.id}
                         </p>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-sm font-semibold text-green-500">+{formatEur(p.pnl)}</p>
-                      <p className="font-mono text-xs text-muted-foreground">
-                        {p.entry} → {p.current}
-                      </p>
+                    <div className="flex items-center gap-2">
+                      <div className="text-right">
+                        <p
+                          className={cn(
+                            "text-sm font-semibold",
+                            p.pnl > 0 ? "text-green-500" : p.pnl < 0 ? "text-red-500" : "text-foreground",
+                          )}
+                        >
+                          {p.pnl > 0 ? "+" : ""}
+                          {formatEur(p.pnl)}
+                        </p>
+                        <p className="font-mono text-xs text-muted-foreground">
+                          {formatPrice(p.entry, p.decimals)} → {formatPrice(p.current, p.decimals)}
+                        </p>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+                        onClick={() => closePosition(p.id)}
+                        aria-label={`Close ${p.symbol}`}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
                     </div>
                   </div>
                 ))
