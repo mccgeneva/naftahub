@@ -1309,7 +1309,10 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
       <div className="min-h-0 flex-1 overflow-y-auto pb-24">
         {tab === "markets" && (
           <>
-            <div className="flex items-center justify-between px-4 py-3">
+            <div
+              className="flex items-center justify-between border-y-2 px-4 py-3"
+              style={{ borderColor: "#2563eb" }}
+            >
               <button className="flex items-center gap-1 text-[19px] font-bold" onClick={onManage}>
                 NAFTAhub
                 <ChevronRight className="size-5" style={{ color: MUTED }} />
