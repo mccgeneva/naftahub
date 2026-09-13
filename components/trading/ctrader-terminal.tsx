@@ -153,6 +153,59 @@ function Sparkline({ symbol, change }: { symbol: string; change: number }) {
   )
 }
 
+// Live watchlist sparkline: seeds a short deterministic history then appends
+// every real tick so the trend line slides left in real time. Colour tracks
+// the LIVE change sign so a row that flips red/green updates its line too.
+function LiveSparkline({
+  symbol,
+  change,
+  live,
+  up,
+}: {
+  symbol: string
+  change: number
+  live: number
+  up: boolean
+}) {
+  const w = 120
+  const h = 44
+  const color = up ? GREEN : OIL
+  const gid = `lsg-${hashCode(symbol)}`
+  const seriesRef = useRef<number[]>(seedChartSeries(symbol, change, live).slice(-32))
+  const [, force] = useState(0)
+  useEffect(() => {
+    const s = seriesRef.current
+    if (!Number.isFinite(live) || live <= 0) return
+    if (s.length === 0 || s[s.length - 1] !== live) {
+      s.push(live)
+      if (s.length > 32) s.shift()
+      force((n) => n + 1)
+    }
+  }, [live])
+
+  const vals = seriesRef.current
+  const min = Math.min(...vals)
+  const max = Math.max(...vals)
+  const span = max - min || 1
+  const step = w / Math.max(vals.length - 1, 1)
+  const pts = vals.map((v, i) => [i * step, h - 4 - ((v - min) / span) * (h - 8)] as const)
+  const line = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ")
+  const area = `${line} L${w},${h} L0,${h} Z`
+
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="overflow-visible">
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.22" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={area} fill={`url(#${gid})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 // Seed a deterministic price history ending at the current anchor, so the
 // streaming chart has plausible past candles the instant it opens.
 function seedChartSeries(symbol: string, change: number, anchor: number) {
@@ -344,7 +397,7 @@ function WatchRow({
             {liveChange.toFixed(2)}%)
           </div>
           <div className="mt-1">
-            <Sparkline symbol={it.symbol} change={it.change} />
+            <LiveSparkline symbol={it.symbol} change={it.change} live={livePrice} up={up} />
           </div>
         </button>
 
