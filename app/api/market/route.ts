@@ -101,7 +101,11 @@ export async function GET(request: Request) {
     .filter(Boolean)
 
   const displaySymbols = requested.length > 0 ? requested : Object.keys(YAHOO_SYMBOLS)
-  const unique = Array.from(new Set(displaySymbols)).filter((s) => YAHOO_SYMBOLS[s])
+  // Resolve a display symbol to its upstream Yahoo symbol. Curated platform
+  // symbols use the mapping; any other symbol (e.g. a ticker the user searched
+  // and added to their watchlist) is passed through to Yahoo as-is.
+  const yahooFor = (display: string) => YAHOO_SYMBOLS[display] ?? display
+  const unique = Array.from(new Set(displaySymbols))
 
   const now = Date.now()
   const quotes: MarketQuoteMap = {}
@@ -109,7 +113,7 @@ export async function GET(request: Request) {
 
   // Serve fresh cache hits immediately; collect the rest for a batch fetch.
   for (const display of unique) {
-    const yahoo = YAHOO_SYMBOLS[display]
+    const yahoo = yahooFor(display)
     const cached = cache.get(yahoo)
     if (cached && now - cached.ts < CACHE_TTL_MS) {
       quotes[display] = cached.quote
@@ -121,7 +125,7 @@ export async function GET(request: Request) {
   if (staleYahoo.length > 0) {
     const fetched = await fetchBatch(staleYahoo)
     for (const display of unique) {
-      const yahoo = YAHOO_SYMBOLS[display]
+      const yahoo = yahooFor(display)
       const q = fetched[yahoo]
       if (q) {
         cache.set(yahoo, { quote: q, ts: now })

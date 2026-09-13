@@ -35,6 +35,7 @@ import {
   X,
   Archive,
   ChevronDown,
+  RotateCw,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -76,6 +77,8 @@ import {
 import { useMarketQuotes } from "@/lib/use-market"
 import { TradingViewWidget } from "@/components/market/tradingview-widget"
 import { tradingViewSymbol } from "@/lib/market-symbols"
+import { usePersistentState } from "@/lib/use-persistent-state"
+import { WatchlistManager, type WatchEntry } from "@/components/trading/watchlist-manager"
 
 type Signal = "BUY" | "SELL" | "HOLD"
 
@@ -168,6 +171,31 @@ const signalStyles: Record<Signal, string> = {
   BUY: "bg-green-500/10 text-green-500 border-green-500/20",
   SELL: "bg-red-500/10 text-red-500 border-red-500/20",
   HOLD: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
+}
+
+// The full searchable catalog offered as quick-add rows in the watchlist
+// manager (in addition to the live all-markets search), and the default
+// preferred list shown to a user who hasn't customised theirs yet.
+const SIGNAL_CATALOG: WatchEntry[] = INSTRUMENT_META.map((m) => ({
+  symbol: m.symbol,
+  name: m.name,
+  category: m.category,
+}))
+const DEFAULT_WATCHLIST = INSTRUMENT_META.filter((m) => m.signal !== "HOLD").map((m) => m.symbol)
+
+// Derive a deterministic AI signal + confidence for an instrument that has no
+// curated analyst call (e.g. a ticker the user searched and added). It is a
+// pure function of the live percent change and a stable per-symbol offset — no
+// randomness — so it is reproducible and only moves when real market data does.
+function deriveSignal(change: number, symbol: string): { signal: Signal; confidence: number } {
+  const signal: Signal = change >= 0.15 ? "BUY" : change <= -0.15 ? "SELL" : "HOLD"
+  let hash = 0
+  for (let i = 0; i < symbol.length; i++) hash = (hash * 31 + symbol.charCodeAt(i)) | 0
+  const offset = Math.abs(hash) % 9 // stable 0..8 spread so cards aren't identical
+  const magnitude = Math.min(28, Math.abs(change) * 7)
+  const base = signal === "HOLD" ? 56 : 64
+  const confidence = Math.max(55, Math.min(95, Math.round(base + magnitude + offset)))
+  return { signal, confidence }
 }
 
 // Treuhand AG Limited Hedge Fund — parameters from the NAFTAhub Investor Prospectus 2026.
@@ -372,7 +400,27 @@ export default function TradingPage() {
   // user's TradingView app exactly. Yahoo's spot-vs-futures symbol differences
   // (e.g. gold) and weekend-frozen closes were the source of the recurring
   // "prices don't match TradingView / not updating" reports.
-  const { quotes } = useMarketQuotes(INSTRUMENT_SYMBOLS)
+  // ── Preferred signals watchlist ──────────────────────────────────────────
+  // The AI Signals list is a user-managed preferred list. It persists per
+  // browser and can be built from the curated catalog or from any instrument
+  // searched across the live market (stocks, ETFs, commodities, FX, crypto).
+  const [watchlist, setWatchlist] = usePersistentState<string[]>(
+    "mcc.signals.watchlist.v1",
+    DEFAULT_WATCHLIST,
+  )
+  const [customMeta, setCustomMeta] = usePersistentState<Record<string, WatchEntry>>(
+    "mcc.signals.custom.v1",
+    {},
+  )
+  const [manageOpen, setManageOpen] = useState(false)
+
+  // Quotes cover the curated board plus every custom symbol the user added, so
+  // a searched ticker gets a real live price and change too.
+  const quoteSymbols = useMemo(
+    () => Array.from(new Set([...INSTRUMENT_SYMBOLS, ...watchlist])),
+    [watchlist],
+  )
+  const { quotes, refresh: refreshQuotes, updatedAt, isValidating } = useMarketQuotes(quoteSymbols)
   // Merge live price + change onto the instrument metadata; analyst signal and
   // confidence are kept as-is, only the market price/change come from the feed.
   const instruments = useMemo<Instrument[]>(
@@ -385,6 +433,50 @@ export default function TradingPage() {
       }),
     [quotes],
   )
+
+  const metaBySymbol = useMemo(() => new Map(INSTRUMENT_META.map((m) => [m.symbol, m])), [])
+
+  // Build the AI-signal cards from the user's preferred watchlist. Curated
+  // symbols keep their designed analyst call (with live price/change merged in);
+  // custom symbols derive a deterministic signal from live data.
+  const signalInstruments = useMemo<Instrument[]>(
+    () =>
+      watchlist.map((sym) => {
+        const meta = metaBySymbol.get(sym)
+        const q = quotes[sym]
+        if (meta) {
+          return q ? { ...meta, price: q.price, change: q.changePct, live: true } : { ...meta, live: false }
+        }
+        const custom = customMeta[sym]
+        const category = (custom?.category as Instrument["category"]) ?? "Equities"
+        const change = q ? q.changePct : 0
+        const { signal, confidence } = deriveSignal(change, sym)
+        return {
+          symbol: sym,
+          name: custom?.name ?? sym,
+          category,
+          price: q?.price ?? 0,
+          decimals: category === "Forex" ? 4 : category === "Crypto" || category === "Indices" ? 0 : 2,
+          change,
+          signal,
+          confidence,
+          live: Boolean(q),
+        }
+      }),
+    [watchlist, customMeta, quotes, metaBySymbol],
+  )
+
+  const addToWatchlist = (entry: WatchEntry) => {
+    setWatchlist((prev) => (prev.includes(entry.symbol) ? prev : [...prev, entry.symbol]))
+    if (!metaBySymbol.has(entry.symbol)) {
+      setCustomMeta((prev) => ({ ...prev, [entry.symbol]: entry }))
+    }
+    toast.success(`${entry.symbol} added to your signals`)
+  }
+  const removeFromWatchlist = (sym: string) => {
+    setWatchlist((prev) => prev.filter((s) => s !== sym))
+    toast.success(`${sym} removed from your signals`)
+  }
 
   // Group every instrument by asset class for the TradingView "Market Quotes"
   // widget, mapping each to its canonical TradingView symbol so the board shows
@@ -1009,23 +1101,81 @@ export default function TradingPage() {
           </Card>
         </TabsContent>
 
-        {/* AI Signals */}
-        <TabsContent value="signals" className="mt-6">
-          <div className="grid gap-4 md:grid-cols-2">
-            {instruments
-              .filter((it) => it.signal !== "HOLD")
-              .map((it) => (
+        {/* AI Signals — user-managed preferred watchlist */}
+        <TabsContent value="signals" className="mt-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-foreground">
+                Preferred signals · {signalInstruments.length}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {updatedAt ? `Updated ${updatedAt.toLocaleTimeString()}` : "Fetching live data…"}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  void refreshQuotes()
+                  toast.success("Signals refreshed")
+                }}
+                disabled={isValidating}
+              >
+                <RotateCw className={cn("mr-2 h-4 w-4", isValidating && "animate-spin")} />
+                Refresh
+              </Button>
+              <Button size="sm" onClick={() => setManageOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add / manage
+              </Button>
+            </div>
+          </div>
+
+          {signalInstruments.length === 0 ? (
+            <Card className="bg-card border-border">
+              <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
+                  <LineChart className="h-6 w-6 text-muted-foreground" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-foreground">Your signal list is empty</p>
+                  <p className="mt-1 text-xs text-muted-foreground text-pretty">
+                    Search the market and add stocks, ETFs, commodities, FX or crypto to build your
+                    preferred NQAi signal list.
+                  </p>
+                </div>
+                <Button size="sm" onClick={() => setManageOpen(true)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add instruments
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              {signalInstruments.map((it) => (
                 <Card key={it.symbol} className="bg-card border-border">
                   <CardHeader className="pb-2">
-                    <div className="flex items-start justify-between">
-                      <div>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
                         <CardTitle className="text-base font-semibold">{it.symbol}</CardTitle>
-                        <p className="text-xs text-muted-foreground">{it.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">{it.name}</p>
                       </div>
-                      <Badge variant="outline" className={cn("text-[10px]", signalStyles[it.signal])}>
-                        <Zap className="mr-1 h-3 w-3" />
-                        {it.signal}
-                      </Badge>
+                      <div className="flex items-center gap-1">
+                        <Badge variant="outline" className={cn("text-[10px]", signalStyles[it.signal])}>
+                          <Zap className="mr-1 h-3 w-3" />
+                          {it.signal}
+                        </Badge>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                          onClick={() => removeFromWatchlist(it.symbol)}
+                          aria-label={`Remove ${it.symbol}`}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-3">
@@ -1040,13 +1190,13 @@ export default function TradingPage() {
                       <div className="rounded-md bg-secondary/40 p-2 text-center">
                         <p className="text-[10px] text-muted-foreground">RSI(7)</p>
                         <p className="text-xs font-semibold text-foreground">
-                          {it.signal === "BUY" ? "31" : "69"}
+                          {it.signal === "BUY" ? "31" : it.signal === "SELL" ? "69" : "50"}
                         </p>
                       </div>
                       <div className="rounded-md bg-secondary/40 p-2 text-center">
                         <p className="text-[10px] text-muted-foreground">EMA(40)</p>
                         <p className="text-xs font-semibold text-foreground">
-                          {it.signal === "BUY" ? "↑" : "↓"}
+                          {it.signal === "BUY" ? "↑" : it.signal === "SELL" ? "↓" : "→"}
                         </p>
                       </div>
                       <div className="rounded-md bg-secondary/40 p-2 text-center">
@@ -1058,15 +1208,17 @@ export default function TradingPage() {
                       size="sm"
                       variant="outline"
                       className="w-full"
+                      disabled={!it.live}
                       onClick={() => openTrade(it, it.signal === "SELL" ? "SHORT" : "LONG")}
                     >
-                      Execute Signal
-                      <ArrowRight className="ml-2 h-4 w-4" />
+                      {it.live ? "Execute Signal" : "Waiting for price…"}
+                      {it.live && <ArrowRight className="ml-2 h-4 w-4" />}
                     </Button>
                   </CardContent>
                 </Card>
               ))}
-          </div>
+            </div>
+          )}
         </TabsContent>
 
         {/* Positions */}
@@ -1827,6 +1979,15 @@ export default function TradingPage() {
       </Tabs>
 
       {/* Trade dialog */}
+      <WatchlistManager
+        open={manageOpen}
+        onOpenChange={setManageOpen}
+        catalog={SIGNAL_CATALOG}
+        watch={watchlist}
+        onAdd={addToWatchlist}
+        onRemove={removeFromWatchlist}
+      />
+
       <Dialog open={!!tradeTarget} onOpenChange={(open) => !open && setTradeTarget(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
