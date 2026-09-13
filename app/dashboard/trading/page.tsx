@@ -465,9 +465,10 @@ export default function TradingPage() {
   // Trading margin and P&L run against this wallet, never the master balance
   // directly — the Master Account is only touched on fund/withdraw.
   const [walletBalance, setWalletBalance] = usePersistentState<number>("mcc.trade.wallet.v1", 0)
-  // The cTrader-style terminal is the default trading surface; the legacy desk
-  // (NQAi engine, AI signals, ROI tiers, Treuhand fund) stays reachable behind it.
-  const [ctraderView, setCtraderView] = useState(true)
+  // The full legacy desk (NQAi engine, AI signals, ROI tiers, Treuhand fund, wallet
+  // management) is the DEFAULT surface with every function intact; a button opens the
+  // optional cTrader-style terminal, which itself has an exit back to this desk.
+  const [ctraderView, setCtraderView] = useState(false)
   const [fundOpen, setFundOpen] = useState(false)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
   const [transferAmount, setTransferAmount] = useState("")
@@ -1126,9 +1127,16 @@ export default function TradingPage() {
         <button
           type="button"
           onClick={() => setCtraderView(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground"
+          className="flex w-full items-center justify-between gap-2 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3 text-left transition-colors hover:bg-primary/15"
         >
-          <ArrowRight className="size-4 rotate-180" /> Back to trading terminal
+          <span className="flex items-center gap-2.5">
+            <LineChart className="size-5 shrink-0 text-primary" />
+            <span className="flex flex-col">
+              <span className="text-sm font-semibold text-foreground">Open trading terminal</span>
+              <span className="text-xs text-muted-foreground">cTrader-style Markets, Charts, Positions &amp; order ticket</span>
+            </span>
+          </span>
+          <ArrowRight className="size-5 shrink-0 text-primary" />
         </button>
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
