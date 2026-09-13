@@ -85,6 +85,7 @@ import { marketStatus } from "@/lib/market-hours"
 import { removeMyLedgerEntry } from "@/app/actions/ledger"
 import { usePersistentState } from "@/lib/use-persistent-state"
 import { WatchlistManager, type WatchEntry } from "@/components/trading/watchlist-manager"
+import { CtraderTerminal } from "@/components/trading/ctrader-terminal"
 
 type Signal = "BUY" | "SELL" | "HOLD"
 
@@ -464,6 +465,9 @@ export default function TradingPage() {
   // Trading margin and P&L run against this wallet, never the master balance
   // directly — the Master Account is only touched on fund/withdraw.
   const [walletBalance, setWalletBalance] = usePersistentState<number>("mcc.trade.wallet.v1", 0)
+  // The cTrader-style terminal is the default trading surface; the legacy desk
+  // (NQAi engine, AI signals, ROI tiers, Treuhand fund) stays reachable behind it.
+  const [ctraderView, setCtraderView] = useState(true)
   const [fundOpen, setFundOpen] = useState(false)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
   const [transferAmount, setTransferAmount] = useState("")
@@ -1092,7 +1096,40 @@ export default function TradingPage() {
   }, [quotes, priceAlerts, setPriceAlerts])
 
   return (
-    <div className="space-y-6">
+    <>
+      {ctraderView && (
+        <CtraderTerminal
+          instruments={signalInstruments}
+          positions={livePositions}
+          balance={balance}
+          equity={equity}
+          openPnl={openPnl}
+          freeMargin={freeMargin}
+          usedMargin={usedMargin}
+          marginLevel={marginLevel}
+          formatEur={formatEur}
+          formatPrice={formatPrice}
+          marketStatus={marketStatus}
+          onTrade={(sym, side) => {
+            const full = signalInstruments.find((s) => s.symbol === sym)
+            if (full) openTrade(full, side)
+          }}
+          onClose={closePosition}
+          onManage={() => setManageOpen(true)}
+          onFund={() => setFundOpen(true)}
+          onWithdraw={() => setWithdrawOpen(true)}
+          onAlerts={() => setAlertsOpen(true)}
+          onExitTerminal={() => setCtraderView(false)}
+        />
+      )}
+      <div className={cn("space-y-6", ctraderView && "hidden")}>
+        <button
+          type="button"
+          onClick={() => setCtraderView(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground"
+        >
+          <ArrowRight className="size-4 rotate-180" /> Back to trading terminal
+        </button>
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3">
@@ -2860,6 +2897,7 @@ export default function TradingPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+      </div>
+    </>
   )
 }
