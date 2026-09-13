@@ -151,6 +151,92 @@ function Sparkline({ symbol, change }: { symbol: string; change: number }) {
   )
 }
 
+// Fast, self-rendered detail chart (no external iframe → instant, never blank).
+// Same deterministic price-walk as the row sparkline, drawn large with gridlines,
+// price labels, a current-price line and a pulsing live end-dot.
+function DetailChart({
+  symbol,
+  change,
+  price,
+  decimals,
+  high,
+  low,
+}: {
+  symbol: string
+  change: number
+  price: number
+  decimals: number
+  high: number
+  low: number
+}) {
+  const W = 340
+  const H = 280
+  const up = change >= 0
+  const color = up ? GREEN : OIL
+  const { pts, line, area } = useMemo(() => {
+    const n = 64
+    let seed = hashCode(symbol) || 1
+    const vals: number[] = []
+    let v = 0
+    for (let i = 0; i < n; i++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff
+      const r = (seed % 1000) / 1000 - 0.5
+      v += r * 1.6 + (change / 100) * 2.2 * (i / n)
+      vals.push(v)
+    }
+    const min = Math.min(...vals)
+    const max = Math.max(...vals)
+    const range = max - min || 1
+    const padY = H * 0.1
+    const p = vals.map((val, i) => {
+      const x = (i / (n - 1)) * W
+      const y = H - padY - ((val - min) / range) * (H - padY * 2)
+      return [x, y] as const
+    })
+    const ln = p.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ")
+    return { pts: p, line: ln, area: `${ln} L${W} ${H} L0 ${H} Z` }
+  }, [symbol, change])
+  const last = pts[pts.length - 1] ?? [W, H / 2]
+  const gid = `dg-${hashCode(symbol)}`
+  const rows = [0, 0.25, 0.5, 0.75, 1]
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      width="100%"
+      height={300}
+      preserveAspectRatio="xMidYMid meet"
+      className="block"
+    >
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.20" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      {rows.map((f) => {
+        const y = f * H
+        const p = high - f * (high - low)
+        return (
+          <g key={f}>
+            <line x1={0} y1={y} x2={W} y2={y} stroke="#00000010" strokeWidth={1} strokeDasharray="3 4" />
+            <text x={W - 3} y={Math.min(H - 4, Math.max(11, y - 4))} textAnchor="end" fontSize={10} fill={MUTED}>
+              {p.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}
+            </text>
+          </g>
+        )
+      })}
+      <path d={area} fill={`url(#${gid})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+      <line x1={0} y1={last[1]} x2={W} y2={last[1]} stroke={color} strokeWidth={1} strokeDasharray="2 3" opacity={0.6} />
+      <circle cx={last[0]} cy={last[1]} r={7} fill={color} opacity={0.18}>
+        <animate attributeName="r" values="5;10;5" dur="1.8s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0.28;0;0.28" dur="1.8s" repeatCount="indefinite" />
+      </circle>
+      <circle cx={last[0]} cy={last[1]} r={3.5} fill={color} />
+    </svg>
+  )
+}
+
 export function CtraderTerminal(props: CtraderTerminalProps) {
   const {
     instruments,
@@ -770,30 +856,31 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
                   </div>
                 </div>
 
-                {/* Live chart */}
-                <div className="mx-3 mt-2 overflow-hidden rounded-2xl bg-white">
-                  <div className="flex items-center justify-between px-3 pt-2.5">
+                {/* Live chart (fast in-house SVG — instant, no external iframe) */}
+                <div className="mx-3 mt-2 overflow-hidden rounded-2xl bg-white pb-2">
+                  <div className="flex items-center justify-between px-3 pb-1 pt-2.5">
                     <span className="rounded-md px-2 py-1 text-[12px] font-semibold" style={{ backgroundColor: "#f0f0f2" }}>
                       m1
                     </span>
-                    <Maximize2 className="size-4" style={{ color: MUTED }} />
+                    <button
+                      onClick={() => {
+                        setDetailSymbol(null)
+                        setTab("charts")
+                      }}
+                      aria-label="Open full chart"
+                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium"
+                      style={{ backgroundColor: "#f0f0f2", color: MUTED }}
+                    >
+                      Full chart <Maximize2 className="size-3.5" />
+                    </button>
                   </div>
-                  <TradingViewWidget
-                    key={`detail-${d.symbol}`}
-                    scriptSrc="embed-widget-advanced-chart.js"
-                    height={360}
-                    config={{
-                      symbol: tradingViewSymbol(d.symbol),
-                      interval: "1",
-                      timezone: "Etc/UTC",
-                      theme: "light",
-                      style: "1",
-                      locale: "en",
-                      hide_top_toolbar: false,
-                      hide_legend: true,
-                      allow_symbol_change: false,
-                      autosize: true,
-                    }}
+                  <DetailChart
+                    symbol={d.symbol}
+                    change={d.change}
+                    price={d.price}
+                    decimals={d.decimals}
+                    high={high}
+                    low={low}
                   />
                 </div>
               </div>
