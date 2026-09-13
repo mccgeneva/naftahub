@@ -405,7 +405,7 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
             <div className="overflow-hidden rounded-xl bg-white">
               <TradingViewWidget
                 key={selectedInstrument.symbol}
-                scriptSrc="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"
+                scriptSrc="embed-widget-advanced-chart.js"
                 height={420}
                 config={{
                   symbol: tradingViewSymbol(selectedInstrument.symbol),
@@ -780,7 +780,7 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
                   </div>
                   <TradingViewWidget
                     key={`detail-${d.symbol}`}
-                    scriptSrc="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"
+                    scriptSrc="embed-widget-advanced-chart.js"
                     height={360}
                     config={{
                       symbol: tradingViewSymbol(d.symbol),
