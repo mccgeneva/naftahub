@@ -305,6 +305,25 @@ function DetailChart({
   )
 }
 
+// Module-scope so it is a STABLE component type — defining it inside the
+// carousel made the 1s clock tick remount all cards, freezing the slide.
+const STAT_NBSP = "\u00A0"
+function StatCard({ label, value, color, sub }: { label: string; value: string; color: string; sub?: string }) {
+  return (
+    <div className="rounded-xl px-3 py-2 text-center" style={{ backgroundColor: "#f4f4f6" }}>
+      <div className="text-[11px]" style={{ color: MUTED }}>
+        {label}
+      </div>
+      <div className="mt-0.5 text-[13px] font-semibold tabular-nums" style={{ color }}>
+        {value}
+      </div>
+      <div className="text-[10px] tabular-nums" style={{ color: MUTED }}>
+        {sub || STAT_NBSP}
+      </div>
+    </div>
+  )
+}
+
 // Auto-sliding account stats strip: cycles Balance/Equity/P&L -> margin ->
 // trading session + clock, looping every few seconds (tap or dots to switch).
 // Only this strip re-renders on the 1s clock tick, so the terminal stays fast.
@@ -330,14 +349,19 @@ function AccountStatsCarousel({
   const PAGES = 3
   const [page, setPage] = useState(0)
   const [now, setNow] = useState(() => new Date())
+  // Only tick the clock while the session/time page is showing.
   useEffect(() => {
+    if (page !== 2) return
+    setNow(new Date())
     const clock = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(clock)
-  }, [])
+  }, [page])
+  // Re-arm on every page change so a manual tap gives a fresh delay
+  // instead of fighting a pending auto-advance.
   useEffect(() => {
-    const slide = setInterval(() => setPage((p) => (p + 1) % PAGES), 4500)
-    return () => clearInterval(slide)
-  }, [])
+    const slide = setTimeout(() => setPage((p) => (p + 1) % PAGES), 4500)
+    return () => clearTimeout(slide)
+  }, [page])
 
   // Local clock + UTC offset (matches the cTrader "Time 12:38 (UTC+2:00)" chip).
   const timeStr = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })
@@ -359,21 +383,6 @@ function AccountStatsCarousel({
   const uS = Math.max(0, Math.floor((nextOpen - now.getTime()) / 1000))
   const countdown = `${Math.floor(uS / 3600)}:${String(Math.floor((uS % 3600) / 60)).padStart(2, "0")}:${String(uS % 60).padStart(2, "0")}`
 
-  const NBSP = "\u00A0"
-  const Card = ({ label, value, color, sub }: { label: string; value: string; color: string; sub?: string }) => (
-    <div className="rounded-xl px-3 py-2 text-center" style={{ backgroundColor: "#f4f4f6" }}>
-      <div className="text-[11px]" style={{ color: MUTED }}>
-        {label}
-      </div>
-      <div className="mt-0.5 text-[13px] font-semibold tabular-nums" style={{ color }}>
-        {value}
-      </div>
-      <div className="text-[10px] tabular-nums" style={{ color: MUTED }}>
-        {sub || NBSP}
-      </div>
-    </div>
-  )
-
   return (
     <div>
       <div
@@ -381,6 +390,7 @@ function AccountStatsCarousel({
         role="button"
         tabIndex={0}
         aria-label="Account stats — tap to switch view"
+        style={{ touchAction: "manipulation" }}
         onClick={() => setPage((p) => (p + 1) % PAGES)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") setPage((p) => (p + 1) % PAGES)
@@ -388,13 +398,17 @@ function AccountStatsCarousel({
       >
         <div
           className="flex"
-          style={{ transform: `translateX(-${page * 100}%)`, transition: "transform 480ms cubic-bezier(0.4,0,0.2,1)" }}
+          style={{
+            transform: `translate3d(-${page * 100}%,0,0)`,
+            transition: "transform 320ms cubic-bezier(0.22,1,0.36,1)",
+            willChange: "transform",
+          }}
         >
           {/* Page 1 — account */}
           <div className="grid w-full shrink-0 grid-cols-3 gap-2">
-            <Card label="Balance" value={formatEur(balance)} color={INK} />
-            <Card label="Equity" value={formatEur(equity)} color={INK} />
-            <Card
+            <StatCard label="Balance" value={formatEur(balance)} color={INK} />
+            <StatCard label="Equity" value={formatEur(equity)} color={INK} />
+            <StatCard
               label="Unr. net P&L"
               value={`${openPnl >= 0 ? "" : "-"}${formatEur(Math.abs(openPnl))}`}
               color={pnlColor}
@@ -402,19 +416,19 @@ function AccountStatsCarousel({
           </div>
           {/* Page 2 — margin */}
           <div className="grid w-full shrink-0 grid-cols-3 gap-2">
-            <Card label="Free margin" value={formatEur(freeMargin)} color={INK} />
-            <Card label="Used margin" value={formatEur(usedMargin)} color={INK} />
-            <Card label="Margin level" value={marginLevel != null ? `${marginLevel.toFixed(0)}%` : "—"} color={INK} />
+            <StatCard label="Free margin" value={formatEur(freeMargin)} color={INK} />
+            <StatCard label="Used margin" value={formatEur(usedMargin)} color={INK} />
+            <StatCard label="Margin level" value={marginLevel != null ? `${marginLevel.toFixed(0)}%` : "—"} color={INK} />
           </div>
           {/* Page 3 — session + clock */}
           <div className="grid w-full shrink-0 grid-cols-2 gap-2">
-            <Card
+            <StatCard
               label="Trading session"
               value={sessionOpen ? "Active" : "Inactive"}
               color={sessionOpen ? GREEN : INK}
               sub={sessionOpen ? "market open" : `opens in ${countdown}`}
             />
-            <Card label="Time" value={timeStr} color={INK} sub={utcLabel} />
+            <StatCard label="Time" value={timeStr} color={INK} sub={utcLabel} />
           </div>
         </div>
       </div>
