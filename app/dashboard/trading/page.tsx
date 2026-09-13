@@ -450,12 +450,19 @@ export default function TradingPage() {
   // The AI Signals list is a user-managed preferred list. It persists per
   // browser and can be built from the curated catalog or from any instrument
   // searched across the live market (stocks, ETFs, commodities, FX, crypto).
+  // Every persisted trading key is namespaced to the signed-in account, so a
+  // shared device never exposes one user's wallet / positions / alerts /
+  // watchlist to the next person who logs in. `user.id` is the authoritative
+  // session identity (resolved server-side), and usePersistentState resets to
+  // its default whenever this key changes.
+  const ptKey = (name: string) => `${name}::${user.id}`
+
   const [watchlist, setWatchlist] = usePersistentState<string[]>(
-    "mcc.signals.watchlist.v1",
+    ptKey("mcc.signals.watchlist.v1"),
     DEFAULT_WATCHLIST,
   )
   const [customMeta, setCustomMeta] = usePersistentState<Record<string, WatchEntry>>(
-    "mcc.signals.custom.v1",
+    ptKey("mcc.signals.custom.v1"),
     {},
   )
   const [manageOpen, setManageOpen] = useState(false)
@@ -464,7 +471,7 @@ export default function TradingPage() {
   // Funded FROM the Master Account (2% fee) and withdrawn back to it (2% fee).
   // Trading margin and P&L run against this wallet, never the master balance
   // directly — the Master Account is only touched on fund/withdraw.
-  const [walletBalance, setWalletBalance] = usePersistentState<number>("mcc.trade.wallet.v1", 0)
+  const [walletBalance, setWalletBalance] = usePersistentState<number>(ptKey("mcc.trade.wallet.v1"), 0)
   // The full legacy desk (NQAi engine, AI signals, ROI tiers, Treuhand fund, wallet
   // management) is the DEFAULT surface with every function intact; a button opens the
   // optional cTrader-style terminal, which itself has an exit back to this desk.
@@ -475,14 +482,14 @@ export default function TradingPage() {
 
   // Per-user price alerts (persisted per browser).
   const [alertsOpen, setAlertsOpen] = useState(false)
-  const [priceAlerts, setPriceAlerts] = usePersistentState<PriceAlert[]>("mcc.trade.alerts.v1", [])
+  const [priceAlerts, setPriceAlerts] = usePersistentState<PriceAlert[]>(ptKey("mcc.trade.alerts.v1"), [])
   const [alertSymbol, setAlertSymbol] = useState("")
   const [alertPrice, setAlertPrice] = useState("")
   const [alertDir, setAlertDir] = useState<"above" | "below">("above")
 
   // Deployed NQAi micro-positions, persisted per browser so a deployed trade
   // actually appears (and survives reload) under the Positions tab.
-  const [deployed, setDeployed] = usePersistentState<StoredPosition[]>("mcc.nqai.positions.v1", [])
+  const [deployed, setDeployed] = usePersistentState<StoredPosition[]>(ptKey("mcc.nqai.positions.v1"), [])
 
   // Quotes cover the curated board, every custom symbol the user added, and
   // every open position, so a searched or held ticker gets a real live price.
