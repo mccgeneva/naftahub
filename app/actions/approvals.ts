@@ -5790,23 +5790,39 @@ export async function adminAdjustMonetizationReserve(
   }
 }
 
+/** Structured price negotiation for a commodity deal. All prices are PER UNIT
+ *  (per MT or per BBL, matching the deal's quantity unit). Freight / PPI /
+ *  Lloyds are optional add-on cost lines, each also per unit. */
+export interface CommodityNegotiationInput {
+  grossUnitPrice: number
+  netUnitPrice: number
+  tradeStructure: "FOB" | "CIF"
+  freightPerUnit?: number
+  ppiPerUnit?: number
+  lloydsPerUnit?: number
+  note?: string
+}
+
 /**
- * Administrator negotiates the AGREED TOTAL VALUE of a commodity deal (purchase /
- * selling price and any discount offered) before deciding it. The admin sets the
- * final total directly; the deal value and the reservation that funds the
- * supplier are rewritten to the negotiated figure, and the client is notified.
+ * Administrator negotiates the PRICE STRUCTURE of a commodity deal before
+ * deciding it: gross & net unit price (per MT/BBL), the CIF/FOB term, and
+ * optional freight, PPI and Lloyds cargo-insurance cost lines.
  *
- * The commodity reservation hold (`APPR-<id>`) is only placed on APPROVAL from
- * the approval's `ledgerEffect.amount`, so for a still-pending deal we simply
- * rewrite the stored terms (amount + ledgerEffect + record) and the hold at
- * approval will reserve the negotiated total. If the deal is already approved,
- * its live hold is resized in place so the blocked funds track the new value.
+ * Buyer pays GROSS in full, so the reserved/blocked total is:
+ *   (grossUnitPrice + freight + ppi + lloyds) × quantity
+ * The gross→net difference is the discount (× quantity), split 50 / 50 between
+ * the buyer (a notional saving) and the seller (MCC margin) — recorded for the
+ * audit trail but it does NOT reduce what the buyer pays.
+ *
+ * The commodity reservation hold (`APPR-<id>`) is placed on APPROVAL from the
+ * approval's `ledgerEffect.amount`, so for a pending deal we rewrite the stored
+ * terms (amount + ledgerEffect + record) and the hold reserves the agreed total
+ * at approval. An already-approved deal has its live hold resized in place.
  */
 export async function adminNegotiateCommodityDeal(
   passcode: string,
   id: string,
-  newTotal: number,
-  note?: string,
+  input: CommodityNegotiationInput,
 ): Promise<DecideResult> {
   if (!(await adminOk(passcode))) return { ok: false, error: "Administrator authorization failed." }
   try {
@@ -5815,11 +5831,9 @@ export async function adminNegotiateCommodityDeal(
     if (existing.kind !== "commodity") {
       return { ok: false, error: "Only a commodity deal can be renegotiated here." }
     }
-    // A delivered / settled deal has already paid out — its value is final.
     if ((existing.payload as { delivered?: boolean } | undefined)?.delivered === true) {
-      return { ok: false, error: "This deal has been delivered and settled — its value can no longer be changed." }
+      return { ok: false, error: "This deal has been delivered and settled — its price can no longer be changed." }
     }
-    // A shared read-only copy must never be renegotiated (it has no financial effect).
     if ((existing.payload as { sharedReadOnly?: boolean } | undefined)?.sharedReadOnly === true) {
       return { ok: false, error: "A shared read-only copy of a deal cannot be renegotiated." }
     }
@@ -5828,25 +5842,51 @@ export async function adminNegotiateCommodityDeal(
     const record = (payload.record ?? {}) as Record<string, unknown>
     const currency = String(record.currency || existing.currency || BASE_CURRENCY)
     const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
-    const originalTotal = round2(Number(existing.amount ?? record.approxValue ?? 0))
-    const negotiated = round2(Number(newTotal))
-    if (!Number.isFinite(negotiated) || negotiated <= 0) {
-      return { ok: false, error: "Enter a valid negotiated deal value." }
+
+    // Quantity + unit drive every per-unit figure.
+    const qtyInfo = parseQuantityString(String(record.quantity ?? ""))
+    if (!qtyInfo || qtyInfo.amount <= 0) {
+      return { ok: false, error: "This deal has no readable quantity — cannot compute a per-unit price." }
     }
+    const qty = qtyInfo.amount
+    const unit = qtyInfo.unit // "MT" | "bbl"
+
+    const gross = Number(input.grossUnitPrice)
+    const net = Number(input.netUnitPrice)
+    const freight = Math.max(0, Number(input.freightPerUnit) || 0)
+    const ppi = Math.max(0, Number(input.ppiPerUnit) || 0)
+    const lloyds = Math.max(0, Number(input.lloydsPerUnit) || 0)
+    const tradeStructure = input.tradeStructure === "CIF" ? "CIF" : "FOB"
+
+    if (!Number.isFinite(gross) || gross <= 0) {
+      return { ok: false, error: "Enter a valid gross unit price." }
+    }
+    if (!Number.isFinite(net) || net < 0) {
+      return { ok: false, error: "Enter a valid net unit price." }
+    }
+    if (net > gross) {
+      return { ok: false, error: "The net unit price cannot exceed the gross unit price." }
+    }
+
+    const originalTotal = round2(Number(existing.amount ?? record.approxValue ?? 0))
+    // Buyer pays gross in full, plus the add-on cost lines.
+    const costPerUnit = round2(freight + ppi + lloyds)
+    const reservedTotal = round2((gross + costPerUnit) * qty)
+    // Discount = gross→net difference across the whole cargo, split 50/50.
+    const discountTotal = round2((gross - net) * qty)
+    const buyerShare = round2(discountTotal / 2)
+    const sellerShare = round2(discountTotal - buyerShare)
+
     const fmt = (n: number) =>
       `${currency} ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-    // Positive discount = price reduced for the client; negative = uplift.
-    const discount = round2(originalTotal - negotiated)
+    const perUnit = (n: number) => `${fmt(n)}/${unit}`
 
-    // Rewrite the reservation effect at the negotiated value so the hold placed
-    // on approval (from ledgerEffect.amount) tracks the agreed figure. Setting a
-    // final total directly means no per-unit price — clear any stale unitPrice.
     const existingFx = existing.ledgerEffect
     const newFx: LedgerEffect = existingFx
-      ? { ...existingFx, amount: negotiated, currency }
+      ? { ...existingFx, amount: reservedTotal, currency }
       : {
           direction: "debit",
-          amount: negotiated,
+          amount: reservedTotal,
           currency,
           status: "hold",
           counterparty: String(record.sellerName || "Commodity supplier"),
@@ -5857,26 +5897,36 @@ export async function adminNegotiateCommodityDeal(
     const nowIso = new Date().toISOString()
     const newRecord: Record<string, unknown> = {
       ...record,
-      approxValue: negotiated,
-      unitPrice: undefined,
-      // Negotiation audit fields (mirrors the PPI / reserve negotiation trail).
+      // Gross drives the deal's effective per-unit price + reserved total.
+      unitPrice: gross,
+      approxValue: reservedTotal,
+      tradeStructure,
+      // Full negotiated price structure (audit trail + client display).
       dealValueOriginal: record.dealValueOriginal ?? originalTotal,
-      negotiatedValue: negotiated,
-      dealDiscount: discount,
+      negotiatedValue: reservedTotal,
+      dealUnit: unit,
+      dealQuantityAmount: qty,
+      dealGrossUnitPrice: gross,
+      dealNetUnitPrice: net,
+      dealTradeStructure: tradeStructure,
+      dealFreightPerUnit: freight,
+      dealPpiPerUnit: ppi,
+      dealLloydsPerUnit: lloyds,
+      dealDiscountTotal: discountTotal,
+      dealDiscountBuyerShare: buyerShare,
+      dealDiscountSellerShare: sellerShare,
       dealNegotiatedAt: nowIso,
-      dealNegotiationNote: note?.trim() || undefined,
+      dealNegotiationNote: input.note?.trim() || undefined,
     }
 
     const updated = await updateApprovalTerms(id, {
-      amount: negotiated,
+      amount: reservedTotal,
       currency,
       ledgerEffect: newFx,
       payload: { ...payload, record: newRecord },
     })
     if (!updated) return { ok: false, error: "The commodity deal could not be updated." }
 
-    // If the deal is already approved, its live reservation hold must be resized
-    // in place so the blocked funds match the negotiated value immediately.
     const ownerId = await resolveDataOwnerIdFor(existing.userId)
     if (existing.status === "approved") {
       try {
@@ -5885,9 +5935,9 @@ export async function adminNegotiateCommodityDeal(
         if (hold) {
           await upsertLedgerEntry(ownerId, {
             ...hold,
-            amount: negotiated,
+            amount: reservedTotal,
             currency,
-            comment: `Negotiated value for commodity deal "${existing.title}": reserved funds ${fmt(originalTotal)} → ${fmt(negotiated)}.${note?.trim() ? ` (${note.trim()})` : ""}`,
+            comment: `Negotiated price for commodity deal "${existing.title}": reserved funds ${fmt(originalTotal)} → ${fmt(reservedTotal)} (${tradeStructure}, gross ${perUnit(gross)}).`,
           })
         }
       } catch (err) {
@@ -5895,18 +5945,17 @@ export async function adminNegotiateCommodityDeal(
       }
     }
 
+    const costLine = costPerUnit > 0 ? ` Freight/insurance add ${perUnit(costPerUnit)}.` : ""
     const discountLine =
-      discount > 0
-        ? ` A discount of ${fmt(discount)} was applied.`
-        : discount < 0
-          ? ` The price was revised up by ${fmt(Math.abs(discount))}.`
-          : ""
+      discountTotal > 0
+        ? ` Gross→net discount ${fmt(discountTotal)} (${fmt(buyerShare)} to you, ${fmt(sellerShare)} to MCC).`
+        : ""
     try {
       await insertNotification({
         userId: existing.userId,
         tone: "success",
         title: "Commodity deal price negotiated",
-        body: `MCC Global Commodity Desk negotiated the value of your deal "${existing.title}" from ${fmt(originalTotal)} to ${fmt(negotiated)}.${discountLine}${note?.trim() ? ` Note: ${note.trim()}.` : ""}`,
+        body: `MCC Global Commodity Desk set ${tradeStructure} terms for "${existing.title}": gross ${perUnit(gross)} × ${qty.toLocaleString("en-US")} ${unit} = ${fmt(reservedTotal)}.${costLine}${discountLine}${input.note?.trim() ? ` Note: ${input.note.trim()}.` : ""}`,
         href: "/dashboard/commodity",
       })
     } catch (err) {
@@ -5916,17 +5965,24 @@ export async function adminNegotiateCommodityDeal(
     try {
       const target = await resolveAccountProfileById(existing.userId)
       await logActivity({
-        action: `Administrator negotiated commodity deal "${existing.title}" for ${target.fullName} (${fmt(originalTotal)} → ${fmt(negotiated)}, discount ${fmt(discount)})`,
+        action: `Administrator negotiated commodity deal "${existing.title}" for ${target.fullName} — ${tradeStructure}, gross ${perUnit(gross)}, total ${fmt(originalTotal)} → ${fmt(reservedTotal)}`,
         category: "Administration / Approvals",
         user: "Administrator",
         details: {
           referenceId: id,
           targetAccount: `${target.fullName} — ${target.email}`,
           summary: existing.summary || existing.title,
-          originalValue: fmt(originalTotal),
-          negotiatedValue: fmt(negotiated),
-          discount: fmt(discount),
-          reason: note?.trim() || "(none)",
+          tradeStructure,
+          grossUnitPrice: perUnit(gross),
+          netUnitPrice: perUnit(net),
+          freightPerUnit: perUnit(freight),
+          ppiPerUnit: perUnit(ppi),
+          lloydsPerUnit: perUnit(lloyds),
+          discountTotal: fmt(discountTotal),
+          discountBuyerShare: fmt(buyerShare),
+          discountSellerShare: fmt(sellerShare),
+          reservedTotal: fmt(reservedTotal),
+          reason: input.note?.trim() || "(none)",
         },
       })
     } catch (err) {
@@ -5936,7 +5992,7 @@ export async function adminNegotiateCommodityDeal(
     return { ok: true, request: updated }
   } catch (err) {
     console.log("[v0] adminNegotiateCommodityDeal failed:", (err as Error).message)
-    return { ok: false, error: "The deal value could not be negotiated. Please try again." }
+    return { ok: false, error: "The deal price could not be negotiated. Please try again." }
   }
 }
 

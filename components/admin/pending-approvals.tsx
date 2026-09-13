@@ -67,6 +67,7 @@ import {
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { blobFileUrl } from "@/lib/kyc-types"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
+import { parseQuantityString } from "@/lib/petroleum-products"
 import {
   adminListApprovals,
   adminDecideApproval,
@@ -200,14 +201,25 @@ function monetizationReserveInfo(req: ApprovalRequest): {
   return { currency, original, negotiated, released }
 }
 
-/** Value picture for a commodity deal: the original agreed total, any
- *  admin-negotiated total, and the discount (positive) or uplift (negative)
- *  applied. Returns null for non-commodity requests or a zero-value deal. */
+/** Full price structure for a commodity deal, used both to prefill the
+ *  negotiation dialog and to render the negotiated breakdown on the card.
+ *  Returns null for non-commodity / shared / unreadable-quantity deals. */
 function commodityDealInfo(req: ApprovalRequest): {
   currency: string
-  original: number
-  negotiated: number | null
-  discount: number
+  unit: "MT" | "bbl"
+  qty: number
+  grossUnitPrice: number
+  netUnitPrice: number
+  tradeStructure: "FOB" | "CIF"
+  freightPerUnit: number
+  ppiPerUnit: number
+  lloydsPerUnit: number
+  reservedTotal: number
+  originalTotal: number
+  discountTotal: number
+  buyerShare: number
+  sellerShare: number
+  negotiated: boolean
 } | null {
   if (req.kind !== "commodity") return null
   if ((req.payload as { sharedReadOnly?: boolean } | undefined)?.sharedReadOnly === true) return null
@@ -215,16 +227,48 @@ function commodityDealInfo(req: ApprovalRequest): {
     string,
     unknown
   >
-  const negRaw = Number(rec.negotiatedValue)
-  const negotiated = Number.isFinite(negRaw) && negRaw > 0 ? Math.round((negRaw + Number.EPSILON) * 100) / 100 : null
-  // The original is the value BEFORE any negotiation; once negotiated we stamp
-  // `dealValueOriginal`, otherwise it's the current stored value.
-  const origRaw = Number(rec.dealValueOriginal ?? req.amount ?? rec.approxValue)
-  const original = Number.isFinite(origRaw) && origRaw > 0 ? Math.round((origRaw + Number.EPSILON) * 100) / 100 : 0
-  if (!(original > 0)) return null
+  const qtyInfo = parseQuantityString(String(rec.quantity ?? ""))
+  if (!qtyInfo || qtyInfo.amount <= 0) return null
+  const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
+  const num = (v: unknown, fallback = 0) => {
+    const n = Number(v)
+    return Number.isFinite(n) ? n : fallback
+  }
   const currency = String(rec.currency || req.currency || "USD")
-  const discount = negotiated == null ? 0 : Math.round((original - negotiated + Number.EPSILON) * 100) / 100
-  return { currency, original, negotiated, discount }
+  const qty = qtyInfo.amount
+  const unit = qtyInfo.unit
+  const negotiated = rec.dealNegotiatedAt != null
+  // Gross drives the deal; fall back to the submitted unitPrice, else derive
+  // from the stored total ÷ quantity so the dialog always opens with a sane price.
+  const storedTotal = num(req.amount ?? rec.approxValue)
+  const grossUnitPrice = r2(num(rec.dealGrossUnitPrice, num(rec.unitPrice, qty > 0 ? storedTotal / qty : 0)))
+  const netUnitPrice = r2(num(rec.dealNetUnitPrice, grossUnitPrice))
+  const tradeStructure = String(rec.dealTradeStructure ?? rec.tradeStructure) === "CIF" ? "CIF" : "FOB"
+  const freightPerUnit = r2(num(rec.dealFreightPerUnit))
+  const ppiPerUnit = r2(num(rec.dealPpiPerUnit))
+  const lloydsPerUnit = r2(num(rec.dealLloydsPerUnit))
+  const reservedTotal = r2(num(rec.negotiatedValue, storedTotal))
+  const originalTotal = r2(num(rec.dealValueOriginal, storedTotal))
+  const discountTotal = r2(num(rec.dealDiscountTotal))
+  const buyerShare = r2(num(rec.dealDiscountBuyerShare, discountTotal / 2))
+  const sellerShare = r2(num(rec.dealDiscountSellerShare, discountTotal - buyerShare))
+  return {
+    currency,
+    unit,
+    qty,
+    grossUnitPrice,
+    netUnitPrice,
+    tradeStructure,
+    freightPerUnit,
+    ppiPerUnit,
+    lloydsPerUnit,
+    reservedTotal,
+    originalTotal,
+    discountTotal,
+    buyerShare,
+    sellerShare,
+    negotiated,
+  }
 }
 
 /** Early-termination picture for an APPROVED Yield / PPP program: whether the
@@ -973,51 +1017,81 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     mutate()
   }
 
-  // Commodity deal price negotiation. The admin sets the FINAL agreed total
-  // directly (negotiated purchase/selling price and any discount); the change
-  // applies immediately — the reserved funds track the new value and the client
-  // is notified.
+  // Commodity deal price negotiation. The admin sets the full price structure —
+  // gross & net unit price (per MT/BBL), CIF/FOB, and optional freight / PPI /
+  // Lloyds cost lines. Buyer pays gross in full; the gross→net discount is split
+  // 50/50 buyer/seller. Applies immediately: reserved funds track the new total
+  // and the client is notified.
   const [dealTarget, setDealTarget] = useState<{
     id: string
     label: string
     currency: string
-    original: number
-    negotiated: number | null
+    unit: "MT" | "bbl"
+    qty: number
   } | null>(null)
-  const [dealValue, setDealValue] = useState("")
+  const [dealGross, setDealGross] = useState("")
+  const [dealNet, setDealNet] = useState("")
+  const [dealTerm, setDealTerm] = useState<"FOB" | "CIF">("FOB")
+  const [dealFreight, setDealFreight] = useState("")
+  const [dealPpi, setDealPpi] = useState("")
+  const [dealLloyds, setDealLloyds] = useState("")
   const [dealNote, setDealNote] = useState("")
 
   const openDealNegotiate = (req: ApprovalRequest, info: NonNullable<ReturnType<typeof commodityDealInfo>>) => {
-    setDealValue((info.negotiated ?? info.original).toFixed(2))
+    setDealGross(info.grossUnitPrice > 0 ? String(info.grossUnitPrice) : "")
+    setDealNet(info.netUnitPrice > 0 ? String(info.netUnitPrice) : "")
+    setDealTerm(info.tradeStructure)
+    setDealFreight(info.freightPerUnit > 0 ? String(info.freightPerUnit) : "")
+    setDealPpi(info.ppiPerUnit > 0 ? String(info.ppiPerUnit) : "")
+    setDealLloyds(info.lloydsPerUnit > 0 ? String(info.lloydsPerUnit) : "")
     setDealNote("")
-    setDealTarget({
-      id: req.id,
-      label: req.title,
-      currency: info.currency,
-      original: info.original,
-      negotiated: info.negotiated,
-    })
+    setDealTarget({ id: req.id, label: req.title, currency: info.currency, unit: info.unit, qty: info.qty })
   }
 
+  // Live preview of the negotiated economics from the dialog inputs.
+  const dealPreview = useMemo(() => {
+    if (!dealTarget) return null
+    const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
+    const gross = Number(dealGross) || 0
+    const net = Number(dealNet) || 0
+    const freight = Math.max(0, Number(dealFreight) || 0)
+    const ppi = Math.max(0, Number(dealPpi) || 0)
+    const lloyds = Math.max(0, Number(dealLloyds) || 0)
+    const costPerUnit = r2(freight + ppi + lloyds)
+    const reservedTotal = r2((gross + costPerUnit) * dealTarget.qty)
+    const discountTotal = r2((gross - net) * dealTarget.qty)
+    const buyerShare = r2(discountTotal / 2)
+    const sellerShare = r2(discountTotal - buyerShare)
+    return { gross, net, freight, ppi, lloyds, costPerUnit, reservedTotal, discountTotal, buyerShare, sellerShare }
+  }, [dealTarget, dealGross, dealNet, dealFreight, dealPpi, dealLloyds])
+
   const confirmDealNegotiate = async () => {
-    if (!dealTarget) return
-    const newTotal = Number(dealValue)
-    if (!Number.isFinite(newTotal) || newTotal <= 0) {
-      toast.error("Enter a valid negotiated deal value.")
+    if (!dealTarget || !dealPreview) return
+    if (!(dealPreview.gross > 0)) {
+      toast.error("Enter a valid gross unit price.")
+      return
+    }
+    if (dealPreview.net < 0 || dealPreview.net > dealPreview.gross) {
+      toast.error("The net unit price must be between 0 and the gross price.")
       return
     }
     setActing(true)
-    const res = await adminNegotiateCommodityDeal(ADMIN_PASSCODE, dealTarget.id, newTotal, dealNote.trim() || undefined)
+    const res = await adminNegotiateCommodityDeal(ADMIN_PASSCODE, dealTarget.id, {
+      grossUnitPrice: dealPreview.gross,
+      netUnitPrice: dealPreview.net,
+      tradeStructure: dealTerm,
+      freightPerUnit: dealPreview.freight,
+      ppiPerUnit: dealPreview.ppi,
+      lloydsPerUnit: dealPreview.lloyds,
+      note: dealNote.trim() || undefined,
+    })
     setActing(false)
     if (!res.ok) {
       toast.error(res.error)
       return
     }
-    const discount = Math.round((dealTarget.original - newTotal + Number.EPSILON) * 100) / 100
     toast.success(
-      discount > 0
-        ? `Deal value set to ${formatMoney2(newTotal, dealTarget.currency)} — ${formatMoney2(discount, dealTarget.currency)} discount applied. The client has been notified.`
-        : `Deal value set to ${formatMoney2(newTotal, dealTarget.currency)}. The client has been notified.`,
+      `${dealTerm} price agreed — reserved ${formatMoney2(dealPreview.reservedTotal, dealTarget.currency)}. The client has been notified.`,
     )
     setDealTarget(null)
     mutate()
@@ -1673,32 +1747,63 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                             )}
                         </div>
                       )}
-                      {deal && (
+                      {deal && deal.negotiated && (
                         <div className="mt-1.5 rounded-md border border-orange-500/30 bg-orange-500/5 p-2.5">
-                          <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-orange-600 dark:text-orange-400">
+                          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-orange-600 dark:text-orange-400">
                             <Handshake className="h-3.5 w-3.5" />
-                            Deal value
+                            Negotiated price ({deal.tradeStructure})
                           </div>
-                          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                            <span className="text-muted-foreground">Agreed:</span>
-                            <span className={deal.negotiated != null ? "text-muted-foreground line-through" : "font-medium text-foreground"}>
-                              {formatMoney2(deal.original, deal.currency)}
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                            <span className="text-muted-foreground">Gross / {deal.unit}</span>
+                            <span className="text-right font-medium tabular-nums text-foreground">
+                              {formatMoney2(deal.grossUnitPrice, deal.currency)}
                             </span>
-                            {deal.negotiated != null && (
+                            <span className="text-muted-foreground">Net / {deal.unit}</span>
+                            <span className="text-right font-medium tabular-nums text-foreground">
+                              {formatMoney2(deal.netUnitPrice, deal.currency)}
+                            </span>
+                            {deal.freightPerUnit > 0 && (
                               <>
-                                <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                <span className="font-medium text-foreground">{formatMoney2(deal.negotiated, deal.currency)}</span>
-                                {deal.discount > 0 ? (
-                                  <span className="text-emerald-600 dark:text-emerald-400">
-                                    ({formatMoney2(deal.discount, deal.currency)} discount)
-                                  </span>
-                                ) : deal.discount < 0 ? (
-                                  <span className="text-amber-600 dark:text-amber-400">
-                                    (+{formatMoney2(Math.abs(deal.discount), deal.currency)})
-                                  </span>
-                                ) : null}
+                                <span className="text-muted-foreground">Freight / {deal.unit}</span>
+                                <span className="text-right tabular-nums text-foreground">
+                                  {formatMoney2(deal.freightPerUnit, deal.currency)}
+                                </span>
                               </>
                             )}
+                            {deal.ppiPerUnit > 0 && (
+                              <>
+                                <span className="text-muted-foreground">PPI / {deal.unit}</span>
+                                <span className="text-right tabular-nums text-foreground">
+                                  {formatMoney2(deal.ppiPerUnit, deal.currency)}
+                                </span>
+                              </>
+                            )}
+                            {deal.lloydsPerUnit > 0 && (
+                              <>
+                                <span className="text-muted-foreground">Lloyds / {deal.unit}</span>
+                                <span className="text-right tabular-nums text-foreground">
+                                  {formatMoney2(deal.lloydsPerUnit, deal.currency)}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                          {deal.discountTotal > 0 && (
+                            <div className="mt-1.5 border-t border-orange-500/20 pt-1.5 text-[11px] text-muted-foreground">
+                              Discount {formatMoney2(deal.discountTotal, deal.currency)} — 50/50:{" "}
+                              <span className="text-emerald-600 dark:text-emerald-400">
+                                {formatMoney2(deal.buyerShare, deal.currency)} buyer
+                              </span>{" "}
+                              /{" "}
+                              <span className="text-foreground">{formatMoney2(deal.sellerShare, deal.currency)} MCC</span>
+                            </div>
+                          )}
+                          <div className="mt-1.5 flex items-center justify-between border-t border-orange-500/20 pt-1.5 text-[11px]">
+                            <span className="text-muted-foreground">
+                              Reserved ({deal.qty.toLocaleString("en-US")} {deal.unit})
+                            </span>
+                            <span className="font-semibold tabular-nums text-foreground">
+                              {formatMoney2(deal.reservedTotal, deal.currency)}
+                            </span>
                           </div>
                         </div>
                       )}
@@ -2612,78 +2717,121 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         </DialogContent>
       </Dialog>
 
-      {/* Negotiate commodity deal value (set final agreed total) dialog */}
+      {/* Negotiate commodity deal price structure dialog */}
       <Dialog open={dealTarget !== null} onOpenChange={(o) => !o && !acting && setDealTarget(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[90dvh] max-w-md flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <Handshake className="h-4 w-4 text-orange-500" />
-              Negotiate deal value
+              Negotiate price
             </DialogTitle>
             <DialogDescription className="text-pretty">
-              Set the final agreed total for this commodity deal — the negotiated purchase/selling price after any
-              discount. The change applies immediately: the reserved funds track the new value and the client is
-              notified.
+              Set the oil price per {dealTarget?.unit} and the CIF/FOB term. The buyer pays gross in full; the gross→net
+              difference is split 50/50 buyer/seller. Freight and insurance are optional add-on costs per {dealTarget?.unit}.
             </DialogDescription>
           </DialogHeader>
-          {dealTarget && (
-            <div className="space-y-3">
-              <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Current agreed value</span>
-                  <span className="font-mono font-medium tabular-nums text-foreground">
-                    {formatMoney2(dealTarget.original, dealTarget.currency)}
+          {dealTarget && dealPreview && (
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+              <div className="flex items-center justify-between rounded-md border border-border bg-muted/30 p-3 text-sm">
+                <span className="text-muted-foreground">Cargo quantity</span>
+                <span className="font-mono font-medium tabular-nums text-foreground">
+                  {dealTarget.qty.toLocaleString("en-US")} {dealTarget.unit}
+                </span>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Trade term</Label>
+                <Select value={dealTerm} onValueChange={(v) => setDealTerm(v as "FOB" | "CIF")}>
+                  <SelectTrigger className="text-base md:text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="FOB">FOB — Free On Board</SelectItem>
+                    <SelectItem value="CIF">CIF — Cost, Insurance &amp; Freight</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="deal-gross">Gross / {dealTarget.unit} ({dealTarget.currency})</Label>
+                  <MoneyInput id="deal-gross" value={dealGross} onValueChange={setDealGross} className="text-base md:text-sm" autoFocus />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="deal-net">Net / {dealTarget.unit} ({dealTarget.currency})</Label>
+                  <MoneyInput id="deal-net" value={dealNet} onValueChange={setDealNet} className="text-base md:text-sm" />
+                </div>
+              </div>
+
+              <div className="rounded-md border border-border bg-muted/20 p-2.5">
+                <p className="mb-2 text-[11px] font-medium text-muted-foreground">
+                  Optional costs — added to the base price, per {dealTarget.unit}
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="deal-freight" className="text-[11px]">Freight</Label>
+                    <MoneyInput id="deal-freight" value={dealFreight} onValueChange={setDealFreight} className="text-base md:text-sm" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="deal-ppi" className="text-[11px]">PPI ins.</Label>
+                    <MoneyInput id="deal-ppi" value={dealPpi} onValueChange={setDealPpi} className="text-base md:text-sm" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="deal-lloyds" className="text-[11px]">Lloyds</Label>
+                    <MoneyInput id="deal-lloyds" value={dealLloyds} onValueChange={setDealLloyds} className="text-base md:text-sm" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1 rounded-md border border-orange-500/30 bg-orange-500/5 p-3 text-sm">
+                {dealPreview.discountTotal > 0 && (
+                  <div className="flex items-center justify-between text-[12px]">
+                    <span className="text-muted-foreground">Discount (gross→net)</span>
+                    <span className="tabular-nums text-foreground">
+                      {formatMoney2(dealPreview.discountTotal, dealTarget.currency)}
+                    </span>
+                  </div>
+                )}
+                {dealPreview.discountTotal > 0 && (
+                  <div className="flex items-center justify-between text-[12px]">
+                    <span className="text-muted-foreground">50/50 split</span>
+                    <span className="tabular-nums">
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        {formatMoney2(dealPreview.buyerShare, dealTarget.currency)}
+                      </span>{" "}
+                      buyer / <span className="text-foreground">{formatMoney2(dealPreview.sellerShare, dealTarget.currency)}</span> MCC
+                    </span>
+                  </div>
+                )}
+                {dealPreview.costPerUnit > 0 && (
+                  <div className="flex items-center justify-between text-[12px]">
+                    <span className="text-muted-foreground">Freight + insurance</span>
+                    <span className="tabular-nums text-foreground">
+                      {formatMoney2(dealPreview.costPerUnit, dealTarget.currency)}/{dealTarget.unit}
+                    </span>
+                  </div>
+                )}
+                <div className="mt-1 flex items-center justify-between border-t border-orange-500/20 pt-1.5">
+                  <span className="text-muted-foreground">Buyer pays (reserved)</span>
+                  <span className="font-mono font-semibold tabular-nums text-foreground">
+                    {formatMoney2(dealPreview.reservedTotal, dealTarget.currency)}
                   </span>
                 </div>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="deal-new">New agreed total ({dealTarget.currency})</Label>
-                <MoneyInput
-                  id="deal-new"
-                  value={dealValue}
-                  onValueChange={setDealValue}
-                  className="text-base md:text-sm"
-                  autoFocus
-                />
-              </div>
-              {(() => {
-                const nv = Number(dealValue) || 0
-                const diff = Math.round((dealTarget.original - nv + Number.EPSILON) * 100) / 100
-                if (diff > 0) {
-                  return (
-                    <div className="flex items-center justify-between rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-sm">
-                      <span className="text-muted-foreground">Discount applied</span>
-                      <span className="font-mono font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
-                        {formatMoney2(diff, dealTarget.currency)}
-                      </span>
-                    </div>
-                  )
-                }
-                if (diff < 0) {
-                  return (
-                    <div className="flex items-center justify-between rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm">
-                      <span className="text-muted-foreground">Price increased by</span>
-                      <span className="font-mono font-semibold tabular-nums text-amber-600 dark:text-amber-400">
-                        {formatMoney2(Math.abs(diff), dealTarget.currency)}
-                      </span>
-                    </div>
-                  )
-                }
-                return null
-              })()}
+
               <div className="space-y-1.5">
                 <Label htmlFor="deal-note">Note (optional)</Label>
                 <Textarea
                   id="deal-note"
                   value={dealNote}
                   onChange={(e) => setDealNote(e.target.value)}
-                  placeholder="Reason / agreed terms with the client…"
+                  placeholder="Agreed terms with the client…"
                   className="min-h-16 text-base md:text-sm"
                 />
               </div>
             </div>
           )}
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button variant="ghost" onClick={() => setDealTarget(null)} disabled={acting}>
               Cancel
             </Button>
