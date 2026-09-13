@@ -37,6 +37,8 @@ import {
   ChevronDown,
   RotateCw,
   Bell,
+  ArrowDownToLine,
+  ArrowUpFromLine,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -159,6 +161,10 @@ type PriceAlert = { id: string; symbol: string; name: string; target: number; di
 
 // Notional per lot, used to express a live signed P&L from the real price move.
 const NOTIONAL_PER_LOT = 10000
+
+// 2% fee charged on every transfer between the Master Account and the ring-fenced
+// trading wallet (both funding-in and withdrawal-out).
+const TRADING_TRANSFER_FEE_RATE = 0.02
 
 // Indicative leverage per asset class — margin reserved on the Master Account is
 // the notional divided by this. Real broker margins vary; these are conservative.
@@ -293,13 +299,11 @@ export default function TradingPage() {
   const [upgradeSubmitting, setUpgradeSubmitting] = useState(false)
   const { totalIn, entries, addDebit, addReceipt, refresh: refreshLedger } = useLedger()
 
-  // Trust Score / Guarantees Accumulator + authorized overdraft headroom, used
-  // to gate order entry (respecting the platform's negative-balance rules).
+  // Trust Score / Guarantees Accumulator — gates order entry so trading respects
+  // the same risk controls as the rest of the platform.
   const { data: guarantee } = useSWR<{
     score?: { highRisk?: boolean }
-    overdraft?: { remainingEur?: number }
   }>("/api/guarantees", guaranteeFetcher, { revalidateOnFocus: false })
-  const overdraftRemainingEur = guarantee?.overdraft?.remainingEur ?? 0
   const highRisk = Boolean(guarantee?.score?.highRisk)
 
   // The client's real effective tier drives which ROI-tier card is "current"
@@ -453,6 +457,15 @@ export default function TradingPage() {
     {},
   )
   const [manageOpen, setManageOpen] = useState(false)
+
+  // ── Ring-fenced trading wallet ────────────────────────────────────────────
+  // Funded FROM the Master Account (2% fee) and withdrawn back to it (2% fee).
+  // Trading margin and P&L run against this wallet, never the master balance
+  // directly — the Master Account is only touched on fund/withdraw.
+  const [walletBalance, setWalletBalance] = usePersistentState<number>("mcc.trade.wallet.v1", 0)
+  const [fundOpen, setFundOpen] = useState(false)
+  const [withdrawOpen, setWithdrawOpen] = useState(false)
+  const [transferAmount, setTransferAmount] = useState("")
 
   // Per-user price alerts (persisted per browser).
   const [alertsOpen, setAlertsOpen] = useState(false)
@@ -839,10 +852,9 @@ export default function TradingPage() {
     }
     const notionalEur = volume * NOTIONAL_PER_LOT
     const marginEur = marginEurFor(tradeTarget.category, volume)
-    const spendable = availableCapital + Math.max(0, overdraftRemainingEur)
-    if (marginEur > spendable + 0.01) {
-      toast.error("Insufficient margin", {
-        description: `This position needs ${formatEur(marginEur)} margin but only ${formatEur(spendable)} is available on your Master Account.`,
+    if (marginEur > freeMargin + 0.01) {
+      toast.error("Insufficient trading balance", {
+        description: `This position needs ${formatEur(marginEur)} margin but only ${formatEur(freeMargin)} free margin is in your trading wallet. Fund it from your Master Account first.`,
       })
       return
     }
@@ -859,25 +871,15 @@ export default function TradingPage() {
       marginEur,
       notionalEur,
     }
-    // Reserve margin on the Master Account as a hold — this reduces available
-    // balance app-wide (respecting overdraft) and is persisted server-side.
-    addDebit({
-      id: `TRADE-MGN-${id}`,
-      status: "hold",
-      currency: "EUR",
-      amount: marginEur,
-      category: "Trading Margin",
-      counterparty: "NQAi Trading Desk",
-      comment: `Margin reserved — ${tradeSide} ${volume.toFixed(2)} lots ${tradeTarget.symbol} @ ${formatPrice(tradeTarget.price, tradeTarget.decimals)}`,
-      reference: id,
-      date: new Date().toISOString(),
-    })
+    // Margin is reserved from the ring-fenced trading wallet's free margin, not
+    // the Master Account — the master was already debited when the wallet was
+    // funded. The reservation is expressed by this open position's marginEur.
     setDeployed((prev) => [position, ...prev])
     log({
       action: `Deployed NQAi ${tradeSide} micro-position on ${tradeTarget.symbol}`,
       category: "NAFTAhub Trading",
       details: {
-        summary: `Client opened a ${tradeSide} position of ${volume.toFixed(2)} lots on ${tradeTarget.symbol} (${tradeTarget.name}) at ${formatPrice(tradeTarget.price, tradeTarget.decimals)} via the NQAi engine. ${formatEur(marginEur)} margin (1:${leverageFor(tradeTarget.category)}) reserved on the Master Account.`,
+        summary: `Client opened a ${tradeSide} position of ${volume.toFixed(2)} lots on ${tradeTarget.symbol} (${tradeTarget.name}) at ${formatPrice(tradeTarget.price, tradeTarget.decimals)} via the NQAi engine. ${formatEur(marginEur)} margin (1:${leverageFor(tradeTarget.category)}) reserved from the trading wallet.`,
         instrument: tradeTarget.symbol,
         side: tradeSide,
         lots: volume.toFixed(2),
@@ -891,9 +893,8 @@ export default function TradingPage() {
       },
     })
     toast.success("Position deployed", {
-      description: `${tradeSide} ${volume.toFixed(2)} lots ${tradeTarget.symbol} — ${formatEur(marginEur)} margin reserved on your Master Account.`,
+      description: `${tradeSide} ${volume.toFixed(2)} lots ${tradeTarget.symbol} — ${formatEur(marginEur)} margin reserved from your trading wallet.`,
     })
-    refreshLedger()
     setTradeTarget(null)
     handleTabChange("positions")
   }
@@ -914,42 +915,19 @@ export default function TradingPage() {
   const closePosition = async (id: string) => {
     const pos = livePositions.find((p) => p.id === id)
     if (!pos) return
-    // Release the reserved margin hold on the Master Account.
+    // Best-effort release of any legacy Master-Account margin hold from an
+    // earlier build (positions opened before the ring-fenced wallet model).
     await removeMyLedgerEntry(`TRADE-MGN-${id}`).catch(() => {})
-    // Settle the realized P&L back to the Master Account as a completed entry.
+    // Settle realized P&L into the trading wallet; the reserved margin frees up
+    // automatically once the position leaves the book.
     const realized = Math.round(pos.pnl * 100) / 100
-    if (Math.abs(realized) >= 0.01) {
-      const common = {
-        id: `TRADE-PNL-${id}`,
-        currency: "EUR",
-        counterparty: "NQAi Trading Desk",
-        reference: id,
-        date: new Date().toISOString(),
-      } as const
-      if (realized > 0) {
-        addReceipt({
-          ...common,
-          status: "completed",
-          amount: realized,
-          category: "Trading P&L",
-          comment: `Realized profit — ${pos.side} ${pos.lots.toFixed(2)} lots ${pos.symbol}`,
-        })
-      } else {
-        addDebit({
-          ...common,
-          status: "completed",
-          amount: Math.abs(realized),
-          category: "Trading P&L",
-          comment: `Realized loss — ${pos.side} ${pos.lots.toFixed(2)} lots ${pos.symbol}`,
-        })
-      }
-    }
+    setWalletBalance((prev) => Math.round((prev + realized) * 100) / 100)
     setDeployed((prev) => prev.filter((p) => p.id !== id))
     log({
       action: `Closed NQAi position on ${pos.symbol}`,
       category: "NAFTAhub Trading",
       details: {
-        summary: `Client closed ${pos.side} ${pos.lots.toFixed(2)} lots ${pos.symbol}; realized ${realized >= 0 ? "profit" : "loss"} ${formatEur(Math.abs(realized))} settled to the Master Account and ${formatEur(pos.marginEur)} margin released.`,
+        summary: `Client closed ${pos.side} ${pos.lots.toFixed(2)} lots ${pos.symbol}; realized ${realized >= 0 ? "profit" : "loss"} ${formatEur(Math.abs(realized))} settled to the trading wallet and ${formatEur(pos.marginEur)} margin released.`,
         instrument: pos.symbol,
         side: pos.side,
         lots: pos.lots.toFixed(2),
@@ -958,34 +936,123 @@ export default function TradingPage() {
         closedAt: new Date().toLocaleString("en-GB"),
       },
     })
-    refreshLedger()
     toast[realized >= 0 ? "success" : "info"]("Position closed", {
       description:
         realized >= 0
-          ? `Realized profit ${formatEur(realized)} settled to your Master Account.`
-          : `Realized loss ${formatEur(Math.abs(realized))} settled from your Master Account.`,
+          ? `Realized profit ${formatEur(realized)} added to your trading wallet.`
+          : `Realized loss ${formatEur(Math.abs(realized))} deducted from your trading wallet.`,
     })
   }
 
   const openPnl = livePositions.reduce((sum, p) => sum + p.pnl, 0)
 
-  // cTrader-style account metrics, all consistent with the Master Account: free
-  // margin is the ledger available balance (holds already netted out), used
-  // margin is the sum of open-position holds, balance is realized cash, and
-  // equity = balance + floating P&L.
+  // cTrader-style account metrics for the ring-fenced trading wallet: balance is
+  // the wallet's realized cash, used margin is the sum of open-position margins,
+  // free margin is what's left to open new trades or withdraw, and equity =
+  // balance + floating P&L.
   const usedMargin = livePositions.reduce((sum, p) => sum + (p.marginEur || 0), 0)
-  const freeMargin = availableCapital
-  const balance = freeMargin + usedMargin
-  const equity = balance + openPnl
+  const balance = walletBalance
+  const freeMargin = Math.max(0, walletBalance - usedMargin)
+  const equity = walletBalance + openPnl
   const marginLevel = usedMargin > 0 ? (equity / usedMargin) * 100 : null
+
+  const fundWallet = () => {
+    const amt = Number.parseFloat(transferAmount.replace(/,/g, "")) || 0
+    if (amt <= 0) {
+      toast.error("Enter an amount greater than zero")
+      return
+    }
+    if (amt > availableCapital + 0.01) {
+      toast.error("Insufficient Master Account balance", {
+        description: `You can fund up to ${formatEur(availableCapital)} from your Master Account.`,
+      })
+      return
+    }
+    const fee = Math.round(amt * TRADING_TRANSFER_FEE_RATE * 100) / 100
+    const net = Math.round((amt - fee) * 100) / 100
+    const id = `TW-${Date.now().toString(36).toUpperCase()}`
+    // Debit the full amount from the Master Account (net funds + retained fee).
+    addDebit({
+      id: `TRADE-FUND-${id}`,
+      status: "completed",
+      currency: "EUR",
+      amount: amt,
+      category: "Trading Wallet Funding",
+      counterparty: "NQAi Trading Desk",
+      comment: `Funded trading wallet ${formatEur(net)} (net of 2% fee ${formatEur(fee)})`,
+      reference: id,
+      date: new Date().toISOString(),
+    })
+    setWalletBalance((prev) => Math.round((prev + net) * 100) / 100)
+    log({
+      action: "Funded NQAi trading wallet",
+      category: "NAFTAhub Trading",
+      details: {
+        summary: `Client transferred ${formatEur(amt)} from the Master Account to the trading wallet; ${formatEur(fee)} (2%) fee applied, ${formatEur(net)} credited.`,
+        transferOut: formatEur(amt),
+        fee: formatEur(fee),
+        credited: formatEur(net),
+        at: new Date().toLocaleString("en-GB"),
+      },
+    })
+    refreshLedger()
+    setTransferAmount("")
+    setFundOpen(false)
+    toast.success("Trading wallet funded", { description: `${formatEur(net)} credited (2% fee ${formatEur(fee)}).` })
+  }
+
+  const withdrawWallet = () => {
+    const amt = Number.parseFloat(transferAmount.replace(/,/g, "")) || 0
+    if (amt <= 0) {
+      toast.error("Enter an amount greater than zero")
+      return
+    }
+    if (amt > freeMargin + 0.01) {
+      toast.error("Exceeds free margin", {
+        description: `Only ${formatEur(freeMargin)} is free to withdraw — the rest is reserved as margin on open positions.`,
+      })
+      return
+    }
+    const fee = Math.round(amt * TRADING_TRANSFER_FEE_RATE * 100) / 100
+    const net = Math.round((amt - fee) * 100) / 100
+    const id = `TW-${Date.now().toString(36).toUpperCase()}`
+    // Credit the net (after 2% fee) back to the Master Account.
+    addReceipt({
+      id: `TRADE-WD-${id}`,
+      status: "completed",
+      currency: "EUR",
+      amount: net,
+      category: "Trading Wallet Withdrawal",
+      counterparty: "NQAi Trading Desk",
+      comment: `Withdrew ${formatEur(amt)} from trading wallet (net of 2% fee ${formatEur(fee)})`,
+      reference: id,
+      date: new Date().toISOString(),
+    })
+    setWalletBalance((prev) => Math.round((prev - amt) * 100) / 100)
+    log({
+      action: "Withdrew from NQAi trading wallet",
+      category: "NAFTAhub Trading",
+      details: {
+        summary: `Client withdrew ${formatEur(amt)} from the trading wallet to the Master Account; ${formatEur(fee)} (2%) fee applied, ${formatEur(net)} credited to the Master Account.`,
+        withdrawn: formatEur(amt),
+        fee: formatEur(fee),
+        credited: formatEur(net),
+        at: new Date().toLocaleString("en-GB"),
+      },
+    })
+    refreshLedger()
+    setTransferAmount("")
+    setWithdrawOpen(false)
+    toast.success("Withdrawn to Master Account", { description: `${formatEur(net)} credited (2% fee ${formatEur(fee)}).` })
+  }
 
   // Derived values for the open order ticket.
   const tradeVolume = parseFloat(lots) || 0
   const tradeMarketState = tradeTarget ? marketStatus(tradeTarget.category) : null
   const tradeMarginEur = tradeTarget ? marginEurFor(tradeTarget.category, tradeVolume) : 0
   const tradeNotionalEur = tradeVolume * NOTIONAL_PER_LOT
-  const tradeSpendable = availableCapital + Math.max(0, overdraftRemainingEur)
-  const tradeInsufficient = tradeMarginEur > tradeSpendable + 0.01
+  const tradeSpendable = freeMargin
+  const tradeInsufficient = tradeMarginEur > freeMargin + 0.01
   const tradeBlocked = !tradeMarketState?.open || tradeVolume <= 0 || tradeInsufficient || highRisk
 
   const addAlert = () => {
@@ -1111,20 +1178,45 @@ export default function TradingPage() {
       {/* cTrader-style trading account bar — managed against the Master Account */}
       <Card className="bg-card border-border">
         <CardContent className="p-4">
-          <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <div className="rounded-md bg-primary/10 p-1.5">
                 <Wallet className="h-4 w-4 text-primary" />
               </div>
               <div>
-                <p className="text-sm font-semibold text-foreground">Trading Account</p>
-                <p className="text-[11px] text-muted-foreground">Managed against your Master Account</p>
+                <p className="text-sm font-semibold text-foreground">Trading Wallet</p>
+                <p className="text-[11px] text-muted-foreground">Ring-fenced · funded from your Master Account</p>
               </div>
             </div>
-            <Button variant="outline" size="sm" className="shrink-0" onClick={() => setAlertsOpen(true)}>
-              <Bell className="mr-1.5 h-3.5 w-3.5" />
-              Alerts{priceAlerts.length > 0 ? ` · ${priceAlerts.length}` : ""}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                className="shrink-0"
+                onClick={() => {
+                  setTransferAmount("")
+                  setFundOpen(true)
+                }}
+              >
+                <ArrowDownToLine className="mr-1.5 h-3.5 w-3.5" />
+                Fund
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => {
+                  setTransferAmount("")
+                  setWithdrawOpen(true)
+                }}
+              >
+                <ArrowUpFromLine className="mr-1.5 h-3.5 w-3.5" />
+                Withdraw
+              </Button>
+              <Button variant="outline" size="sm" className="shrink-0" onClick={() => setAlertsOpen(true)}>
+                <Bell className="mr-1.5 h-3.5 w-3.5" />
+                Alerts{priceAlerts.length > 0 ? ` · ${priceAlerts.length}` : ""}
+              </Button>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             <div>
@@ -2390,7 +2482,7 @@ export default function TradingPage() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Free margin (Master A/C)</span>
+                  <span className="text-muted-foreground">Free margin (wallet)</span>
                   <span className="font-mono text-muted-foreground">{formatEur(tradeSpendable)}</span>
                 </div>
                 {highRisk && (
@@ -2400,7 +2492,7 @@ export default function TradingPage() {
                 )}
                 {tradeInsufficient && !highRisk && (
                   <p className="text-[11px] font-medium text-red-500">
-                    Insufficient margin on your Master Account for this size.
+                    Insufficient free margin in your trading wallet — fund it first.
                   </p>
                 )}
               </div>
@@ -2413,6 +2505,116 @@ export default function TradingPage() {
             <Button onClick={confirmTrade} disabled={tradeBlocked}>
               Deploy Position
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Fund trading wallet from the Master Account */}
+      <Dialog open={fundOpen} onOpenChange={setFundOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Fund Trading Wallet</DialogTitle>
+            <DialogDescription>Transfer from your Master Account. A 2% transfer fee applies.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-border bg-secondary/20 p-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Master Account available</span>
+                <span className="font-mono font-medium text-foreground">{formatEur(availableCapital)}</span>
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">Amount to transfer (EUR)</label>
+              <Input
+                inputMode="decimal"
+                value={transferAmount}
+                onChange={(e) => setTransferAmount(e.target.value)}
+                placeholder="0.00"
+                className="text-base"
+              />
+            </div>
+            {(() => {
+              const amt = Number.parseFloat(transferAmount.replace(/,/g, "")) || 0
+              const fee = Math.round(amt * TRADING_TRANSFER_FEE_RATE * 100) / 100
+              const net = Math.max(0, Math.round((amt - fee) * 100) / 100)
+              return (
+                <div className="space-y-1.5 rounded-lg border border-border bg-secondary/20 p-3 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Transfer amount</span>
+                    <span className="font-mono text-foreground">{formatEur(amt)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">2% fee</span>
+                    <span className="font-mono text-red-500">-{formatEur(fee)}</span>
+                  </div>
+                  <div className="flex justify-between border-t border-border pt-1.5 font-semibold">
+                    <span className="text-muted-foreground">Credited to wallet</span>
+                    <span className="font-mono text-foreground">{formatEur(net)}</span>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFundOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={fundWallet}>Fund wallet</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Withdraw trading wallet back to the Master Account */}
+      <Dialog open={withdrawOpen} onOpenChange={setWithdrawOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Withdraw to Master Account</DialogTitle>
+            <DialogDescription>Return free margin to your Master Account. A 2% transfer fee applies.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-border bg-secondary/20 p-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Free to withdraw</span>
+                <span className="font-mono font-medium text-foreground">{formatEur(freeMargin)}</span>
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">Amount to withdraw (EUR)</label>
+              <Input
+                inputMode="decimal"
+                value={transferAmount}
+                onChange={(e) => setTransferAmount(e.target.value)}
+                placeholder="0.00"
+                className="text-base"
+              />
+            </div>
+            {(() => {
+              const amt = Number.parseFloat(transferAmount.replace(/,/g, "")) || 0
+              const fee = Math.round(amt * TRADING_TRANSFER_FEE_RATE * 100) / 100
+              const net = Math.max(0, Math.round((amt - fee) * 100) / 100)
+              return (
+                <div className="space-y-1.5 rounded-lg border border-border bg-secondary/20 p-3 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Withdrawal amount</span>
+                    <span className="font-mono text-foreground">{formatEur(amt)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">2% fee</span>
+                    <span className="font-mono text-red-500">-{formatEur(fee)}</span>
+                  </div>
+                  <div className="flex justify-between border-t border-border pt-1.5 font-semibold">
+                    <span className="text-muted-foreground">Credited to Master Account</span>
+                    <span className="font-mono text-foreground">{formatEur(net)}</span>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setWithdrawOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={withdrawWallet}>Withdraw</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
