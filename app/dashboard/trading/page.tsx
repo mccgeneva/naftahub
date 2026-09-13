@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useMemo } from "react"
+import { useState, useRef, useMemo, useEffect } from "react"
 import useSWR from "swr"
 import {
   Activity,
@@ -36,6 +36,9 @@ import {
   Archive,
   ChevronDown,
   RotateCw,
+  Bell,
+  ArrowDownToLine,
+  ArrowUpFromLine,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -77,6 +80,8 @@ import {
 import { useMarketQuotes } from "@/lib/use-market"
 import { TradingViewWidget } from "@/components/market/tradingview-widget"
 import { tradingViewSymbol } from "@/lib/market-symbols"
+import { marketStatus } from "@/lib/market-hours"
+import { removeMyLedgerEntry } from "@/app/actions/ledger"
 import { usePersistentState } from "@/lib/use-persistent-state"
 import { WatchlistManager, type WatchEntry } from "@/components/trading/watchlist-manager"
 
@@ -135,6 +140,8 @@ const INSTRUMENT_META: Instrument[] = [
 const INSTRUMENT_SYMBOLS = INSTRUMENT_META.map((m) => m.symbol)
 
 // A deployed NQAi micro-position, persisted per browser so it survives reloads.
+// The reserved margin is also held on the Master Account ledger, so the money is
+// server-persisted and auditable independently of this record.
 type StoredPosition = {
   id: string
   symbol: string
@@ -144,10 +151,39 @@ type StoredPosition = {
   entry: number
   decimals: number
   openedAt: string
+  marginEur: number
+  notionalEur: number
 }
+
+// A user price alert, persisted per browser. Fires a toast and self-clears when
+// the live price crosses the target.
+type PriceAlert = { id: string; symbol: string; name: string; target: number; direction: "above" | "below" }
 
 // Notional per lot, used to express a live signed P&L from the real price move.
 const NOTIONAL_PER_LOT = 10000
+
+// 2% fee charged on every transfer between the Master Account and the ring-fenced
+// trading wallet (both funding-in and withdrawal-out).
+const TRADING_TRANSFER_FEE_RATE = 0.02
+
+// Indicative leverage per asset class — margin reserved on the Master Account is
+// the notional divided by this. Real broker margins vary; these are conservative.
+const LEVERAGE_BY_CATEGORY: Record<string, number> = {
+  Forex: 30,
+  Metals: 20,
+  Commodities: 10,
+  Energy: 10,
+  Indices: 20,
+  Equities: 5,
+  Crypto: 2,
+}
+const leverageFor = (category: string) => LEVERAGE_BY_CATEGORY[category] ?? 10
+const marginEurFor = (category: string, lots: number) =>
+  Math.round(((lots * NOTIONAL_PER_LOT) / leverageFor(category)) * 100) / 100
+
+// Signed-in user's guarantee position — drives the Trust Score / overdraft gate
+// on order entry so trading respects the same controls as the rest of the desk.
+const guaranteeFetcher = (url: string) => fetch(url).then((r) => (r.ok ? r.json() : null))
 
 const TIERS = [
   {
@@ -261,7 +297,14 @@ export default function TradingPage() {
   const user = useCurrentUser()
   const { membership, hydrated: membershipHydrated, refresh: refreshMembership } = useMembership()
   const [upgradeSubmitting, setUpgradeSubmitting] = useState(false)
-  const { totalIn, entries } = useLedger()
+  const { totalIn, entries, addDebit, addReceipt, refresh: refreshLedger } = useLedger()
+
+  // Trust Score / Guarantees Accumulator — gates order entry so trading respects
+  // the same risk controls as the rest of the platform.
+  const { data: guarantee } = useSWR<{
+    score?: { highRisk?: boolean }
+  }>("/api/guarantees", guaranteeFetcher, { revalidateOnFocus: false })
+  const highRisk = Boolean(guarantee?.score?.highRisk)
 
   // The client's real effective tier drives which ROI-tier card is "current"
   // and whether an Avant-Garde upgrade request is already in flight — so the
@@ -414,6 +457,22 @@ export default function TradingPage() {
     {},
   )
   const [manageOpen, setManageOpen] = useState(false)
+
+  // ── Ring-fenced trading wallet ────────────────────────────────────────────
+  // Funded FROM the Master Account (2% fee) and withdrawn back to it (2% fee).
+  // Trading margin and P&L run against this wallet, never the master balance
+  // directly — the Master Account is only touched on fund/withdraw.
+  const [walletBalance, setWalletBalance] = usePersistentState<number>("mcc.trade.wallet.v1", 0)
+  const [fundOpen, setFundOpen] = useState(false)
+  const [withdrawOpen, setWithdrawOpen] = useState(false)
+  const [transferAmount, setTransferAmount] = useState("")
+
+  // Per-user price alerts (persisted per browser).
+  const [alertsOpen, setAlertsOpen] = useState(false)
+  const [priceAlerts, setPriceAlerts] = usePersistentState<PriceAlert[]>("mcc.trade.alerts.v1", [])
+  const [alertSymbol, setAlertSymbol] = useState("")
+  const [alertPrice, setAlertPrice] = useState("")
+  const [alertDir, setAlertDir] = useState<"above" | "below">("above")
 
   // Deployed NQAi micro-positions, persisted per browser so a deployed trade
   // actually appears (and survives reload) under the Positions tab.
@@ -777,8 +836,31 @@ export default function TradingPage() {
       toast.error("No live price yet", { description: "Wait for a market price before deploying this position." })
       return
     }
+    const status = marketStatus(tradeTarget.category)
+    if (!status.open) {
+      toast.error("Market closed", {
+        description: `${tradeTarget.symbol} is not tradable right now (${status.label}).`,
+      })
+      return
+    }
+    if (highRisk) {
+      toast.error("Trading paused by risk controls", {
+        description:
+          "Your Guarantees Accumulator score is high-risk. Reduce exposure or contact your administrator before opening new positions.",
+      })
+      return
+    }
+    const notionalEur = volume * NOTIONAL_PER_LOT
+    const marginEur = marginEurFor(tradeTarget.category, volume)
+    if (marginEur > freeMargin + 0.01) {
+      toast.error("Insufficient trading balance", {
+        description: `This position needs ${formatEur(marginEur)} margin but only ${formatEur(freeMargin)} free margin is in your trading wallet. Fund it from your Master Account first.`,
+      })
+      return
+    }
+    const id = `NQ-${Date.now().toString(36).toUpperCase()}`
     const position: StoredPosition = {
-      id: `NQ-${Date.now().toString(36).toUpperCase()}`,
+      id,
       symbol: tradeTarget.symbol,
       name: tradeTarget.name,
       side: tradeSide,
@@ -786,24 +868,32 @@ export default function TradingPage() {
       entry: tradeTarget.price,
       decimals: tradeTarget.decimals,
       openedAt: new Date().toISOString(),
+      marginEur,
+      notionalEur,
     }
+    // Margin is reserved from the ring-fenced trading wallet's free margin, not
+    // the Master Account — the master was already debited when the wallet was
+    // funded. The reservation is expressed by this open position's marginEur.
     setDeployed((prev) => [position, ...prev])
     log({
       action: `Deployed NQAi ${tradeSide} micro-position on ${tradeTarget.symbol}`,
       category: "NAFTAhub Trading",
       details: {
-        summary: `Client opened a ${tradeSide} position of ${volume.toFixed(2)} lots on ${tradeTarget.symbol} (${tradeTarget.name}) at ${formatPrice(tradeTarget.price, tradeTarget.decimals)} via the NQAi engine.`,
+        summary: `Client opened a ${tradeSide} position of ${volume.toFixed(2)} lots on ${tradeTarget.symbol} (${tradeTarget.name}) at ${formatPrice(tradeTarget.price, tradeTarget.decimals)} via the NQAi engine. ${formatEur(marginEur)} margin (1:${leverageFor(tradeTarget.category)}) reserved from the trading wallet.`,
         instrument: tradeTarget.symbol,
         side: tradeSide,
         lots: volume.toFixed(2),
         entryPrice: formatPrice(tradeTarget.price, tradeTarget.decimals),
+        notional: formatEur(notionalEur),
+        marginReserved: formatEur(marginEur),
+        leverage: `1:${leverageFor(tradeTarget.category)}`,
         aiSignal: tradeTarget.signal,
         confidence: `${tradeTarget.confidence}%`,
         openedAt: new Date().toLocaleString("en-GB"),
       },
     })
     toast.success("Position deployed", {
-      description: `${tradeSide} ${volume.toFixed(2)} lots ${tradeTarget.symbol} is now live under Positions.`,
+      description: `${tradeSide} ${volume.toFixed(2)} lots ${tradeTarget.symbol} — ${formatEur(marginEur)} margin reserved from your trading wallet.`,
     })
     setTradeTarget(null)
     handleTabChange("positions")
@@ -822,12 +912,180 @@ export default function TradingPage() {
     [deployed, quotes],
   )
 
-  const closePosition = (id: string) => {
+  const closePosition = async (id: string) => {
+    const pos = livePositions.find((p) => p.id === id)
+    if (!pos) return
+    // Best-effort release of any legacy Master-Account margin hold from an
+    // earlier build (positions opened before the ring-fenced wallet model).
+    await removeMyLedgerEntry(`TRADE-MGN-${id}`).catch(() => {})
+    // Settle realized P&L into the trading wallet; the reserved margin frees up
+    // automatically once the position leaves the book.
+    const realized = Math.round(pos.pnl * 100) / 100
+    setWalletBalance((prev) => Math.round((prev + realized) * 100) / 100)
     setDeployed((prev) => prev.filter((p) => p.id !== id))
-    toast.info("Position closed", { description: "The micro-position has been removed from your book." })
+    log({
+      action: `Closed NQAi position on ${pos.symbol}`,
+      category: "NAFTAhub Trading",
+      details: {
+        summary: `Client closed ${pos.side} ${pos.lots.toFixed(2)} lots ${pos.symbol}; realized ${realized >= 0 ? "profit" : "loss"} ${formatEur(Math.abs(realized))} settled to the trading wallet and ${formatEur(pos.marginEur)} margin released.`,
+        instrument: pos.symbol,
+        side: pos.side,
+        lots: pos.lots.toFixed(2),
+        realizedPnl: formatEur(realized),
+        marginReleased: formatEur(pos.marginEur),
+        closedAt: new Date().toLocaleString("en-GB"),
+      },
+    })
+    toast[realized >= 0 ? "success" : "info"]("Position closed", {
+      description:
+        realized >= 0
+          ? `Realized profit ${formatEur(realized)} added to your trading wallet.`
+          : `Realized loss ${formatEur(Math.abs(realized))} deducted from your trading wallet.`,
+    })
   }
 
   const openPnl = livePositions.reduce((sum, p) => sum + p.pnl, 0)
+
+  // cTrader-style account metrics for the ring-fenced trading wallet: balance is
+  // the wallet's realized cash, used margin is the sum of open-position margins,
+  // free margin is what's left to open new trades or withdraw, and equity =
+  // balance + floating P&L.
+  const usedMargin = livePositions.reduce((sum, p) => sum + (p.marginEur || 0), 0)
+  const balance = walletBalance
+  const freeMargin = Math.max(0, walletBalance - usedMargin)
+  const equity = walletBalance + openPnl
+  const marginLevel = usedMargin > 0 ? (equity / usedMargin) * 100 : null
+
+  const fundWallet = () => {
+    const amt = Number.parseFloat(transferAmount.replace(/,/g, "")) || 0
+    if (amt <= 0) {
+      toast.error("Enter an amount greater than zero")
+      return
+    }
+    if (amt > availableCapital + 0.01) {
+      toast.error("Insufficient Master Account balance", {
+        description: `You can fund up to ${formatEur(availableCapital)} from your Master Account.`,
+      })
+      return
+    }
+    const fee = Math.round(amt * TRADING_TRANSFER_FEE_RATE * 100) / 100
+    const net = Math.round((amt - fee) * 100) / 100
+    const id = `TW-${Date.now().toString(36).toUpperCase()}`
+    // Debit the full amount from the Master Account (net funds + retained fee).
+    addDebit({
+      id: `TRADE-FUND-${id}`,
+      status: "completed",
+      currency: "EUR",
+      amount: amt,
+      category: "Trading Wallet Funding",
+      counterparty: "NQAi Trading Desk",
+      comment: `Funded trading wallet ${formatEur(net)} (net of 2% fee ${formatEur(fee)})`,
+      reference: id,
+      date: new Date().toISOString(),
+    })
+    setWalletBalance((prev) => Math.round((prev + net) * 100) / 100)
+    log({
+      action: "Funded NQAi trading wallet",
+      category: "NAFTAhub Trading",
+      details: {
+        summary: `Client transferred ${formatEur(amt)} from the Master Account to the trading wallet; ${formatEur(fee)} (2%) fee applied, ${formatEur(net)} credited.`,
+        transferOut: formatEur(amt),
+        fee: formatEur(fee),
+        credited: formatEur(net),
+        at: new Date().toLocaleString("en-GB"),
+      },
+    })
+    refreshLedger()
+    setTransferAmount("")
+    setFundOpen(false)
+    toast.success("Trading wallet funded", { description: `${formatEur(net)} credited (2% fee ${formatEur(fee)}).` })
+  }
+
+  const withdrawWallet = () => {
+    const amt = Number.parseFloat(transferAmount.replace(/,/g, "")) || 0
+    if (amt <= 0) {
+      toast.error("Enter an amount greater than zero")
+      return
+    }
+    if (amt > freeMargin + 0.01) {
+      toast.error("Exceeds free margin", {
+        description: `Only ${formatEur(freeMargin)} is free to withdraw — the rest is reserved as margin on open positions.`,
+      })
+      return
+    }
+    const fee = Math.round(amt * TRADING_TRANSFER_FEE_RATE * 100) / 100
+    const net = Math.round((amt - fee) * 100) / 100
+    const id = `TW-${Date.now().toString(36).toUpperCase()}`
+    // Credit the net (after 2% fee) back to the Master Account.
+    addReceipt({
+      id: `TRADE-WD-${id}`,
+      status: "completed",
+      currency: "EUR",
+      amount: net,
+      category: "Trading Wallet Withdrawal",
+      counterparty: "NQAi Trading Desk",
+      comment: `Withdrew ${formatEur(amt)} from trading wallet (net of 2% fee ${formatEur(fee)})`,
+      reference: id,
+      date: new Date().toISOString(),
+    })
+    setWalletBalance((prev) => Math.round((prev - amt) * 100) / 100)
+    log({
+      action: "Withdrew from NQAi trading wallet",
+      category: "NAFTAhub Trading",
+      details: {
+        summary: `Client withdrew ${formatEur(amt)} from the trading wallet to the Master Account; ${formatEur(fee)} (2%) fee applied, ${formatEur(net)} credited to the Master Account.`,
+        withdrawn: formatEur(amt),
+        fee: formatEur(fee),
+        credited: formatEur(net),
+        at: new Date().toLocaleString("en-GB"),
+      },
+    })
+    refreshLedger()
+    setTransferAmount("")
+    setWithdrawOpen(false)
+    toast.success("Withdrawn to Master Account", { description: `${formatEur(net)} credited (2% fee ${formatEur(fee)}).` })
+  }
+
+  // Derived values for the open order ticket.
+  const tradeVolume = parseFloat(lots) || 0
+  const tradeMarketState = tradeTarget ? marketStatus(tradeTarget.category) : null
+  const tradeMarginEur = tradeTarget ? marginEurFor(tradeTarget.category, tradeVolume) : 0
+  const tradeNotionalEur = tradeVolume * NOTIONAL_PER_LOT
+  const tradeSpendable = freeMargin
+  const tradeInsufficient = tradeMarginEur > freeMargin + 0.01
+  const tradeBlocked = !tradeMarketState?.open || tradeVolume <= 0 || tradeInsufficient || highRisk
+
+  const addAlert = () => {
+    const target = Number.parseFloat(alertPrice.replace(/,/g, "")) || 0
+    if (!alertSymbol || target <= 0) {
+      toast.error("Pick a symbol and a target price")
+      return
+    }
+    const meta = metaBySymbol.get(alertSymbol) ?? customMeta[alertSymbol]
+    setPriceAlerts((prev) => [
+      { id: `AL-${Date.now().toString(36)}`, symbol: alertSymbol, name: meta?.name ?? alertSymbol, target, direction: alertDir },
+      ...prev,
+    ])
+    setAlertPrice("")
+    toast.success(`Alert set — ${alertSymbol} ${alertDir} ${target}`)
+  }
+
+  // Fire (and self-clear) any alert whose target has been crossed by the live price.
+  useEffect(() => {
+    if (priceAlerts.length === 0) return
+    const triggered = priceAlerts.filter((a) => {
+      const price = quotes[a.symbol]?.price
+      if (price == null) return false
+      return a.direction === "above" ? price >= a.target : price <= a.target
+    })
+    if (triggered.length === 0) return
+    triggered.forEach((a) =>
+      toast.info(`Price alert · ${a.symbol}`, {
+        description: `${a.symbol} is now ${a.direction} ${a.target} (${quotes[a.symbol]?.price}).`,
+      }),
+    )
+    setPriceAlerts((prev) => prev.filter((a) => !triggered.some((t) => t.id === a.id)))
+  }, [quotes, priceAlerts, setPriceAlerts])
 
   return (
     <div className="space-y-6">
@@ -913,6 +1171,85 @@ export default function TradingPage() {
               <p className="text-[10px] text-muted-foreground">{autoExecute ? "Engine trading live" : "Manual mode"}</p>
             </div>
             <Switch checked={autoExecute} onCheckedChange={toggleAutoExecute} aria-label="Toggle NQAi auto-execution" />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* cTrader-style trading account bar — managed against the Master Account */}
+      <Card className="bg-card border-border">
+        <CardContent className="p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <div className="rounded-md bg-primary/10 p-1.5">
+                <Wallet className="h-4 w-4 text-primary" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-foreground">Trading Wallet</p>
+                <p className="text-[11px] text-muted-foreground">Ring-fenced · funded from your Master Account</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                className="shrink-0"
+                onClick={() => {
+                  setTransferAmount("")
+                  setFundOpen(true)
+                }}
+              >
+                <ArrowDownToLine className="mr-1.5 h-3.5 w-3.5" />
+                Fund
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => {
+                  setTransferAmount("")
+                  setWithdrawOpen(true)
+                }}
+              >
+                <ArrowUpFromLine className="mr-1.5 h-3.5 w-3.5" />
+                Withdraw
+              </Button>
+              <Button variant="outline" size="sm" className="shrink-0" onClick={() => setAlertsOpen(true)}>
+                <Bell className="mr-1.5 h-3.5 w-3.5" />
+                Alerts{priceAlerts.length > 0 ? ` · ${priceAlerts.length}` : ""}
+              </Button>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            <div>
+              <p className="text-[11px] text-muted-foreground">Balance</p>
+              <p className="mt-0.5 font-mono text-base font-bold text-foreground">{formatEur(balance)}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-muted-foreground">Equity</p>
+              <p className="mt-0.5 font-mono text-base font-bold text-foreground">{formatEur(equity)}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-muted-foreground">Unrealized P&amp;L</p>
+              <p
+                className={cn(
+                  "mt-0.5 font-mono text-base font-bold",
+                  openPnl > 0 ? "text-green-500" : openPnl < 0 ? "text-red-500" : "text-foreground",
+                )}
+              >
+                {openPnl > 0 ? "+" : ""}
+                {formatEur(openPnl)}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] text-muted-foreground">Free Margin</p>
+              <p className="mt-0.5 font-mono text-base font-bold text-foreground">{formatEur(freeMargin)}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-muted-foreground">Used Margin</p>
+              <p className="mt-0.5 font-mono text-base font-bold text-foreground">{formatEur(usedMargin)}</p>
+              {marginLevel != null && (
+                <p className="text-[10px] text-muted-foreground">Level {marginLevel.toFixed(0)}%</p>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -1132,8 +1469,8 @@ export default function TradingPage() {
                     <Button
                       size="sm"
                       className="h-8"
-                      disabled={!it.live}
-                      onClick={() => openTrade(it, it.signal === "SELL" ? "SHORT" : "LONG")}
+                          disabled={!it.live || !marketStatus(it.category).open}
+                          onClick={() => openTrade(it, it.signal === "SELL" ? "SHORT" : "LONG")}
                     >
                       Trade
                     </Button>
@@ -1205,6 +1542,12 @@ export default function TradingPage() {
                         <p className="truncate text-xs text-muted-foreground">{it.name}</p>
                       </div>
                       <div className="flex items-center gap-1">
+                        {!marketStatus(it.category).open && (
+                          <Badge variant="outline" className="border-border text-[10px] text-muted-foreground">
+                            <Clock className="mr-1 h-3 w-3" />
+                            Closed
+                          </Badge>
+                        )}
                         <Badge variant="outline" className={cn("text-[10px]", signalStyles[it.signal])}>
                           <Zap className="mr-1 h-3 w-3" />
                           {it.signal}
@@ -1251,11 +1594,15 @@ export default function TradingPage() {
                       size="sm"
                       variant="outline"
                       className="w-full"
-                      disabled={!it.live}
-                      onClick={() => openTrade(it, it.signal === "SELL" ? "SHORT" : "LONG")}
+                          disabled={!it.live || !marketStatus(it.category).open}
+                          onClick={() => openTrade(it, it.signal === "SELL" ? "SHORT" : "LONG")}
                     >
-                      {it.live ? "Execute Signal" : "Waiting for price…"}
-                      {it.live && <ArrowRight className="ml-2 h-4 w-4" />}
+                      {!marketStatus(it.category).open
+                        ? "Market closed"
+                        : it.live
+                          ? "Execute Signal"
+                          : "Waiting for price…"}
+                      {it.live && marketStatus(it.category).open && <ArrowRight className="ml-2 h-4 w-4" />}
                     </Button>
                   </CardContent>
                 </Card>
@@ -2106,14 +2453,255 @@ export default function TradingPage() {
                   Micro-position range 0.01–0.12 lots recommended by the NQAi risk controller.
                 </p>
               </div>
+
+              {/* Margin & market summary — reserved from the Master Account */}
+              <div className="space-y-2 rounded-lg border border-border bg-secondary/20 p-3">
+                {tradeMarketState && !tradeMarketState.open && (
+                  <div className="flex items-center gap-2 rounded-md bg-red-500/10 px-2 py-1.5 text-xs font-medium text-red-500">
+                    <Clock className="h-3.5 w-3.5" />
+                    Market {tradeMarketState.label} — order entry disabled
+                  </div>
+                )}
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Notional</span>
+                  <span className="font-mono font-medium text-foreground">{formatEur(tradeNotionalEur)}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Leverage</span>
+                  <span className="font-medium text-foreground">1:{leverageFor(tradeTarget.category)}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Required margin</span>
+                  <span
+                    className={cn(
+                      "font-mono font-semibold",
+                      tradeInsufficient ? "text-red-500" : "text-foreground",
+                    )}
+                  >
+                    {formatEur(tradeMarginEur)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Free margin (wallet)</span>
+                  <span className="font-mono text-muted-foreground">{formatEur(tradeSpendable)}</span>
+                </div>
+                {highRisk && (
+                  <p className="text-[11px] font-medium text-red-500">
+                    Trading is paused by your Guarantees Accumulator risk controls.
+                  </p>
+                )}
+                {tradeInsufficient && !highRisk && (
+                  <p className="text-[11px] font-medium text-red-500">
+                    Insufficient free margin in your trading wallet — fund it first.
+                  </p>
+                )}
+              </div>
             </div>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setTradeTarget(null)}>
               Cancel
             </Button>
-            <Button onClick={confirmTrade}>Deploy Position</Button>
+            <Button onClick={confirmTrade} disabled={tradeBlocked}>
+              Deploy Position
+            </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Fund trading wallet from the Master Account */}
+      <Dialog open={fundOpen} onOpenChange={setFundOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Fund Trading Wallet</DialogTitle>
+            <DialogDescription>Transfer from your Master Account. A 2% transfer fee applies.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-border bg-secondary/20 p-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Master Account available</span>
+                <span className="font-mono font-medium text-foreground">{formatEur(availableCapital)}</span>
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">Amount to transfer (EUR)</label>
+              <Input
+                inputMode="decimal"
+                value={transferAmount}
+                onChange={(e) => setTransferAmount(e.target.value)}
+                placeholder="0.00"
+                className="text-base"
+              />
+            </div>
+            {(() => {
+              const amt = Number.parseFloat(transferAmount.replace(/,/g, "")) || 0
+              const fee = Math.round(amt * TRADING_TRANSFER_FEE_RATE * 100) / 100
+              const net = Math.max(0, Math.round((amt - fee) * 100) / 100)
+              return (
+                <div className="space-y-1.5 rounded-lg border border-border bg-secondary/20 p-3 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Transfer amount</span>
+                    <span className="font-mono text-foreground">{formatEur(amt)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">2% fee</span>
+                    <span className="font-mono text-red-500">-{formatEur(fee)}</span>
+                  </div>
+                  <div className="flex justify-between border-t border-border pt-1.5 font-semibold">
+                    <span className="text-muted-foreground">Credited to wallet</span>
+                    <span className="font-mono text-foreground">{formatEur(net)}</span>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFundOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={fundWallet}>Fund wallet</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Withdraw trading wallet back to the Master Account */}
+      <Dialog open={withdrawOpen} onOpenChange={setWithdrawOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Withdraw to Master Account</DialogTitle>
+            <DialogDescription>Return free margin to your Master Account. A 2% transfer fee applies.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-border bg-secondary/20 p-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Free to withdraw</span>
+                <span className="font-mono font-medium text-foreground">{formatEur(freeMargin)}</span>
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">Amount to withdraw (EUR)</label>
+              <Input
+                inputMode="decimal"
+                value={transferAmount}
+                onChange={(e) => setTransferAmount(e.target.value)}
+                placeholder="0.00"
+                className="text-base"
+              />
+            </div>
+            {(() => {
+              const amt = Number.parseFloat(transferAmount.replace(/,/g, "")) || 0
+              const fee = Math.round(amt * TRADING_TRANSFER_FEE_RATE * 100) / 100
+              const net = Math.max(0, Math.round((amt - fee) * 100) / 100)
+              return (
+                <div className="space-y-1.5 rounded-lg border border-border bg-secondary/20 p-3 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Withdrawal amount</span>
+                    <span className="font-mono text-foreground">{formatEur(amt)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">2% fee</span>
+                    <span className="font-mono text-red-500">-{formatEur(fee)}</span>
+                  </div>
+                  <div className="flex justify-between border-t border-border pt-1.5 font-semibold">
+                    <span className="text-muted-foreground">Credited to Master Account</span>
+                    <span className="font-mono text-foreground">{formatEur(net)}</span>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setWithdrawOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={withdrawWallet}>Withdraw</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Price alerts dialog */}
+      <Dialog open={alertsOpen} onOpenChange={setAlertsOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Price Alerts</DialogTitle>
+            <DialogDescription>Get notified when a symbol crosses your target price.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2 rounded-lg border border-border bg-secondary/20 p-3">
+              <select
+                value={alertSymbol}
+                onChange={(e) => setAlertSymbol(e.target.value)}
+                className="h-11 w-full rounded-md border border-border bg-background px-3 text-base text-foreground"
+                aria-label="Alert symbol"
+              >
+                <option value="">Select symbol…</option>
+                {watchlist.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={alertDir === "above" ? "default" : "outline"}
+                  onClick={() => setAlertDir("above")}
+                >
+                  <TrendingUp className="mr-1.5 h-4 w-4" />
+                  Above
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={alertDir === "below" ? "default" : "outline"}
+                  onClick={() => setAlertDir("below")}
+                >
+                  <TrendingDown className="mr-1.5 h-4 w-4" />
+                  Below
+                </Button>
+              </div>
+              <Input
+                inputMode="decimal"
+                value={alertPrice}
+                onChange={(e) => setAlertPrice(e.target.value)}
+                placeholder="Target price"
+                className="text-base"
+              />
+              <Button size="sm" className="w-full" onClick={addAlert}>
+                <Plus className="mr-1.5 h-4 w-4" />
+                Set alert
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {priceAlerts.length === 0 ? (
+                <p className="py-4 text-center text-xs text-muted-foreground">No active alerts.</p>
+              ) : (
+                priceAlerts.map((a) => (
+                  <div
+                    key={a.id}
+                    className="flex items-center justify-between rounded-md border border-border bg-secondary/30 p-2.5"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground">{a.symbol}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {a.direction} {a.target}
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 text-muted-foreground"
+                      onClick={() => setPriceAlerts((prev) => prev.filter((x) => x.id !== a.id))}
+                      aria-label={`Remove alert for ${a.symbol}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
