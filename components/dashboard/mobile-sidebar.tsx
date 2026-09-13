@@ -61,6 +61,14 @@ type NavGroup = {
 
 const navGroups: NavGroup[] = [
   {
+    label: "Terminal",
+    items: [
+      { title: "NQAi Co-Pilot", href: "/dashboard/nqai", icon: Cpu, badge: "AI" },
+      { title: "Trading Console", href: "/dashboard/console", icon: Network, badge: "Live" },
+      { title: "NAFTAhub Trading", href: "/dashboard/trading", icon: Cpu, logo: "/images/nqai-logo.png", badge: "cTrader" },
+    ],
+  },
+  {
     label: "Banking",
     items: [
         { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
@@ -95,7 +103,6 @@ const navGroups: NavGroup[] = [
         icon: Ship,
         logo: "/images/naftahub-logo.png",
       },
-      { title: "NAFTAhub Trading", href: "/dashboard/trading", icon: Cpu, logo: "/images/nqai-logo.png" },
       { title: "SWIFT Services", href: "/dashboard/swift", icon: Globe },
       { title: "Bank Instruments", href: "/dashboard/instruments", icon: FileText, badge: "New" },
       { title: "SKR Trading", href: "/dashboard/skr", icon: ShieldCheck, badge: "SKR" },
