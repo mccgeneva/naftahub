@@ -349,18 +349,24 @@ function AccountStatsCarousel({
   const PAGES = 3
   const [page, setPage] = useState(0)
   const [now, setNow] = useState(() => new Date())
+  // Swipe tracking — the strip only moves when the user drags left/right.
+  const swipeRef = useRef<{ x: number; y: number } | null>(null)
+  const goTo = (p: number) => setPage(Math.max(0, Math.min(PAGES - 1, p)))
+  const onSwipeEnd = (endX: number, endY: number) => {
+    const start = swipeRef.current
+    swipeRef.current = null
+    if (!start) return
+    const dx = endX - start.x
+    // Ignore taps and mostly-vertical drags; require a clear horizontal swipe.
+    if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(endY - start.y)) return
+    goTo(page + (dx < 0 ? 1 : -1)) // swipe left → next, swipe right → previous
+  }
   // Only tick the clock while the session/time page is showing.
   useEffect(() => {
     if (page !== 2) return
     setNow(new Date())
     const clock = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(clock)
-  }, [page])
-  // Re-arm on every page change so a manual tap gives a fresh delay
-  // instead of fighting a pending auto-advance.
-  useEffect(() => {
-    const slide = setTimeout(() => setPage((p) => (p + 1) % PAGES), 4500)
-    return () => clearTimeout(slide)
   }, [page])
 
   // Local clock + UTC offset (matches the cTrader "Time 12:38 (UTC+2:00)" chip).
@@ -386,14 +392,16 @@ function AccountStatsCarousel({
   return (
     <div>
       <div
-        className="cursor-pointer overflow-hidden"
-        role="button"
-        tabIndex={0}
-        aria-label="Account stats — tap to switch view"
-        style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
-        onPointerDown={() => setPage((p) => (p + 1) % PAGES)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") setPage((p) => (p + 1) % PAGES)
+        className="overflow-hidden"
+        role="group"
+        aria-label="Account stats — swipe left or right to switch view"
+        style={{ touchAction: "pan-y", WebkitTapHighlightColor: "transparent" }}
+        onPointerDown={(e) => {
+          swipeRef.current = { x: e.clientX, y: e.clientY }
+        }}
+        onPointerUp={(e) => onSwipeEnd(e.clientX, e.clientY)}
+        onPointerCancel={() => {
+          swipeRef.current = null
         }}
       >
         <div
