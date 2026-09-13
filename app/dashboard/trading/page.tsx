@@ -963,43 +963,46 @@ export default function TradingPage() {
       toast.error("Enter an amount greater than zero")
       return
     }
-    if (amt > availableCapital + 0.01) {
+    const fee = Math.round(amt * TRADING_TRANSFER_FEE_RATE * 100) / 100
+    const total = Math.round((amt + fee) * 100) / 100
+    if (total > availableCapital + 0.01) {
       toast.error("Insufficient Master Account balance", {
-        description: `You can fund up to ${formatEur(availableCapital)} from your Master Account.`,
+        description: `Funding ${formatEur(amt)} costs ${formatEur(total)} incl. the 2% fee, but only ${formatEur(availableCapital)} is available.`,
       })
       return
     }
-    const fee = Math.round(amt * TRADING_TRANSFER_FEE_RATE * 100) / 100
-    const net = Math.round((amt - fee) * 100) / 100
     const id = `TW-${Date.now().toString(36).toUpperCase()}`
-    // Debit the full amount from the Master Account (net funds + retained fee).
+    // The Master Account bears the full cost — the funded amount PLUS the 2% fee.
+    // The wallet is credited the full amount the client asked to fund.
     addDebit({
       id: `TRADE-FUND-${id}`,
       status: "completed",
       currency: "EUR",
-      amount: amt,
+      amount: total,
       category: "Trading Wallet Funding",
       counterparty: "NQAi Trading Desk",
-      comment: `Funded trading wallet ${formatEur(net)} (net of 2% fee ${formatEur(fee)})`,
+      comment: `Funded trading wallet ${formatEur(amt)} + 2% fee ${formatEur(fee)}`,
       reference: id,
       date: new Date().toISOString(),
     })
-    setWalletBalance((prev) => Math.round((prev + net) * 100) / 100)
+    setWalletBalance((prev) => Math.round((prev + amt) * 100) / 100)
     log({
       action: "Funded NQAi trading wallet",
       category: "NAFTAhub Trading",
       details: {
-        summary: `Client transferred ${formatEur(amt)} from the Master Account to the trading wallet; ${formatEur(fee)} (2%) fee applied, ${formatEur(net)} credited.`,
-        transferOut: formatEur(amt),
+        summary: `Client funded the trading wallet with ${formatEur(amt)}; a ${formatEur(fee)} (2%) fee was charged to the Master Account, so ${formatEur(total)} was debited from the Master Account and ${formatEur(amt)} credited to the wallet.`,
+        debitedFromMaster: formatEur(total),
         fee: formatEur(fee),
-        credited: formatEur(net),
+        creditedToWallet: formatEur(amt),
         at: new Date().toLocaleString("en-GB"),
       },
     })
     refreshLedger()
     setTransferAmount("")
     setFundOpen(false)
-    toast.success("Trading wallet funded", { description: `${formatEur(net)} credited (2% fee ${formatEur(fee)}).` })
+    toast.success("Trading wallet funded", {
+      description: `${formatEur(amt)} credited to your wallet — ${formatEur(total)} debited from your Master Account (2% fee ${formatEur(fee)}).`,
+    })
   }
 
   const withdrawWallet = () => {
@@ -2536,20 +2539,20 @@ export default function TradingPage() {
             {(() => {
               const amt = Number.parseFloat(transferAmount.replace(/,/g, "")) || 0
               const fee = Math.round(amt * TRADING_TRANSFER_FEE_RATE * 100) / 100
-              const net = Math.max(0, Math.round((amt - fee) * 100) / 100)
+              const total = Math.round((amt + fee) * 100) / 100
               return (
                 <div className="space-y-1.5 rounded-lg border border-border bg-secondary/20 p-3 text-xs">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Transfer amount</span>
+                    <span className="text-muted-foreground">Credited to wallet</span>
                     <span className="font-mono text-foreground">{formatEur(amt)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">2% fee</span>
+                    <span className="text-muted-foreground">2% fee (Master Account)</span>
                     <span className="font-mono text-red-500">-{formatEur(fee)}</span>
                   </div>
                   <div className="flex justify-between border-t border-border pt-1.5 font-semibold">
-                    <span className="text-muted-foreground">Credited to wallet</span>
-                    <span className="font-mono text-foreground">{formatEur(net)}</span>
+                    <span className="text-muted-foreground">Debited from Master Account</span>
+                    <span className="font-mono text-foreground">{formatEur(total)}</span>
                   </div>
                 </div>
               )
