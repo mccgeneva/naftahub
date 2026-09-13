@@ -56,6 +56,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
+import { MoneyInput } from "@/components/ui/money-input"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -1888,7 +1889,7 @@ export default function TradingPage() {
                             </span>
                             {p.status === "reserved" && (
                               <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-600 text-[10px]">
-                                <Clock className="mr-1 h-3 w-3" /> Reserved · pending
+                                <Clock className="mr-1 h-3 w-3" /> Reserved �� pending
                               </Badge>
                             )}
                             {p.status === "active" && (
@@ -2525,10 +2526,9 @@ export default function TradingPage() {
             </div>
             <div>
               <label className="mb-1 block text-xs text-muted-foreground">Amount to transfer (EUR)</label>
-              <Input
-                inputMode="decimal"
+              <MoneyInput
                 value={transferAmount}
-                onChange={(e) => setTransferAmount(e.target.value)}
+                onValueChange={setTransferAmount}
                 placeholder="0.00"
                 className="text-base"
               />
@@ -2580,10 +2580,9 @@ export default function TradingPage() {
             </div>
             <div>
               <label className="mb-1 block text-xs text-muted-foreground">Amount to withdraw (EUR)</label>
-              <Input
-                inputMode="decimal"
+              <MoneyInput
                 value={transferAmount}
-                onChange={(e) => setTransferAmount(e.target.value)}
+                onValueChange={setTransferAmount}
                 placeholder="0.00"
                 className="text-base"
               />
