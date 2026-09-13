@@ -80,6 +80,7 @@ import {
   adminDeleteCommodityDeal,
   adminAdjustLeveragePpi,
   adminAdjustMonetizationReserve,
+  adminNegotiateCommodityDeal,
   adminConfirmYieldTermination,
   adminRequestAccountTopUp,
   adminCreditTopUp,
@@ -197,6 +198,33 @@ function monetizationReserveInfo(req: ApprovalRequest): {
   const negotiated = Number.isFinite(neg) && neg >= 0 ? neg : null
   const released = negotiated == null ? 0 : Math.round((original - negotiated + Number.EPSILON) * 100) / 100
   return { currency, original, negotiated, released }
+}
+
+/** Value picture for a commodity deal: the original agreed total, any
+ *  admin-negotiated total, and the discount (positive) or uplift (negative)
+ *  applied. Returns null for non-commodity requests or a zero-value deal. */
+function commodityDealInfo(req: ApprovalRequest): {
+  currency: string
+  original: number
+  negotiated: number | null
+  discount: number
+} | null {
+  if (req.kind !== "commodity") return null
+  if ((req.payload as { sharedReadOnly?: boolean } | undefined)?.sharedReadOnly === true) return null
+  const rec = ((req.payload as { record?: Record<string, unknown> } | undefined)?.record ?? {}) as Record<
+    string,
+    unknown
+  >
+  const negRaw = Number(rec.negotiatedValue)
+  const negotiated = Number.isFinite(negRaw) && negRaw > 0 ? Math.round((negRaw + Number.EPSILON) * 100) / 100 : null
+  // The original is the value BEFORE any negotiation; once negotiated we stamp
+  // `dealValueOriginal`, otherwise it's the current stored value.
+  const origRaw = Number(rec.dealValueOriginal ?? req.amount ?? rec.approxValue)
+  const original = Number.isFinite(origRaw) && origRaw > 0 ? Math.round((origRaw + Number.EPSILON) * 100) / 100 : 0
+  if (!(original > 0)) return null
+  const currency = String(rec.currency || req.currency || "USD")
+  const discount = negotiated == null ? 0 : Math.round((original - negotiated + Number.EPSILON) * 100) / 100
+  return { currency, original, negotiated, discount }
 }
 
 /** Early-termination picture for an APPROVED Yield / PPP program: whether the
@@ -945,6 +973,56 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     mutate()
   }
 
+  // Commodity deal price negotiation. The admin sets the FINAL agreed total
+  // directly (negotiated purchase/selling price and any discount); the change
+  // applies immediately — the reserved funds track the new value and the client
+  // is notified.
+  const [dealTarget, setDealTarget] = useState<{
+    id: string
+    label: string
+    currency: string
+    original: number
+    negotiated: number | null
+  } | null>(null)
+  const [dealValue, setDealValue] = useState("")
+  const [dealNote, setDealNote] = useState("")
+
+  const openDealNegotiate = (req: ApprovalRequest, info: NonNullable<ReturnType<typeof commodityDealInfo>>) => {
+    setDealValue((info.negotiated ?? info.original).toFixed(2))
+    setDealNote("")
+    setDealTarget({
+      id: req.id,
+      label: req.title,
+      currency: info.currency,
+      original: info.original,
+      negotiated: info.negotiated,
+    })
+  }
+
+  const confirmDealNegotiate = async () => {
+    if (!dealTarget) return
+    const newTotal = Number(dealValue)
+    if (!Number.isFinite(newTotal) || newTotal <= 0) {
+      toast.error("Enter a valid negotiated deal value.")
+      return
+    }
+    setActing(true)
+    const res = await adminNegotiateCommodityDeal(ADMIN_PASSCODE, dealTarget.id, newTotal, dealNote.trim() || undefined)
+    setActing(false)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    const discount = Math.round((dealTarget.original - newTotal + Number.EPSILON) * 100) / 100
+    toast.success(
+      discount > 0
+        ? `Deal value set to ${formatMoney2(newTotal, dealTarget.currency)} — ${formatMoney2(discount, dealTarget.currency)} discount applied. The client has been notified.`
+        : `Deal value set to ${formatMoney2(newTotal, dealTarget.currency)}. The client has been notified.`,
+    )
+    setDealTarget(null)
+    mutate()
+  }
+
   // Yield / PPP early-termination dialog. The client requested to resign and
   // proposed an exit cost; the admin agrees the FINAL exit cost (defaults to the
   // client's proposal) then confirms, which settles and terminates the program.
@@ -1392,6 +1470,13 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
               // blocked equity+PPI reserve; available while pending or approved.
               const mon = monetizationReserveInfo(req)
               const canNegotiateReserve = !!mon && (req.status === "pending" || req.status === "approved")
+              // Commodity price negotiation — set the final agreed total directly.
+              // Available while pending or approved (not once delivered/settled).
+              const deal = commodityDealInfo(req)
+              const canNegotiateDeal =
+                !!deal &&
+                (req.status === "pending" || req.status === "approved") &&
+                (req.payload as { delivered?: boolean } | undefined)?.delivered !== true
               // Two-step leverage: fees must be charged before the line can be
               // executed (credited). `needsFeeCharge` disables the execute button.
               const isLeverage = req.kind === "leverage"
@@ -1588,6 +1673,35 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                             )}
                         </div>
                       )}
+                      {deal && (
+                        <div className="mt-1.5 rounded-md border border-orange-500/30 bg-orange-500/5 p-2.5">
+                          <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-orange-600 dark:text-orange-400">
+                            <Handshake className="h-3.5 w-3.5" />
+                            Deal value
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                            <span className="text-muted-foreground">Agreed:</span>
+                            <span className={deal.negotiated != null ? "text-muted-foreground line-through" : "font-medium text-foreground"}>
+                              {formatMoney2(deal.original, deal.currency)}
+                            </span>
+                            {deal.negotiated != null && (
+                              <>
+                                <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                <span className="font-medium text-foreground">{formatMoney2(deal.negotiated, deal.currency)}</span>
+                                {deal.discount > 0 ? (
+                                  <span className="text-emerald-600 dark:text-emerald-400">
+                                    ({formatMoney2(deal.discount, deal.currency)} discount)
+                                  </span>
+                                ) : deal.discount < 0 ? (
+                                  <span className="text-amber-600 dark:text-amber-400">
+                                    (+{formatMoney2(Math.abs(deal.discount), deal.currency)})
+                                  </span>
+                                ) : null}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )}
                       {isPending && isLeverage && leverageCharges && (
                         <div
                           className={`mt-1.5 rounded-md border p-2.5 ${
@@ -1705,6 +1819,18 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                           <Handshake className="h-3.5 w-3.5" /> Negotiate reserve
                         </Button>
                       )}
+                      {canNegotiateDeal && deal && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 gap-1 text-orange-600"
+                          disabled={acting}
+                          onClick={() => openDealNegotiate(req, deal)}
+                          title="Negotiate the agreed deal value — set the final purchase/selling total. The reserved funds and the client are updated immediately."
+                        >
+                          <Handshake className="h-3.5 w-3.5" /> Negotiate price
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         variant="outline"
@@ -1799,6 +1925,20 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                         title="Negotiate a lower blocked reserve — the exceeded amount is released back to the client's available balance."
                       >
                         <Handshake className="h-3.5 w-3.5" /> Negotiate reserve
+                      </Button>
+                    </div>
+                  )}
+                  {canNegotiateDeal && deal && req.status === "approved" && (
+                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 gap-1 text-orange-600"
+                        disabled={acting}
+                        onClick={() => openDealNegotiate(req, deal)}
+                        title="Negotiate the agreed deal value — set the final purchase/selling total. The reserved funds are re-blocked at the new value and the client is notified."
+                      >
+                        <Handshake className="h-3.5 w-3.5" /> Negotiate price
                       </Button>
                     </div>
                   )}
@@ -2467,6 +2607,89 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
             <Button onClick={confirmResNegotiate} disabled={acting} className="gap-1">
               {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Handshake className="h-4 w-4" />}
               Apply &amp; release
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Negotiate commodity deal value (set final agreed total) dialog */}
+      <Dialog open={dealTarget !== null} onOpenChange={(o) => !o && !acting && setDealTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Handshake className="h-4 w-4 text-orange-500" />
+              Negotiate deal value
+            </DialogTitle>
+            <DialogDescription className="text-pretty">
+              Set the final agreed total for this commodity deal — the negotiated purchase/selling price after any
+              discount. The change applies immediately: the reserved funds track the new value and the client is
+              notified.
+            </DialogDescription>
+          </DialogHeader>
+          {dealTarget && (
+            <div className="space-y-3">
+              <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Current agreed value</span>
+                  <span className="font-mono font-medium tabular-nums text-foreground">
+                    {formatMoney2(dealTarget.original, dealTarget.currency)}
+                  </span>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="deal-new">New agreed total ({dealTarget.currency})</Label>
+                <MoneyInput
+                  id="deal-new"
+                  value={dealValue}
+                  onValueChange={setDealValue}
+                  className="text-base md:text-sm"
+                  autoFocus
+                />
+              </div>
+              {(() => {
+                const nv = Number(dealValue) || 0
+                const diff = Math.round((dealTarget.original - nv + Number.EPSILON) * 100) / 100
+                if (diff > 0) {
+                  return (
+                    <div className="flex items-center justify-between rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-sm">
+                      <span className="text-muted-foreground">Discount applied</span>
+                      <span className="font-mono font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                        {formatMoney2(diff, dealTarget.currency)}
+                      </span>
+                    </div>
+                  )
+                }
+                if (diff < 0) {
+                  return (
+                    <div className="flex items-center justify-between rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm">
+                      <span className="text-muted-foreground">Price increased by</span>
+                      <span className="font-mono font-semibold tabular-nums text-amber-600 dark:text-amber-400">
+                        {formatMoney2(Math.abs(diff), dealTarget.currency)}
+                      </span>
+                    </div>
+                  )
+                }
+                return null
+              })()}
+              <div className="space-y-1.5">
+                <Label htmlFor="deal-note">Note (optional)</Label>
+                <Textarea
+                  id="deal-note"
+                  value={dealNote}
+                  onChange={(e) => setDealNote(e.target.value)}
+                  placeholder="Reason / agreed terms with the client…"
+                  className="min-h-16 text-base md:text-sm"
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDealTarget(null)} disabled={acting}>
+              Cancel
+            </Button>
+            <Button onClick={confirmDealNegotiate} disabled={acting} className="gap-1">
+              {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Handshake className="h-4 w-4" />}
+              Apply &amp; notify
             </Button>
           </DialogFooter>
         </DialogContent>

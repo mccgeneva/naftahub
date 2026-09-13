@@ -5791,6 +5791,156 @@ export async function adminAdjustMonetizationReserve(
 }
 
 /**
+ * Administrator negotiates the AGREED TOTAL VALUE of a commodity deal (purchase /
+ * selling price and any discount offered) before deciding it. The admin sets the
+ * final total directly; the deal value and the reservation that funds the
+ * supplier are rewritten to the negotiated figure, and the client is notified.
+ *
+ * The commodity reservation hold (`APPR-<id>`) is only placed on APPROVAL from
+ * the approval's `ledgerEffect.amount`, so for a still-pending deal we simply
+ * rewrite the stored terms (amount + ledgerEffect + record) and the hold at
+ * approval will reserve the negotiated total. If the deal is already approved,
+ * its live hold is resized in place so the blocked funds track the new value.
+ */
+export async function adminNegotiateCommodityDeal(
+  passcode: string,
+  id: string,
+  newTotal: number,
+  note?: string,
+): Promise<DecideResult> {
+  if (!(await adminOk(passcode))) return { ok: false, error: "Administrator authorization failed." }
+  try {
+    const existing = await getApprovalById(id)
+    if (!existing) return { ok: false, error: "Commodity deal not found." }
+    if (existing.kind !== "commodity") {
+      return { ok: false, error: "Only a commodity deal can be renegotiated here." }
+    }
+    // A delivered / settled deal has already paid out — its value is final.
+    if ((existing.payload as { delivered?: boolean } | undefined)?.delivered === true) {
+      return { ok: false, error: "This deal has been delivered and settled — its value can no longer be changed." }
+    }
+    // A shared read-only copy must never be renegotiated (it has no financial effect).
+    if ((existing.payload as { sharedReadOnly?: boolean } | undefined)?.sharedReadOnly === true) {
+      return { ok: false, error: "A shared read-only copy of a deal cannot be renegotiated." }
+    }
+
+    const payload = (existing.payload ?? {}) as Record<string, unknown>
+    const record = (payload.record ?? {}) as Record<string, unknown>
+    const currency = String(record.currency || existing.currency || BASE_CURRENCY)
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
+    const originalTotal = round2(Number(existing.amount ?? record.approxValue ?? 0))
+    const negotiated = round2(Number(newTotal))
+    if (!Number.isFinite(negotiated) || negotiated <= 0) {
+      return { ok: false, error: "Enter a valid negotiated deal value." }
+    }
+    const fmt = (n: number) =>
+      `${currency} ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    // Positive discount = price reduced for the client; negative = uplift.
+    const discount = round2(originalTotal - negotiated)
+
+    // Rewrite the reservation effect at the negotiated value so the hold placed
+    // on approval (from ledgerEffect.amount) tracks the agreed figure. Setting a
+    // final total directly means no per-unit price — clear any stale unitPrice.
+    const existingFx = existing.ledgerEffect
+    const newFx: LedgerEffect = existingFx
+      ? { ...existingFx, amount: negotiated, currency }
+      : {
+          direction: "debit",
+          amount: negotiated,
+          currency,
+          status: "hold",
+          counterparty: String(record.sellerName || "Commodity supplier"),
+          reference: String(record.uetr || record.id || existing.id),
+          category: "Commodity Trade — Reserved Funds",
+        }
+
+    const nowIso = new Date().toISOString()
+    const newRecord: Record<string, unknown> = {
+      ...record,
+      approxValue: negotiated,
+      unitPrice: undefined,
+      // Negotiation audit fields (mirrors the PPI / reserve negotiation trail).
+      dealValueOriginal: record.dealValueOriginal ?? originalTotal,
+      negotiatedValue: negotiated,
+      dealDiscount: discount,
+      dealNegotiatedAt: nowIso,
+      dealNegotiationNote: note?.trim() || undefined,
+    }
+
+    const updated = await updateApprovalTerms(id, {
+      amount: negotiated,
+      currency,
+      ledgerEffect: newFx,
+      payload: { ...payload, record: newRecord },
+    })
+    if (!updated) return { ok: false, error: "The commodity deal could not be updated." }
+
+    // If the deal is already approved, its live reservation hold must be resized
+    // in place so the blocked funds match the negotiated value immediately.
+    const ownerId = await resolveDataOwnerIdFor(existing.userId)
+    if (existing.status === "approved") {
+      try {
+        const rows = await readLedgerEntries(ownerId)
+        const hold = rows.find((e) => e.id === `APPR-${id}` && e.status === "hold")
+        if (hold) {
+          await upsertLedgerEntry(ownerId, {
+            ...hold,
+            amount: negotiated,
+            currency,
+            comment: `Negotiated value for commodity deal "${existing.title}": reserved funds ${fmt(originalTotal)} → ${fmt(negotiated)}.${note?.trim() ? ` (${note.trim()})` : ""}`,
+          })
+        }
+      } catch (err) {
+        console.log("[v0] commodity hold resize failed:", (err as Error).message)
+      }
+    }
+
+    const discountLine =
+      discount > 0
+        ? ` A discount of ${fmt(discount)} was applied.`
+        : discount < 0
+          ? ` The price was revised up by ${fmt(Math.abs(discount))}.`
+          : ""
+    try {
+      await insertNotification({
+        userId: existing.userId,
+        tone: "success",
+        title: "Commodity deal price negotiated",
+        body: `MCC Global Commodity Desk negotiated the value of your deal "${existing.title}" from ${fmt(originalTotal)} to ${fmt(negotiated)}.${discountLine}${note?.trim() ? ` Note: ${note.trim()}.` : ""}`,
+        href: "/dashboard/commodity",
+      })
+    } catch (err) {
+      console.log("[v0] commodity negotiate notification failed:", (err as Error).message)
+    }
+
+    try {
+      const target = await resolveAccountProfileById(existing.userId)
+      await logActivity({
+        action: `Administrator negotiated commodity deal "${existing.title}" for ${target.fullName} (${fmt(originalTotal)} → ${fmt(negotiated)}, discount ${fmt(discount)})`,
+        category: "Administration / Approvals",
+        user: "Administrator",
+        details: {
+          referenceId: id,
+          targetAccount: `${target.fullName} — ${target.email}`,
+          summary: existing.summary || existing.title,
+          originalValue: fmt(originalTotal),
+          negotiatedValue: fmt(negotiated),
+          discount: fmt(discount),
+          reason: note?.trim() || "(none)",
+        },
+      })
+    } catch (err) {
+      console.log("[v0] commodity negotiate activity log failed:", (err as Error).message)
+    }
+
+    return { ok: true, request: updated }
+  } catch (err) {
+    console.log("[v0] adminNegotiateCommodityDeal failed:", (err as Error).message)
+    return { ok: false, error: "The deal value could not be negotiated. Please try again." }
+  }
+}
+
+/**
  * Administrator REVERSES an authorized (approved) monetization. This fully
  * unwinds the facility:
  *   1. Flips the DB approval to `cancelled` (via adminRevokeApprovedApproval), so
