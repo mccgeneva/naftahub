@@ -420,7 +420,15 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
                     </button>
 
                     <div className="flex items-end justify-between gap-3">
-                      <div className="min-w-0">
+                      <button
+                        type="button"
+                        className="min-w-0 text-left"
+                        aria-label={`Open ${it.symbol.replace("/", "")} trade view`}
+                        onClick={() => {
+                          setSelected(it.symbol)
+                          setDetailSymbol(it.symbol)
+                        }}
+                      >
                         <div className="text-[15px] font-semibold" style={{ color: up ? "#5a6472" : OIL }}>
                           {up ? "+" : ""}
                           {abs.toLocaleString("en-US", { maximumFractionDigits: it.decimals })} ({up ? "+" : ""}
@@ -429,7 +437,7 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
                         <div className="mt-1">
                           <Sparkline symbol={it.symbol} change={it.change} />
                         </div>
-                      </div>
+                      </button>
 
                       <div className="flex-1">
                         <div className="mb-1.5 flex items-center justify-between text-[12px]" style={{ color: MUTED }}>
