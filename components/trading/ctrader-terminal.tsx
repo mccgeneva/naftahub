@@ -560,6 +560,378 @@ function SymbolDetail({
   )
 }
 
+// Live chart for the position-manage panel: rolling price series with the
+// entry price drawn as a dashed line, a lots + live-P&L tag on the left, and
+// the entry price pill on the right — a faithful cTrader position overlay.
+function PositionChart({
+  symbol,
+  change,
+  live,
+  entry,
+  decimals,
+  lots,
+  pnl,
+  long,
+  formatEur,
+  formatPrice,
+}: {
+  symbol: string
+  change: number
+  live: number
+  entry: number
+  decimals: number
+  lots: number
+  pnl: number
+  long: boolean
+  formatEur: (n: number) => string
+  formatPrice: (v: number, decimals: number) => string
+}) {
+  const W = 340
+  const H = 210
+  const color = long ? GREEN : OIL
+  const [series, setSeries] = useState<number[]>(() => seedChartSeries(symbol, change, live))
+  const seeded = useRef(symbol)
+  useEffect(() => {
+    if (seeded.current !== symbol) {
+      seeded.current = symbol
+      setSeries(seedChartSeries(symbol, change, live))
+    }
+  }, [symbol, change, live])
+  useEffect(() => {
+    if (!Number.isFinite(live)) return
+    setSeries((prev) =>
+      prev.length === 0
+        ? seedChartSeries(symbol, change, live)
+        : prev.length >= 90
+          ? [...prev.slice(1), live]
+          : [...prev, live],
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live])
+
+  const { line, area, lastX, lastY, entryY, top, bottom } = useMemo(() => {
+    const vals = series.length > 1 ? series : [live, live]
+    const min = Math.min(...vals, entry)
+    const max = Math.max(...vals, entry)
+    const range = max - min || Math.max(Math.abs(max) * 0.001, 1e-6)
+    const padY = H * 0.12
+    const n = vals.length
+    const toY = (val: number) => H - padY - ((val - min) / range) * (H - padY * 2)
+    const pts = vals.map((val, i) => [(i / (n - 1)) * W, toY(val)] as const)
+    const ln = pts.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ")
+    const lastPt = pts[pts.length - 1] ?? [W, H / 2]
+    return {
+      line: ln,
+      area: `${ln} L${W} ${H} L0 ${H} Z`,
+      lastX: lastPt[0],
+      lastY: lastPt[1],
+      entryY: toY(entry),
+      top: max,
+      bottom: min,
+    }
+  }, [series, live, entry])
+
+  const gid = `pg-${hashCode(symbol)}`
+  const pnlUp = pnl >= 0
+  const tagY = Math.min(H - 20, Math.max(2, entryY - 9))
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={230} preserveAspectRatio="xMidYMid meet" className="block">
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.20" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <text x={W - 3} y={12} textAnchor="end" fontSize={10} fill={MUTED}>
+        {top.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}
+      </text>
+      <text x={W - 3} y={H - 4} textAnchor="end" fontSize={10} fill={MUTED}>
+        {bottom.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}
+      </text>
+      <path d={area} fill={`url(#${gid})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+      <line x1={0} y1={entryY} x2={W} y2={entryY} stroke={GREEN} strokeWidth={1} strokeDasharray="4 3" opacity={0.9} />
+      <g transform={`translate(4 ${tagY})`}>
+        <rect width={146} height={18} rx={9} fill={pnlUp ? GREEN : RED} />
+        <text x={8} y={13} fontSize={11} fontWeight={700} fill="#fff">
+          {lots.toFixed(2)} lots
+        </text>
+        <text x={138} y={13} textAnchor="end" fontSize={11} fontWeight={700} fill="#fff">
+          {pnlUp ? "+" : "-"}
+          {formatEur(Math.abs(pnl))}
+        </text>
+      </g>
+      <g transform={`translate(${W - 84} ${tagY})`}>
+        <rect width={80} height={18} rx={9} fill={GREEN} />
+        <text x={40} y={13} textAnchor="middle" fontSize={11} fontWeight={700} fill="#fff">
+          {formatPrice(entry, decimals)}
+        </text>
+      </g>
+      <circle cx={lastX} cy={lastY} r={4} fill={color} />
+    </svg>
+  )
+}
+
+// Full-zoom cTrader-style position manager — opened by tapping a position row.
+// It streams the live price and P&L and wires Close / Double / Sell / Buy to
+// the real ring-fenced engine via the terminal's onClose / onTrade callbacks.
+function PositionManage({
+  position,
+  instrument,
+  equity,
+  formatEur,
+  formatPrice,
+  marketOpen,
+  onBack,
+  onCloseRequest,
+  onDouble,
+  onAddSide,
+  onFullChart,
+}: {
+  position: TerminalPosition
+  instrument?: TerminalInstrument
+  equity: number
+  formatEur: (n: number) => string
+  formatPrice: (v: number, decimals: number) => string
+  marketOpen: boolean
+  onBack: () => void
+  onCloseRequest: () => void
+  onDouble: () => void
+  onAddSide: (side: "LONG" | "SHORT") => void
+  onFullChart: () => void
+}) {
+  const p = position
+  const long = p.side === "LONG"
+  const decimals = p.decimals
+  const anchor = Number.isFinite(instrument?.price) && (instrument?.price ?? 0) > 0 ? (instrument as TerminalInstrument).price : p.current
+  const change = instrument?.change ?? 0
+  const clean = p.symbol.replace("/", "")
+
+  const [live, setLive] = useState(anchor)
+  const anchorRef = useRef(anchor)
+  useEffect(() => {
+    anchorRef.current = anchor
+  }, [anchor])
+  useEffect(() => {
+    setLive(anchorRef.current)
+  }, [p.symbol])
+  useEffect(() => {
+    if (!marketOpen) {
+      setLive(anchorRef.current)
+      return
+    }
+    const id = setInterval(() => {
+      setLive((cur) => {
+        const base = anchorRef.current
+        if (!Number.isFinite(base) || base <= 0) return cur
+        const vol = Math.max(base * 0.0006, 1e-9)
+        const drift = (base - cur) * 0.05
+        const shock = (Math.random() - 0.5) * vol * 2
+        return cur + drift + shock
+      })
+    }, 550)
+    return () => clearInterval(id)
+  }, [marketOpen, p.symbol])
+
+  const livePrice = Number.isFinite(live) && live > 0 ? live : anchor
+  const sideSign = long ? 1 : -1
+  // Derive value-per-price-unit from the engine's P&L at the current price so
+  // the live P&L stays honest to the real position, then scale it as the price
+  // ticks. Flat positions (no derivable slope) show the engine figure as-is.
+  const priceMove = (p.current - p.entry) * sideSign
+  const valuePerPrice = Math.abs(priceMove) > 1e-9 ? p.pnl / priceMove : 0
+  const livePnl = valuePerPrice !== 0 ? valuePerPrice * (livePrice - p.entry) * sideSign : p.pnl
+  const pnlUp = livePnl >= 0
+
+  const [size, setSize] = useState(p.lots)
+  const setSizeClamped = (v: number) => setSize(Math.max(0.01, Math.round(v * 100) / 100))
+  const [slOn, setSlOn] = useState(false)
+
+  return (
+    <div className="absolute inset-0 z-40 flex flex-col" style={{ backgroundColor: "#eff0f2" }}>
+      {/* Header */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-black/5 bg-white px-3 py-2.5">
+        <button
+          onClick={onBack}
+          aria-label="Back"
+          className="flex size-9 items-center justify-center rounded-full"
+          style={{ backgroundColor: "#f0f0f2" }}
+        >
+          <ChevronLeft className="size-5" />
+        </button>
+        <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-white" style={{ backgroundColor: "#1c1f24" }}>
+          <span className="text-[15px] font-bold">{clean}</span>
+          {long ? (
+            <ArrowUp className="size-4" style={{ color: GREEN }} />
+          ) : (
+            <ArrowDown className="size-4" style={{ color: RED }} />
+          )}
+          <span className="text-[13px] tabular-nums opacity-90">{p.lots.toFixed(2)}</span>
+        </div>
+        <div className="ml-auto text-right text-[15px] font-semibold tabular-nums">{formatEur(equity)}</div>
+        <button
+          onClick={onBack}
+          aria-label="Close panel"
+          className="flex size-9 items-center justify-center rounded-full"
+          style={{ color: MUTED }}
+        >
+          <X className="size-5" />
+        </button>
+      </div>
+
+      {!marketOpen && (
+        <div className="shrink-0 px-4 py-2 text-center text-[13px] font-medium text-white" style={{ backgroundColor: OIL }}>
+          The market for this symbol is closed.
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+        {/* Live price + entry */}
+        <div className="bg-white px-4 pb-3 pt-3">
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="text-[30px] font-bold leading-none">
+                <PriceText value={livePrice} decimals={decimals} />
+              </div>
+              <div className="mt-1.5 text-[13px]" style={{ color: MUTED }}>
+                Entry {formatPrice(p.entry, decimals)} · {p.name}
+              </div>
+            </div>
+            <button
+              onClick={onFullChart}
+              aria-label="Open full chart"
+              className="flex size-11 items-center justify-center rounded-full"
+              style={{ backgroundColor: "#f0f0f2" }}
+            >
+              <Maximize2 className="size-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Chart with the position overlaid */}
+        <div className="mt-2 overflow-hidden bg-white">
+          <PositionChart
+            symbol={p.symbol}
+            change={change}
+            live={livePrice}
+            entry={p.entry}
+            decimals={decimals}
+            lots={p.lots}
+            pnl={livePnl}
+            long={long}
+            formatEur={formatEur}
+            formatPrice={formatPrice}
+          />
+        </div>
+
+        {/* Sell | Buy */}
+        <div className="mx-3 mt-3 grid grid-cols-2 gap-2 rounded-2xl bg-white p-2">
+          <button
+            onClick={() => onAddSide("SHORT")}
+            className="rounded-xl py-3.5 text-[16px] font-bold"
+            style={long ? { backgroundColor: "#f4f4f6", color: RED } : { backgroundColor: RED, color: "#fff" }}
+          >
+            Sell
+          </button>
+          <button
+            onClick={() => onAddSide("LONG")}
+            className="rounded-xl py-3.5 text-[16px] font-bold"
+            style={long ? { backgroundColor: GREEN, color: "#fff" } : { backgroundColor: "#f4f4f6", color: GREEN }}
+          >
+            Buy
+          </button>
+        </div>
+
+        {/* Size stepper + slider */}
+        <div className="mx-3 mt-2 rounded-2xl bg-white p-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-baseline gap-1">
+              <span className="text-[22px] font-bold tabular-nums">{size.toFixed(1)}</span>
+              <span className="text-[13px]" style={{ color: MUTED }}>
+                lots
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setSizeClamped(size - 0.1)}
+                aria-label="Decrease size"
+                className="flex size-10 items-center justify-center rounded-xl"
+                style={{ backgroundColor: "#f0f0f2" }}
+              >
+                <Minus className="size-5" />
+              </button>
+              <button
+                onClick={() => setSizeClamped(size + 0.1)}
+                aria-label="Increase size"
+                className="flex size-10 items-center justify-center rounded-xl"
+                style={{ backgroundColor: "#f0f0f2" }}
+              >
+                <Plus className="size-5" />
+              </button>
+            </div>
+          </div>
+          <input
+            type="range"
+            min={0.01}
+            max={Math.max(10, p.lots * 2)}
+            step={0.01}
+            value={size}
+            onChange={(e) => setSizeClamped(Number(e.target.value))}
+            className="mt-3 h-2 w-full cursor-pointer appearance-none rounded-full"
+            style={{ accentColor: GREEN, backgroundColor: "#e4e5e8" }}
+          />
+        </div>
+
+        {/* Stop loss */}
+        <div className="mx-3 mt-2 rounded-2xl bg-white p-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[15px] font-bold">Stop loss</span>
+            <button
+              onClick={() => setSlOn((s) => !s)}
+              aria-label="Toggle stop loss"
+              className="flex size-8 items-center justify-center rounded-full text-white"
+              style={{ backgroundColor: slOn ? GREEN : "#1c1f24" }}
+            >
+              {slOn ? <Plus className="size-4" /> : <X className="size-4" />}
+            </button>
+          </div>
+          <p className="mt-1 text-[12px]" style={{ color: MUTED }}>
+            {slOn ? "Confirm the protective stop level in the order ticket." : "No stop loss on this position."}
+          </p>
+        </div>
+      </div>
+
+      {/* Sticky Close / Double footer */}
+      <div className="shrink-0 border-t border-black/5 bg-white px-3 py-3">
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={onCloseRequest}
+            className="flex items-center justify-center gap-2 rounded-xl border py-3.5 text-[16px] font-bold"
+            style={{ borderColor: "#d7d8dc" }}
+          >
+            <X className="size-5" /> Close
+          </button>
+          <button
+            onClick={onDouble}
+            className="flex items-center justify-center gap-2 rounded-xl border py-3.5 text-[16px] font-bold"
+            style={{ borderColor: "#d7d8dc" }}
+          >
+            &times;2 Double
+          </button>
+        </div>
+        <div
+          className="mt-2 flex items-center justify-center gap-1 text-[15px] font-bold"
+          style={{ color: pnlUp ? GREEN : RED }}
+        >
+          P&amp;L {pnlUp ? "+" : "-"}
+          {formatEur(Math.abs(livePnl))}
+          <ChevronRight className="size-4" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function CtraderTerminal(props: CtraderTerminalProps) {
   const {
     instruments,
@@ -587,6 +959,8 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
   const [selected, setSelected] = useState<string>(instruments[0]?.symbol ?? "XAU/USD")
   // Full-zoom cTrader-style symbol detail: opened by tapping a watchlist row.
   const [detailSymbol, setDetailSymbol] = useState<string | null>(null)
+  // Full-zoom cTrader-style position manager: opened by tapping a position row.
+  const [managePosId, setManagePosId] = useState<string | null>(null)
 
   const posCountBySymbol = useMemo(() => {
     const m = new Map<string, number>()
@@ -888,7 +1262,16 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
                 return (
                   <div
                     key={p.id}
-                    className="grid grid-cols-[1.4fr_1fr_1fr_auto] items-center gap-2 border-b border-black/5 px-4 py-3.5"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setManagePosId(p.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        setManagePosId(p.id)
+                      }
+                    }}
+                    className="grid cursor-pointer grid-cols-[1.4fr_1fr_1fr_auto] items-center gap-2 border-b border-black/5 px-4 py-3.5 active:bg-black/[0.03]"
                   >
                     <div className="flex items-center gap-2">
                       <span className="block h-4 w-[3px] rounded-full" style={{ backgroundColor: GRIP }} />
@@ -910,7 +1293,10 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
                       {formatEur(Math.abs(p.pnl))}
                     </div>
                     <button
-                      onClick={() => onClose(p.id)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onClose(p.id)
+                      }}
                       aria-label={`Close ${p.symbol}`}
                       className="flex size-7 items-center justify-center rounded-full"
                       style={{ color: MUTED }}
@@ -1009,6 +1395,42 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
               onClose={() => setDetailSymbol(null)}
               onFullChart={() => {
                 setDetailSymbol(null)
+                setTab("charts")
+              }}
+            />
+          )
+        })()}
+
+      {/* Full-zoom position manager — streams live P&L and wires the engine */}
+      {managePosId &&
+        (() => {
+          const pos = positions.find((p) => p.id === managePosId)
+          if (!pos) return null
+          const inst = instruments.find((i) => i.symbol === pos.symbol)
+          return (
+            <PositionManage
+              position={pos}
+              instrument={inst}
+              equity={equity}
+              formatEur={formatEur}
+              formatPrice={formatPrice}
+              marketOpen={inst ? marketStatus(inst.category).open : true}
+              onBack={() => setManagePosId(null)}
+              onCloseRequest={() => {
+                setManagePosId(null)
+                onClose(pos.id)
+              }}
+              onDouble={() => {
+                setManagePosId(null)
+                onTrade(pos.symbol, pos.side)
+              }}
+              onAddSide={(side) => {
+                setManagePosId(null)
+                onTrade(pos.symbol, side)
+              }}
+              onFullChart={() => {
+                setManagePosId(null)
+                setSelected(pos.symbol)
                 setTab("charts")
               }}
             />
