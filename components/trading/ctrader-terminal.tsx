@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import {
   Search,
   Plus,
@@ -969,6 +970,9 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
   // chart maximum room, portrait keeps the full mobile trading layout.
   const rootRef = useRef<HTMLDivElement>(null)
   const [fullscreen, setFullscreen] = useState(false)
+  // Mounted guard so the full-screen portal only targets document.body on the client.
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
   const enterFullscreen = () => {
     setFullscreen(true)
     const el = rootRef.current
@@ -1025,13 +1029,13 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
     { id: "account", label: "My NAFTAhub", icon: ClipboardList },
   ]
 
-  return (
+  const terminalTree = (
     <div
       ref={rootRef}
       className={cn(
         "flex flex-col overflow-hidden",
         fullscreen
-          ? "fixed inset-0 z-[70] rounded-none border-0"
+          ? "fixed inset-0 z-[100] h-[100dvh] w-screen rounded-none border-0"
           : "relative h-[calc(100dvh-6.5rem)] rounded-2xl border border-black/5 shadow-sm",
       )}
       style={{
@@ -1556,4 +1560,13 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
       </div>
     </div>
   )
+
+  // In full-screen, portal to <body> so no ancestor (the dashboard's chain of
+  // overflow-hidden flex containers + sticky nav) can trap or clip the fixed
+  // overlay — this makes it cover the true device viewport above every platform
+  // element. Normally it renders inline in the trading page.
+  if (fullscreen && mounted) {
+    return createPortal(terminalTree, document.body)
+  }
+  return terminalTree
 }
