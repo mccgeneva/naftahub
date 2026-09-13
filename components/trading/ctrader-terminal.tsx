@@ -7,6 +7,10 @@ import {
   Pencil,
   Bell,
   ChevronRight,
+  ChevronLeft,
+  Minus,
+  Bell as BellIcon,
+  Maximize2,
   ArrowUp,
   ArrowDown,
   ClipboardList,
@@ -172,6 +176,9 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
   const [tab, setTab] = useState<TerminalTab>("markets")
   const [query, setQuery] = useState("")
   const [selected, setSelected] = useState<string>(instruments[0]?.symbol ?? "XAU/USD")
+  // Full-zoom cTrader-style symbol detail: opened by tapping a watchlist row.
+  const [detailSymbol, setDetailSymbol] = useState<string | null>(null)
+  const [lots, setLots] = useState(0.1)
 
   const posCountBySymbol = useMemo(() => {
     const m = new Map<string, number>()
@@ -304,7 +311,7 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
                       className="mb-2 flex w-full items-center gap-2 text-left"
                       onClick={() => {
                         setSelected(it.symbol)
-                        setTab("charts")
+                        setDetailSymbol(it.symbol)
                       }}
                     >
                       <span className="flex flex-col gap-[3px]">
@@ -568,6 +575,254 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
           </div>
         )}
       </div>
+
+      {/* Full-zoom symbol detail (cTrader Overview) */}
+      {detailSymbol &&
+        (() => {
+          const d = instruments.find((i) => i.symbol === detailSymbol)
+          if (!d) return null
+          const up = d.change >= 0
+          const pip = Math.pow(10, -d.decimals)
+          const spreadPips = 0.2 + (hashCode(d.symbol) % 34) / 10
+          const bid = d.price
+          const ask = d.price + spreadPips * pip
+          const rng = Math.max(Math.abs(d.change) / 100, 0.004)
+          const high = d.price * (1 + rng * 0.6)
+          const low = d.price * (1 - rng * 0.6)
+          const abs = d.price * (d.change / 100)
+          const status = marketStatus(d.category)
+          const clean = d.symbol.replace("/", "")
+          const setLotsClamped = (v: number) => setLots(Math.max(0.01, Math.round(v * 100) / 100))
+          return (
+            <div className="absolute inset-0 z-30 flex flex-col" style={{ backgroundColor: "#eff0f2" }}>
+              {/* Detail header */}
+              <div className="flex shrink-0 items-center gap-2 border-b border-black/5 bg-white px-3 py-2.5">
+                <button
+                  onClick={() => setDetailSymbol(null)}
+                  aria-label="Back"
+                  className="flex size-9 items-center justify-center rounded-full"
+                  style={{ backgroundColor: "#f0f0f2" }}
+                >
+                  <ChevronLeft className="size-5" />
+                </button>
+                <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5" style={{ backgroundColor: "#f0f0f2" }}>
+                  <span className="block h-4 w-[3px] rounded-full" style={{ backgroundColor: GRIP }} />
+                  <span className="text-[16px] font-bold">{clean}</span>
+                </div>
+                <div className="ml-auto text-right">
+                  <div className="text-[15px] font-semibold tabular-nums">{formatEur(equity)}</div>
+                </div>
+                <button
+                  onClick={() => setDetailSymbol(null)}
+                  aria-label="Close"
+                  className="flex size-9 items-center justify-center rounded-full"
+                  style={{ color: MUTED }}
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+
+              {!status.open && (
+                <div className="shrink-0 px-4 py-2 text-center text-[13px] font-medium text-white" style={{ backgroundColor: OIL }}>
+                  The market for this symbol is closed.
+                </div>
+              )}
+
+              <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+                {/* Price + change + stats */}
+                <div className="bg-white px-4 pb-3 pt-3">
+                  <div className="flex items-end justify-between">
+                    <div>
+                      <div className="text-[26px] font-bold leading-none">
+                        <PriceText value={d.price} decimals={d.decimals} />
+                      </div>
+                      <div className="mt-1.5 text-[14px] font-semibold" style={{ color: up ? GREEN : OIL }}>
+                        {up ? "+" : ""}
+                        {abs.toLocaleString("en-US", { maximumFractionDigits: d.decimals })} ({up ? "+" : ""}
+                        {d.change.toFixed(2)}%)
+                      </div>
+                    </div>
+                    <div className="text-[13px]" style={{ color: MUTED }}>
+                      {d.name}
+                    </div>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between text-[12px]" style={{ color: MUTED }}>
+                    <span>L: {formatPrice(low, d.decimals)}</span>
+                    <span>S: {spreadPips.toFixed(1)}</span>
+                    <span>H: {formatPrice(high, d.decimals)}</span>
+                  </div>
+                </div>
+
+                {/* SELL | lots | BUY */}
+                <div className="mx-3 mt-3 grid grid-cols-[1fr_auto_1fr] items-stretch gap-2 rounded-2xl bg-white p-2">
+                  <button
+                    onClick={() => onTrade(d.symbol, "SHORT")}
+                    className="flex flex-col items-center justify-center rounded-xl py-3"
+                    style={{ backgroundColor: "#f4f4f6" }}
+                  >
+                    <span className="text-[12px] font-semibold" style={{ color: RED }}>
+                      SELL
+                    </span>
+                    <PriceText value={bid} decimals={d.decimals} className="text-[19px] font-bold" />
+                  </button>
+                  <div className="flex flex-col items-center justify-center rounded-xl border px-3" style={{ borderColor: "#e4e5e8" }}>
+                    <span className="text-[11px]" style={{ color: MUTED }}>
+                      Size
+                    </span>
+                    <span className="text-[16px] font-bold tabular-nums">{lots.toFixed(2)}</span>
+                    <span className="text-[10px]" style={{ color: MUTED }}>
+                      lots
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => onTrade(d.symbol, "LONG")}
+                    className="flex flex-col items-center justify-center rounded-xl py-3"
+                    style={{ backgroundColor: "#f4f4f6" }}
+                  >
+                    <span className="text-[12px] font-semibold" style={{ color: GREEN }}>
+                      BUY
+                    </span>
+                    <PriceText value={ask} decimals={d.decimals} className="text-[19px] font-bold" />
+                  </button>
+                </div>
+
+                {/* Lots stepper */}
+                <div className="mx-3 mt-2 rounded-2xl bg-white p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-[22px] font-bold tabular-nums">{lots.toFixed(1)}</span>
+                      <span className="text-[13px]" style={{ color: MUTED }}>
+                        lots
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setLotsClamped(lots - 0.1)}
+                        aria-label="Decrease size"
+                        className="flex size-10 items-center justify-center rounded-xl"
+                        style={{ backgroundColor: "#f0f0f2" }}
+                      >
+                        <Minus className="size-5" />
+                      </button>
+                      <button
+                        onClick={() => setLotsClamped(lots + 0.1)}
+                        aria-label="Increase size"
+                        className="flex size-10 items-center justify-center rounded-xl"
+                        style={{ backgroundColor: "#f0f0f2" }}
+                      >
+                        <Plus className="size-5" />
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.01}
+                    max={10}
+                    step={0.01}
+                    value={lots}
+                    onChange={(e) => setLotsClamped(Number(e.target.value))}
+                    className="mt-3 h-2 w-full cursor-pointer appearance-none rounded-full"
+                    style={{ accentColor: GREEN, backgroundColor: "#e4e5e8" }}
+                  />
+                  <div className="mt-1 flex justify-between text-[11px]" style={{ color: MUTED }}>
+                    <span>0.01</span>
+                    <span>10</span>
+                  </div>
+                </div>
+
+                {/* Price alert quick row */}
+                <div className="mx-3 mt-2 rounded-2xl bg-white p-3">
+                  <div className="mb-2.5 flex items-center justify-between">
+                    <span className="text-[15px] font-bold">Price alert</span>
+                    <button onClick={onAlerts} className="flex items-center gap-1 text-[13px]" style={{ color: MUTED }}>
+                      All <ChevronRight className="size-4" />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    {["-0.2%", "-0.1%"].map((l) => (
+                      <button
+                        key={l}
+                        onClick={onAlerts}
+                        className="flex-1 rounded-full py-2 text-[13px] font-semibold"
+                        style={{ backgroundColor: `${RED}14`, color: RED }}
+                      >
+                        {l}
+                      </button>
+                    ))}
+                    <button
+                      onClick={onAlerts}
+                      aria-label="Add alert"
+                      className="flex size-10 shrink-0 items-center justify-center rounded-full"
+                      style={{ backgroundColor: `${GRIP}22`, color: GRIP }}
+                    >
+                      <BellIcon className="size-5" />
+                    </button>
+                    {["+0.1%", "+0.2%"].map((l) => (
+                      <button
+                        key={l}
+                        onClick={onAlerts}
+                        className="flex-1 rounded-full py-2 text-[13px] font-semibold"
+                        style={{ backgroundColor: `${GREEN}14`, color: GREEN }}
+                      >
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Live chart */}
+                <div className="mx-3 mt-2 overflow-hidden rounded-2xl bg-white">
+                  <div className="flex items-center justify-between px-3 pt-2.5">
+                    <span className="rounded-md px-2 py-1 text-[12px] font-semibold" style={{ backgroundColor: "#f0f0f2" }}>
+                      m1
+                    </span>
+                    <Maximize2 className="size-4" style={{ color: MUTED }} />
+                  </div>
+                  <TradingViewWidget
+                    key={`detail-${d.symbol}`}
+                    scriptSrc="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"
+                    height={360}
+                    config={{
+                      symbol: tradingViewSymbol(d.symbol),
+                      interval: "1",
+                      timezone: "Etc/UTC",
+                      theme: "light",
+                      style: "1",
+                      locale: "en",
+                      hide_top_toolbar: false,
+                      hide_legend: true,
+                      allow_symbol_change: false,
+                      autosize: true,
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Sticky Sell/Buy footer */}
+              <div className="shrink-0 border-t border-black/5 bg-white px-3 py-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => onTrade(d.symbol, "SHORT")}
+                    className="rounded-xl border py-3.5 text-[16px] font-bold"
+                    style={{ borderColor: `${RED}55`, color: RED }}
+                  >
+                    Sell {lots.toFixed(2)}
+                  </button>
+                  <button
+                    onClick={() => onTrade(d.symbol, "LONG")}
+                    className="rounded-xl py-3.5 text-[16px] font-bold text-white"
+                    style={{ backgroundColor: GREEN }}
+                  >
+                    Buy {lots.toFixed(2)}
+                  </button>
+                </div>
+                <p className="mt-2 text-center text-[11px]" style={{ color: MUTED }}>
+                  Confirm the exact size and stop-loss in the order ticket.
+                </p>
+              </div>
+            </div>
+          )
+        })()}
 
       {/* New order pill */}
       {(tab === "markets" || tab === "positions" || tab === "charts") && selectedInstrument && (
