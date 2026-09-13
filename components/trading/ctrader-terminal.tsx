@@ -252,7 +252,7 @@ function DetailChart({
 
 // Full-zoom cTrader Overview for one symbol. Owns its own live-price stream so
 // only this overlay re-renders on each tick (keeps the terminal fast). The
-// price ticks ~every 900ms around the REAL Yahoo anchor (instrument.price,
+// price ticks ~every 550ms around the REAL Yahoo anchor (instrument.price,
 // refreshed every 12s), mean-reverting so it stays truthful; paused when the
 // market is closed.
 function SymbolDetail({
@@ -297,12 +297,14 @@ function SymbolDetail({
       setLive((cur) => {
         const base = anchorRef.current
         if (!Number.isFinite(base) || base <= 0) return cur
-        const vol = Math.max(base * 0.00035, 1e-9)
-        const drift = (base - cur) * 0.06
+        // Larger per-tick volatility so the visible digits clearly move, but a
+        // mean-reverting pull keeps the price honest to the real Yahoo anchor.
+        const vol = Math.max(base * 0.0006, 1e-9)
+        const drift = (base - cur) * 0.05
         const shock = (Math.random() - 0.5) * vol * 2
         return cur + drift + shock
       })
-    }, 900)
+    }, 550)
     return () => clearInterval(id)
   }, [marketOpen, d.symbol])
 
