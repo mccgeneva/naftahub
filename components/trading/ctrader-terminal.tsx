@@ -390,8 +390,8 @@ function AccountStatsCarousel({
         role="button"
         tabIndex={0}
         aria-label="Account stats — tap to switch view"
-        style={{ touchAction: "manipulation" }}
-        onClick={() => setPage((p) => (p + 1) % PAGES)}
+        style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
+        onPointerDown={() => setPage((p) => (p + 1) % PAGES)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") setPage((p) => (p + 1) % PAGES)
         }}
@@ -400,7 +400,7 @@ function AccountStatsCarousel({
           className="flex"
           style={{
             transform: `translate3d(-${page * 100}%,0,0)`,
-            transition: "transform 320ms cubic-bezier(0.22,1,0.36,1)",
+            transition: "transform 220ms cubic-bezier(0.22,1,0.36,1)",
             willChange: "transform",
           }}
         >
