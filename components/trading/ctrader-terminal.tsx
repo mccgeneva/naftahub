@@ -11,6 +11,7 @@ import {
   Minus,
   Bell as BellIcon,
   Maximize2,
+  Minimize2,
   ArrowUp,
   ArrowDown,
   ClipboardList,
@@ -962,6 +963,45 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
   // Full-zoom cTrader-style position manager: opened by tapping a position row.
   const [managePosId, setManagePosId] = useState<string | null>(null)
 
+  // Immersive full-screen trading: expands the terminal to the whole device
+  // screen (native Fullscreen API where supported, `fixed inset-0` everywhere)
+  // and is orientation-aware — landscape sheds the secondary strips to give the
+  // chart maximum room, portrait keeps the full mobile trading layout.
+  const rootRef = useRef<HTMLDivElement>(null)
+  const [fullscreen, setFullscreen] = useState(false)
+  const enterFullscreen = () => {
+    setFullscreen(true)
+    const el = rootRef.current
+    if (el?.requestFullscreen) el.requestFullscreen().catch(() => {})
+    // Best-effort: lock to landscape hint is not forced — respect the user's rotation.
+  }
+  const exitFullscreen = () => {
+    setFullscreen(false)
+    if (typeof document !== "undefined" && document.fullscreenElement) {
+      document.exitFullscreen?.().catch(() => {})
+    }
+  }
+  useEffect(() => {
+    const onFsChange = () => {
+      if (typeof document !== "undefined" && !document.fullscreenElement) setFullscreen(false)
+    }
+    document.addEventListener("fullscreenchange", onFsChange)
+    return () => document.removeEventListener("fullscreenchange", onFsChange)
+  }, [])
+  useEffect(() => {
+    if (typeof document === "undefined" || !fullscreen) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") exitFullscreen()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => {
+      document.body.style.overflow = prev
+      window.removeEventListener("keydown", onKey)
+    }
+  }, [fullscreen])
+
   const posCountBySymbol = useMemo(() => {
     const m = new Map<string, number>()
     for (const p of positions) m.set(p.symbol, (m.get(p.symbol) ?? 0) + 1)
@@ -987,12 +1027,24 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
 
   return (
     <div
-      className="relative flex h-[calc(100dvh-6.5rem)] flex-col overflow-hidden rounded-2xl border border-black/5 shadow-sm"
-      style={{ backgroundColor: "#eff0f2", color: INK }}
+      ref={rootRef}
+      className={cn(
+        "flex flex-col overflow-hidden",
+        fullscreen
+          ? "fixed inset-0 z-[70] rounded-none border-0"
+          : "relative h-[calc(100dvh-6.5rem)] rounded-2xl border border-black/5 shadow-sm",
+      )}
+      style={{
+        backgroundColor: "#eff0f2",
+        color: INK,
+        ...(fullscreen
+          ? { paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }
+          : {}),
+      }}
     >
       {/* Account strip */}
       <div className="shrink-0 border-b border-black/5 bg-white px-3 pb-2.5 pt-3">
-        <div className="flex items-center gap-2">
+        <div className={cn("flex items-center gap-2", fullscreen && "pr-24")}>
           <div
             className="flex size-9 shrink-0 items-center justify-center rounded-full"
             style={{ backgroundColor: "#e8352410" }}
@@ -1013,8 +1065,19 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
             <span className="absolute right-2 top-1.5 size-2 rounded-full" style={{ backgroundColor: RED }} />
             <div className="text-[15px] font-semibold tabular-nums">{formatEur(equity)}</div>
           </div>
+          {!fullscreen && (
+            <button
+              onClick={enterFullscreen}
+              aria-label="Full-screen trading"
+              title="Full-screen trading"
+              className="flex size-9 shrink-0 items-center justify-center rounded-xl"
+              style={{ backgroundColor: "#f0f0f2", color: INK }}
+            >
+              <Maximize2 className="size-4" />
+            </button>
+          )}
         </div>
-        <div className="mt-2.5 grid grid-cols-3 gap-2">
+        <div className={cn("mt-2.5 grid grid-cols-3 gap-2", fullscreen && "landscape:hidden")}>
           {[
             { label: "Balance", value: formatEur(balance), color: INK },
             { label: "Equity", value: formatEur(equity), color: INK },
@@ -1030,7 +1093,7 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
             </div>
           ))}
         </div>
-        <div className="mt-2 flex items-center gap-2">
+        <div className={cn("mt-2 flex items-center gap-2", fullscreen && "landscape:hidden")}>
           <button
             onClick={onFund}
             className="flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-[13px] font-semibold text-white"
@@ -1400,6 +1463,18 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
             />
           )
         })()}
+
+      {/* Immersive full-screen: clear Exit control, reachable in any orientation */}
+      {fullscreen && (
+        <button
+          onClick={exitFullscreen}
+          aria-label="Exit full-screen trading"
+          className="absolute right-3 z-[80] flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-bold text-white shadow-lg"
+          style={{ top: "calc(env(safe-area-inset-top) + 0.6rem)", backgroundColor: "#1c1f24" }}
+        >
+          <Minimize2 className="size-4" /> Exit
+        </button>
+      )}
 
       {/* Full-zoom position manager — streams live P&L and wires the engine */}
       {managePosId &&
