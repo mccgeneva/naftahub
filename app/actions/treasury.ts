@@ -410,12 +410,52 @@ export async function saveTreasuryRecordAdmin(
       return { ok: false, error: "The contribution could not be moved from the client's balance. Please try again." }
     }
 
+    // --- Record the leverage-financed drawdown as a repayable debit facility ---
+    // The financed portion of a leveraged security deposit is BORROWED principal.
+    // The Debits & Financing facility and its 3% p.a. interest are driven by a
+    // "Treasury Financing" drawdown transaction on the account — without one the
+    // financed amount was invisible everywhere (no facility, no interest, no debit
+    // reflected under the master account). Reconcile a SINGLE drawdown idempotently:
+    // create it when financing first appears (dated from the secured date so
+    // interest accrues from then), keep its id/date on re-save so the accrual start
+    // never drifts, update its amount if the financed figure changes, and drop it if
+    // financing is bought down to zero. Self-funded deposits and pledged collateral
+    // transactions are preserved.
+    const prevFinancingTxn = prev.transactions.find(
+      (t) =>
+        t.type === "deposit" &&
+        typeof t.label === "string" &&
+        t.label.startsWith("Treasury Financing") &&
+        !(t as { settledAt?: string }).settledAt,
+    )
+    const otherTxns = prev.transactions.filter((t) => t !== prevFinancingTxn)
+    let transactions: TreasuryTransaction[] = prev.transactions
+    if (financed > 0.01) {
+      const drawdownDate = prevFinancingTxn?.date ?? securedAt ?? now
+      const financingTxn: TreasuryTransaction = {
+        id: prevFinancingTxn?.id ?? genTreasuryId("TRYFIN"),
+        date: drawdownDate,
+        type: "deposit",
+        label: "Treasury Financing",
+        amount: round2(financed),
+        currency: "EUR",
+        note: `Leverage-financed portion of the security deposit (1:${Math.round(
+          ratio,
+        )} facility) — repayable principal accruing 3% p.a. debit interest from ${new Date(drawdownDate)
+          .toISOString()
+          .slice(0, 10)}.`,
+      }
+      transactions = [financingTxn, ...otherTxns]
+    } else if (prevFinancingTxn) {
+      transactions = otherTxns
+    }
+
     const { rows } = await query(
       `INSERT INTO treasury_accounts
          (user_id, profile, currency, required_deposit, customer_contribution,
           leverage_enabled, leverage_ratio, financed_amount, transaction_exposure,
-          fee_rate, status, established_at, secured_at, updated_at, note, skr_collateral)
-       VALUES ($1,$2,'EUR',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+          fee_rate, status, established_at, secured_at, updated_at, note, skr_collateral, transactions)
+       VALUES ($1,$2,'EUR',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)
        ON CONFLICT (user_id) DO UPDATE SET
          profile = EXCLUDED.profile,
          required_deposit = EXCLUDED.required_deposit,
@@ -430,7 +470,8 @@ export async function saveTreasuryRecordAdmin(
          secured_at = EXCLUDED.secured_at,
          updated_at = EXCLUDED.updated_at,
          note = EXCLUDED.note,
-         skr_collateral = EXCLUDED.skr_collateral
+         skr_collateral = EXCLUDED.skr_collateral,
+         transactions = EXCLUDED.transactions
        RETURNING *`,
       [
         userId,
@@ -448,6 +489,7 @@ export async function saveTreasuryRecordAdmin(
         now,
         note,
         collateral,
+        JSON.stringify(transactions),
       ],
     )
 
