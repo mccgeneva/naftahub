@@ -1291,6 +1291,10 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
 
   const [tab, setTab] = useState<TerminalTab>("markets")
   const [query, setQuery] = useState("")
+  // When the search is focused, the field expands to the whole header row so the
+  // query is fully visible on mobile; the sibling controls collapse away.
+  const [searchFocused, setSearchFocused] = useState(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const [selected, setSelected] = useState<string>(instruments[0]?.symbol ?? "XAU/USD")
   // Full-zoom cTrader-style symbol detail: opened by tapping a watchlist row.
   const [detailSymbol, setDetailSymbol] = useState<string | null>(null)
@@ -1382,7 +1386,7 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
       {/* Account strip */}
       <div className="shrink-0 border-b border-black/5 bg-white px-3 pb-2.5 pt-3">
         <div className={cn("flex items-center gap-2", fullscreen && "pr-24")}>
-          {!fullscreen && (
+          {!fullscreen && !searchFocused && (
             <button
               onClick={onExitTerminal}
               aria-label="Exit trading terminal"
@@ -1394,36 +1398,70 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
               <span className="text-[13px] font-medium">Exit</span>
             </button>
           )}
-          <div
-            className="flex size-9 shrink-0 items-center justify-center rounded-full"
-            style={{ backgroundColor: "#e8352410" }}
-          >
-            <img src="/images/nqai-logo.png" alt="NQAi" className="size-7 rounded-full object-contain" />
-          </div>
-          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-full px-3 py-2" style={{ backgroundColor: "#f0f0f2" }}>
+          {!searchFocused && (
+            <div
+              className="flex size-9 shrink-0 items-center justify-center rounded-full"
+              style={{ backgroundColor: "#e8352410" }}
+            >
+              <img src="/images/nqai-logo.png" alt="NQAi" className="size-7 rounded-full object-contain" />
+            </div>
+          )}
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-full px-3 py-2 transition-all" style={{ backgroundColor: "#f0f0f2" }}>
             <Search className="size-4 shrink-0" style={{ color: MUTED }} />
             <input
+              ref={searchInputRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setSearchFocused(false)}
               placeholder="Search"
               className="w-full min-w-0 bg-transparent text-[15px] outline-none placeholder:text-[#9aa0a8]"
               style={{ color: INK }}
             />
+            {searchFocused && query.length > 0 && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setQuery("")
+                  searchInputRef.current?.focus()
+                }}
+                className="flex size-5 shrink-0 items-center justify-center rounded-full"
+                style={{ backgroundColor: "#d7d8dc", color: INK }}
+              >
+                <X className="size-3.5" />
+              </button>
+            )}
           </div>
-          <div className="relative shrink-0 rounded-xl px-3 py-1.5 text-right" style={{ backgroundColor: "#f0f0f2" }}>
-            <span className="absolute right-2 top-1.5 size-2 rounded-full" style={{ backgroundColor: RED }} />
-            <div className="text-[15px] font-semibold tabular-nums">{formatEur(equity)}</div>
-          </div>
-          {!fullscreen && (
+          {searchFocused ? (
             <button
-              onClick={enterFullscreen}
-              aria-label="Full-screen trading"
-              title="Full-screen trading"
-              className="flex size-9 shrink-0 items-center justify-center rounded-xl"
-              style={{ backgroundColor: "#f0f0f2", color: INK }}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => searchInputRef.current?.blur()}
+              className="shrink-0 px-1 text-[14px] font-medium"
+              style={{ color: RED }}
             >
-              <Maximize2 className="size-4" />
+              Cancel
             </button>
+          ) : (
+            <>
+              <div className="relative shrink-0 rounded-xl px-3 py-1.5 text-right" style={{ backgroundColor: "#f0f0f2" }}>
+                <span className="absolute right-2 top-1.5 size-2 rounded-full" style={{ backgroundColor: RED }} />
+                <div className="text-[15px] font-semibold tabular-nums">{formatEur(equity)}</div>
+              </div>
+              {!fullscreen && (
+                <button
+                  onClick={enterFullscreen}
+                  aria-label="Full-screen trading"
+                  title="Full-screen trading"
+                  className="flex size-9 shrink-0 items-center justify-center rounded-xl"
+                  style={{ backgroundColor: "#f0f0f2", color: INK }}
+                >
+                  <Maximize2 className="size-4" />
+                </button>
+              )}
+            </>
           )}
         </div>
         <div className={cn("mt-2.5", fullscreen && "landscape:hidden")}>
