@@ -25,6 +25,8 @@ import {
 import { getGuaranteeConfig } from "@/lib/guarantees-config-db"
 import { getOverdraftStatusForOwner, computeOverdraftStatus, getSettledBalanceEur } from "@/lib/overdraft"
 import { buildOverdraftInterestPosts } from "@/lib/overdraft-interest"
+import { buildTreasuryFinancingLedgerPosts } from "@/lib/treasury-financing"
+import { query } from "@/lib/db"
 import { gatherGuaranteeProfile, getFinancingRingfence } from "@/lib/guarantees-profile"
 import { guaranteeBlockMessage } from "@/lib/guarantees-accumulator"
 import { planReservation, formatMoney, type ReservationPlan } from "@/lib/fund-reservation"
@@ -3337,6 +3339,42 @@ export async function reconcileMyApprovedCredits(): Promise<{ ok: boolean; appli
       }
     } catch (err) {
       console.log("[v0] overdraft interest accrual failed:", (err as Error).message)
+    }
+
+    // TREASURY FINANCING DEBIT INTEREST. A leverage-financed security deposit is
+    // BORROWED principal that accrues 3% p.a. debit interest, charged MONTHLY
+    // (first month pro-rated from the drawdown date). The Treasury page already
+    // reconciles this, but the Transaction History reads the ledger directly — so
+    // a customer who never opens the Treasury screen would never see the charge.
+    // Post it here too, on every ledger read, so the security-deposit debit charge
+    // shows up in Transaction History WHEN CHARGED. Entry ids are deterministic
+    // per drawdown + month (`treasuryInterestChargeId`), identical to the Treasury
+    // page's, so the two paths are fully idempotent and never double-charge.
+    try {
+      const treasuryMemberIds = Array.from(new Set([session.id, ...(await resolveEnvironmentMemberIds(session.id))]))
+      const { rows: treasuryRows } = await query<{ user_id: string; transactions: unknown }>(
+        `SELECT user_id, transactions FROM treasury_accounts WHERE user_id = ANY($1)`,
+        [treasuryMemberIds],
+      )
+      for (const trow of treasuryRows) {
+        const txns = Array.isArray(trow.transactions) ? trow.transactions : []
+        if (txns.length === 0) continue
+        const ownerId = await resolveDataOwnerIdFor(trow.user_id)
+        const ownerRows = await loadOwnerRows(ownerId)
+        const posts = buildTreasuryFinancingLedgerPosts(
+          { transactions: txns } as Parameters<typeof buildTreasuryFinancingLedgerPosts>[0],
+          new Set(ownerRows.keys()),
+        )
+        for (const post of posts) {
+          const entry: LedgerEntry = { ...post.entry, direction: post.direction }
+          if (ownerRows.has(entry.id)) continue
+          await upsertLedgerEntry(ownerId, entry)
+          ownerRows.set(entry.id, entry)
+          applied += 1
+        }
+      }
+    } catch (err) {
+      console.log("[v0] treasury financing interest accrual failed:", (err as Error).message)
     }
 
     // AUTO-COVER negative currencies. Leverage fees (audit, PPI) and debit
