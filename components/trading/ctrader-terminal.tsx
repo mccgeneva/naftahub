@@ -1382,6 +1382,18 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
       {/* Account strip */}
       <div className="shrink-0 border-b border-black/5 bg-white px-3 pb-2.5 pt-3">
         <div className={cn("flex items-center gap-2", fullscreen && "pr-24")}>
+          {!fullscreen && (
+            <button
+              onClick={onExitTerminal}
+              aria-label="Exit trading terminal"
+              title="Exit trading terminal"
+              className="flex h-9 shrink-0 items-center gap-1 rounded-xl px-2.5"
+              style={{ backgroundColor: "#f0f0f2", color: INK }}
+            >
+              <ChevronLeft className="size-4" />
+              <span className="text-[13px] font-medium">Exit</span>
+            </button>
+          )}
           <div
             className="flex size-9 shrink-0 items-center justify-center rounded-full"
             style={{ backgroundColor: "#e8352410" }}
