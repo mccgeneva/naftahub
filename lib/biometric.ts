@@ -38,8 +38,17 @@ export const DESCRIPTOR_LENGTH = 128
  * genuine matches with real-world capture variance while preserving a healthy
  * gap from impostors. A scan matches only if its distance to an enrolled sample
  * is <= this value.
+ *
+ * 0.55 → 0.66: real production data (80 logged "Face ID verification failed"
+ * events) showed a median genuine-failure distance of 0.670 with confirmed
+ * legitimate users denied at 0.581 and 0.650 — i.e. everyday mobile front-camera
+ * captures (lighting, angle, aging, facial-hair changes) routinely exceed 0.55,
+ * so "Face ID fails for everybody." Impostors still cluster in the 0.70+ tail
+ * (p90 of failures 0.772), so 0.66 admits genuine matches while keeping a gap to
+ * a different face, and it stays a step tighter than the live-vs-print passport
+ * gate (0.68). This is a SECOND factor behind the correct password.
  */
-export const FACE_MATCH_THRESHOLD = 0.55
+export const FACE_MATCH_THRESHOLD = 0.66
 
 /**
  * LOOSER threshold used ONLY for the identity-verification gate, where a LIVE
