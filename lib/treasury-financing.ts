@@ -105,6 +105,37 @@ export function treasuryDrawdownDebitId(txnId: string): string {
   return `TRY-DRAWLOCK-${txnId}`
 }
 
+/**
+ * A financial pool (a Master and its Sub/Joint members) shares ONE security
+ * deposit and ONE ledger. Given every pool member's treasury row, pick the SINGLE
+ * authoritative deposit so the group is shown — and charged — exactly once. Prefer
+ * an active (secured/shortfall) deposit, then one that carries financing, tie-broken
+ * by the EARLIEST securing so interest runs from when the group actually secured.
+ * Returns null when there are no candidates.
+ */
+export type AuthoritativeTreasuryCandidate = {
+  userId: string
+  status?: string | null
+  financedAmount?: number | null
+  securedAt?: string | null
+  establishedAt?: string | null
+  transactions?: unknown
+}
+export function pickAuthoritativeTreasuryFinancing<T extends AuthoritativeTreasuryCandidate>(
+  candidates: T[],
+): T | null {
+  if (candidates.length === 0) return null
+  const isActive = (c: T) => c.status === "secured" || c.status === "shortfall"
+  const isFinanced = (c: T) => (c.financedAmount ?? 0) > 0.01
+  const rank = (c: T) => (isActive(c) ? 2 : 0) + (isFinanced(c) ? 1 : 0)
+  const securedTime = (c: T) => {
+    const d = c.securedAt || c.establishedAt
+    const t = d ? new Date(d).getTime() : Number.POSITIVE_INFINITY
+    return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t
+  }
+  return [...candidates].sort((a, b) => rank(b) - rank(a) || securedTime(a) - securedTime(b))[0]
+}
+
 /** Treasury financing interest accrued to date across all drawdowns. */
 export function accruedTreasuryInterest(
   account: TreasuryAccount | null | undefined,

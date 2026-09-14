@@ -3,12 +3,21 @@
 import { query } from "@/lib/db"
 import { adminActionAuthorized } from "@/lib/admin-auth"
 import { type UserProfile } from "@/lib/users"
-import { resolveAccountProfileById, resolveCurrentSession, resolveDataOwnerIdFor } from "@/lib/session-user"
+import {
+  resolveAccountProfileById,
+  resolveCurrentSession,
+  resolveDataOwnerIdFor,
+  resolveFinancialMemberIds,
+} from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import { readLedgerEntries, upsertLedgerEntry, availableByCurrency, assertOwnerSolvent } from "@/lib/ledger-db"
 import { convertCurrency } from "@/lib/fx"
 import { captureServerError } from "@/lib/debug-log-db"
-import { buildTreasuryFinancingLedgerPosts, treasuryFinancingTxns } from "@/lib/treasury-financing"
+import {
+  buildTreasuryFinancingLedgerPosts,
+  treasuryFinancingTxns,
+  pickAuthoritativeTreasuryFinancing,
+} from "@/lib/treasury-financing"
 import { debitInterestRateFor } from "@/lib/leverage-rates"
 import { insertNotification } from "@/lib/notifications-db"
 import { round2 } from "@/lib/interest-accrual"
@@ -132,8 +141,49 @@ async function readAccount(userId: string): Promise<TreasuryAccount> {
  * double-charges. Never throws: a reconciliation failure must not break the
  * treasury read it piggybacks on. Returns the number of charges newly posted.
  */
-async function reconcileTreasuryInterest(treasuryUserId: string, account: TreasuryAccount): Promise<number> {
+/**
+ * Resolve the ONE authoritative treasury deposit for a user's financial pool
+ * (Master + its Sub/Joint members). A pool shares a single security deposit and a
+ * single ledger, so every member must SEE and be CHARGED for the same deposit —
+ * recording it on two joints must never double-charge the shared master.
+ */
+async function readGroupTreasuryAccount(
+  userId: string,
+): Promise<{ account: TreasuryAccount; treasuryUserId: string }> {
   try {
+    const memberIds = await resolveFinancialMemberIds(userId)
+    if (memberIds.length <= 1) return { account: await readAccount(userId), treasuryUserId: userId }
+    const { rows } = await query<Record<string, unknown>>(
+      `SELECT * FROM treasury_accounts WHERE user_id = ANY($1)`,
+      [memberIds],
+    )
+    if (rows.length === 0) return { account: emptyAccount(), treasuryUserId: userId }
+    const candidates = rows.map((r) => ({ userId: String(r.user_id), account: rowToAccount(r) }))
+    const chosen = pickAuthoritativeTreasuryFinancing(
+      candidates.map((c) => ({
+        userId: c.userId,
+        status: c.account.status,
+        financedAmount: c.account.financedAmount,
+        securedAt: c.account.securedAt,
+        establishedAt: c.account.establishedAt,
+      })),
+    )
+    const winner = chosen ? candidates.find((c) => c.userId === chosen.userId) : undefined
+    if (winner) return { account: winner.account, treasuryUserId: winner.userId }
+    return { account: await readAccount(userId), treasuryUserId: userId }
+  } catch {
+    return { account: await readAccount(userId), treasuryUserId: userId }
+  }
+}
+
+async function reconcileTreasuryInterest(treasuryUserId: string): Promise<number> {
+  try {
+    // Post from the pool's SINGLE authoritative deposit so the group is charged
+    // exactly once, regardless of which member triggered this read. Charging each
+    // member's row independently double-charged the shared master when a deposit
+    // was recorded on more than one joint.
+    const { account, treasuryUserId: authUserId } = await readGroupTreasuryAccount(treasuryUserId)
+
     // Self-heal: a leverage-financed security deposit is BORROWED principal that
     // must surface as a repayable debit facility accruing 3% p.a. — driven by a
     // "Treasury Financing" drawdown transaction. Historically the admin save wrote
@@ -164,7 +214,7 @@ async function reconcileTreasuryInterest(treasuryUserId: string, account: Treasu
       }
       const healed = [financingTxn, ...account.transactions]
       await query(`UPDATE treasury_accounts SET transactions = $2::jsonb, updated_at = now() WHERE user_id = $1`, [
-        treasuryUserId,
+        authUserId,
         JSON.stringify(healed),
       ])
       account.transactions = healed
@@ -176,7 +226,7 @@ async function reconcileTreasuryInterest(treasuryUserId: string, account: Treasu
     // The shared balance lives on the data owner's (Master) ledger — a
     // sub-account's charges must post to its Master, exactly like every other
     // ledger effect in the platform.
-    const ledgerOwnerId = await resolveDataOwnerIdFor(treasuryUserId)
+    const ledgerOwnerId = await resolveDataOwnerIdFor(authUserId)
     const existing = new Set((await readLedgerEntries(ledgerOwnerId)).map((e) => e.id))
 
     const posts = buildTreasuryFinancingLedgerPosts(account, existing)
@@ -191,7 +241,7 @@ async function reconcileTreasuryInterest(treasuryUserId: string, account: Treasu
     void captureServerError(err, {
       kind: "treasury.reconcileInterest",
       userId: treasuryUserId,
-      meta: { profile: account.profile, currency: account.currency },
+      meta: {},
     })
     return 0
   }
@@ -204,10 +254,12 @@ export async function getMyTreasury(): Promise<TreasuryAccount> {
   const user = await getSessionUser()
   if (!user) return emptyAccount()
   try {
-    const account = await readAccount(user.id)
-    // Post any monthly debit interest that has come due (idempotent, server-side)
-    // so the charge lands even if the client-side reconciler never runs.
-    await reconcileTreasuryInterest(user.id, account)
+    // Reconcile FIRST (self-heal + post any due interest on the pool's single
+    // authoritative deposit), then return that same authoritative deposit — so
+    // every member (Master and each Sub/Joint) sees the SAME deposit and the SAME
+    // debit charges, never a per-member duplicate.
+    await reconcileTreasuryInterest(user.id)
+    const { account } = await readGroupTreasuryAccount(user.id)
     return account
   } catch (err) {
     console.log("[v0] getMyTreasury query failed:", (err as Error).message)
@@ -229,10 +281,9 @@ export async function getTreasuryForUserAdmin(
   try {
     await requireAdmin(passcode)
     const account = await readAccount(userId)
-    // Bring the client's ledger current: post any monthly debit interest due on
-    // their treasury financing, so the admin sees every month charged even if
-    // the client has not opened their dashboard since the last month-end.
-    await reconcileTreasuryInterest(userId, account)
+    // Bring the pool's ledger current: post any monthly debit interest due on the
+    // group's single authoritative treasury financing (pool-aware, never double).
+    await reconcileTreasuryInterest(userId)
     return { ok: true, account }
   } catch (err) {
     return { ok: false, error: (err as Error).message }

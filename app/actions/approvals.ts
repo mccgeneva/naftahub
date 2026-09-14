@@ -6,6 +6,7 @@ import {
   resolveAccountProfileById,
   resolveDataOwnerIdFor,
   resolveEnvironmentMemberIds,
+  resolveFinancialMemberIds,
 } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import {
@@ -25,7 +26,7 @@ import {
 import { getGuaranteeConfig } from "@/lib/guarantees-config-db"
 import { getOverdraftStatusForOwner, computeOverdraftStatus, getSettledBalanceEur } from "@/lib/overdraft"
 import { buildOverdraftInterestPosts } from "@/lib/overdraft-interest"
-import { buildTreasuryFinancingLedgerPosts } from "@/lib/treasury-financing"
+import { buildTreasuryFinancingLedgerPosts, pickAuthoritativeTreasuryFinancing } from "@/lib/treasury-financing"
 import { query } from "@/lib/db"
 import { gatherGuaranteeProfile, getFinancingRingfence } from "@/lib/guarantees-profile"
 import { guaranteeBlockMessage } from "@/lib/guarantees-accumulator"
@@ -3351,18 +3352,37 @@ export async function reconcileMyApprovedCredits(): Promise<{ ok: boolean; appli
     // per drawdown + month (`treasuryInterestChargeId`), identical to the Treasury
     // page's, so the two paths are fully idempotent and never double-charge.
     try {
-      const treasuryMemberIds = Array.from(new Set([session.id, ...(await resolveEnvironmentMemberIds(session.id))]))
-      const { rows: treasuryRows } = await query<{ user_id: string; transactions: unknown }>(
-        `SELECT user_id, transactions FROM treasury_accounts WHERE user_id = ANY($1)`,
-        [treasuryMemberIds],
+      // A financial pool (Master + Sub/Joint members) shares ONE deposit and ONE
+      // ledger. Post the group's SINGLE authoritative financing exactly once — a
+      // deposit recorded on more than one joint must never double-charge the master.
+      const poolIds = Array.from(new Set([session.id, ...(await resolveFinancialMemberIds(session.id))]))
+      const { rows: treasuryRows } = await query<{
+        user_id: string
+        status: string | null
+        financed_amount: string | number | null
+        secured_at: string | null
+        established_at: string | null
+        transactions: unknown
+      }>(
+        `SELECT user_id, status, financed_amount, secured_at, established_at, transactions FROM treasury_accounts WHERE user_id = ANY($1)`,
+        [poolIds],
       )
-      for (const trow of treasuryRows) {
-        const txns = Array.isArray(trow.transactions) ? trow.transactions : []
-        if (txns.length === 0) continue
-        const ownerId = await resolveDataOwnerIdFor(trow.user_id)
+      const authoritative = pickAuthoritativeTreasuryFinancing(
+        treasuryRows.map((r) => ({
+          userId: r.user_id,
+          status: r.status,
+          financedAmount: Number(r.financed_amount ?? 0),
+          securedAt: r.secured_at,
+          establishedAt: r.established_at,
+          transactions: r.transactions,
+        })),
+      )
+      const authTxns = authoritative && Array.isArray(authoritative.transactions) ? authoritative.transactions : []
+      if (authoritative && authTxns.length > 0) {
+        const ownerId = await resolveDataOwnerIdFor(authoritative.userId)
         const ownerRows = await loadOwnerRows(ownerId)
         const posts = buildTreasuryFinancingLedgerPosts(
-          { transactions: txns } as Parameters<typeof buildTreasuryFinancingLedgerPosts>[0],
+          { transactions: authTxns } as Parameters<typeof buildTreasuryFinancingLedgerPosts>[0],
           new Set(ownerRows.keys()),
         )
         for (const post of posts) {
