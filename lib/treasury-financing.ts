@@ -97,6 +97,14 @@ export function treasuryInterestChargeId(txnId: string, yearMonth: string): stri
   return `TRY-INT-${txnId}-${yearMonth}`
 }
 
+/** Deterministic ledger ids for the balance-neutral drawdown pair of a financing txn. */
+export function treasuryDrawdownCreditId(txnId: string): string {
+  return `TRY-DRAW-${txnId}`
+}
+export function treasuryDrawdownDebitId(txnId: string): string {
+  return `TRY-DRAWLOCK-${txnId}`
+}
+
 /** Treasury financing interest accrued to date across all drawdowns. */
 export function accruedTreasuryInterest(
   account: TreasuryAccount | null | undefined,
@@ -132,6 +140,54 @@ export function buildTreasuryFinancingLedgerPosts(
   for (const txn of treasuryFinancingTxns(account)) {
     const start = new Date(txn.date)
     if (Number.isNaN(start.getTime())) continue
+
+    // Balance-NEUTRAL drawdown pair so the rented (financed) portion of the
+    // security deposit is VISIBLE in the transaction history: a credit that draws
+    // the financed principal, immediately offset by a debit locking it into the
+    // deposit. Net effect on spendable cash is zero (the client never receives the
+    // financed amount as free cash — it is collateral repaid via the facility +
+    // interest), but both lines appear as transactions. Deterministic ids keep it
+    // idempotent across both reconcilers, and it is skipped once the drawdown is
+    // settled/repaid.
+    const drawCurrency = txn.currency || TREASURY_FINANCING_CURRENCY
+    const drawAmount = Math.max(0, txn.amount)
+    if (drawAmount > 0.01 && !isSettledFinancingTxn(txn)) {
+      const creditId = treasuryDrawdownCreditId(txn.id)
+      const debitId = treasuryDrawdownDebitId(txn.id)
+      if (!existingIds.has(creditId)) {
+        posts.push({
+          direction: "credit",
+          entry: {
+            id: creditId,
+            amount: drawAmount,
+            currency: drawCurrency,
+            status: "completed",
+            date: txn.date,
+            counterparty: "MCC Capital — Treasury Financing Drawdown",
+            reference: txn.id,
+            category: "Treasury Financing Drawdown",
+            comment: "Leverage-financed portion of the security deposit drawn down as borrowed principal.",
+          },
+        })
+      }
+      if (!existingIds.has(debitId)) {
+        posts.push({
+          direction: "debit",
+          entry: {
+            id: debitId,
+            amount: drawAmount,
+            currency: drawCurrency,
+            status: "completed",
+            date: txn.date,
+            counterparty: "MCC Capital — Treasury Security Deposit",
+            reference: txn.id,
+            category: "Security Deposit (financed)",
+            comment:
+              "Financed principal locked into the treasury security deposit (repayable via the financing facility + 3% p.a. interest).",
+          },
+        })
+      }
+    }
 
     for (const charge of monthlyInterestCharges(txn.amount, TREASURY_FINANCING_ANNUAL_RATE, start, accrualCutoff(txn, now))) {
       const chargeId = treasuryInterestChargeId(txn.id, charge.yearMonth)
