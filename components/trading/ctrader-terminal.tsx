@@ -1412,7 +1412,12 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
               ref={searchInputRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onFocus={() => setSearchFocused(true)}
+              onFocus={() => {
+                setSearchFocused(true)
+                // Results render on the Markets list, so surface it wherever the
+                // user tapped search from — otherwise typing appears to do nothing.
+                setTab("markets")
+              }}
               onBlur={() => setSearchFocused(false)}
               placeholder="Search"
               className="w-full min-w-0 bg-transparent text-[15px] outline-none placeholder:text-[#9aa0a8]"
