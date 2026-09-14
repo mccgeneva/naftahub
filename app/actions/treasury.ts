@@ -134,6 +134,42 @@ async function readAccount(userId: string): Promise<TreasuryAccount> {
  */
 async function reconcileTreasuryInterest(treasuryUserId: string, account: TreasuryAccount): Promise<number> {
   try {
+    // Self-heal: a leverage-financed security deposit is BORROWED principal that
+    // must surface as a repayable debit facility accruing 3% p.a. — driven by a
+    // "Treasury Financing" drawdown transaction. Historically the admin save wrote
+    // `financed_amount` but never recorded the drawdown, so the borrowed portion was
+    // invisible (no facility, no interest, nothing under the master account). If an
+    // active deposit has financed principal but no drawdown txn, create one now —
+    // dated from the secured date so interest accrues from when MCC actually lent —
+    // and persist it, so EVERY affected customer heals on their next Treasury read
+    // regardless of whether an admin ever re-saves the record.
+    if (
+      account.financedAmount > 0.01 &&
+      (account.status === "secured" || account.status === "shortfall") &&
+      treasuryFinancingTxns(account).length === 0
+    ) {
+      const drawdownDate = account.securedAt ?? account.establishedAt ?? account.updatedAt ?? new Date().toISOString()
+      const financingTxn: TreasuryTransaction = {
+        id: genTreasuryId("TRYFIN"),
+        date: drawdownDate,
+        type: "deposit",
+        label: "Treasury Financing",
+        amount: round2(account.financedAmount),
+        currency: "EUR",
+        note: `Leverage-financed portion of the security deposit (1:${Math.round(
+          account.leverageRatio,
+        )} facility) — repayable principal accruing 3% p.a. debit interest from ${new Date(drawdownDate)
+          .toISOString()
+          .slice(0, 10)}.`,
+      }
+      const healed = [financingTxn, ...account.transactions]
+      await query(`UPDATE treasury_accounts SET transactions = $2::jsonb, updated_at = now() WHERE user_id = $1`, [
+        treasuryUserId,
+        JSON.stringify(healed),
+      ])
+      account.transactions = healed
+    }
+
     // Cheap guard: nothing to accrue unless there is financed principal.
     if (treasuryFinancingTxns(account).length === 0) return 0
 
