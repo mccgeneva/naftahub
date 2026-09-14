@@ -1406,7 +1406,9 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
               <img src="/images/nqai-logo.png" alt="NQAi" className="size-7 rounded-full object-contain" />
             </div>
           )}
-          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-full px-3 py-2 transition-all" style={{ backgroundColor: "#f0f0f2" }}>
+          <div
+            onPointerDown={() => searchInputRef.current?.focus()}
+            className="flex min-w-0 flex-1 cursor-text items-center gap-2 rounded-full px-3 py-2 transition-all" style={{ backgroundColor: "#f0f0f2" }}>
             <Search className="size-4 shrink-0" style={{ color: MUTED }} />
             <input
               ref={searchInputRef}
