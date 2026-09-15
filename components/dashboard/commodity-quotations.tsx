@@ -44,6 +44,7 @@ import {
   PRODUCTS,
   PRODUCT_CATEGORIES,
   getQuote,
+  resolveLiveAnchor,
   formatQuotePrice,
   formatUnit,
   convertQuantity,
@@ -52,7 +53,9 @@ import {
   type ProductCategory,
   type PetroleumProduct,
   type Port,
+  type LiveBenchmarks,
 } from "@/lib/commodity-quotations"
+import { useMarketQuotes } from "@/lib/use-market"
 import { useCommodityDeals } from "@/lib/commodity-deals-store"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { useActivityLog } from "@/components/activity-tracker"
@@ -109,6 +112,18 @@ export function CommodityQuotations() {
 
   const now = useMemo(() => new Date(), [tick])
 
+  // Live crude benchmarks anchor the whole board to the real market. SWR here
+  // revalidates on focus + every 12s, so the prices refresh each time the
+  // section is opened.
+  const { quotes: liveQuotes } = useMarketQuotes(["BRENT", "WTI"])
+  const live = useMemo<LiveBenchmarks>(
+    () => ({
+      brent: liveQuotes.BRENT ? { price: liveQuotes.BRENT.price, changePct: liveQuotes.BRENT.changePct } : undefined,
+      wti: liveQuotes.WTI ? { price: liveQuotes.WTI.price, changePct: liveQuotes.WTI.changePct } : undefined,
+    }),
+    [liveQuotes],
+  )
+
   const selectedPort = PORTS.find((p) => p.id === selectedPortId) ?? PORTS[0]
   const selectedProduct = PRODUCTS.find((p) => p.id === selectedProductId) ?? PRODUCTS[0]
 
@@ -133,10 +148,10 @@ export function CommodityQuotations() {
         key: product.id,
         product,
         port: selectedPort,
-        fob: getQuote(product, selectedPort, "FOB", now),
-        cif: getQuote(product, selectedPort, "CIF", now),
+        fob: getQuote(product, selectedPort, "FOB", now, resolveLiveAnchor(product, live)),
+        cif: getQuote(product, selectedPort, "CIF", now, resolveLiveAnchor(product, live)),
       }))
-  }, [portFilter, portFilterProductId, search, selectedPort, now])
+  }, [portFilter, portFilterProductId, search, selectedPort, now, live])
 
   // Rows for "By Product" mode: ports (filtered by search) for one product.
   const productRows = useMemo(() => {
@@ -147,10 +162,10 @@ export function CommodityQuotations() {
       key: port.id,
       product: selectedProduct,
       port,
-      fob: getQuote(selectedProduct, port, "FOB", now),
-      cif: getQuote(selectedProduct, port, "CIF", now),
+      fob: getQuote(selectedProduct, port, "FOB", now, resolveLiveAnchor(selectedProduct, live)),
+      cif: getQuote(selectedProduct, port, "CIF", now, resolveLiveAnchor(selectedProduct, live)),
     }))
-  }, [search, selectedProduct, now])
+  }, [search, selectedProduct, now, live])
 
   const rows = mode === "port" ? portRows : productRows
   const unit = mode === "port" ? undefined : selectedProduct.unit
@@ -589,6 +604,14 @@ function RequestProductDialog({
   const { addDeal } = useCommodityDeals()
   const user = useCurrentUser()
   const log = useActivityLog()
+  const { quotes: liveQuotes } = useMarketQuotes(["BRENT", "WTI"])
+  const live = useMemo<LiveBenchmarks>(
+    () => ({
+      brent: liveQuotes.BRENT ? { price: liveQuotes.BRENT.price, changePct: liveQuotes.BRENT.changePct } : undefined,
+      wti: liveQuotes.WTI ? { price: liveQuotes.WTI.price, changePct: liveQuotes.WTI.changePct } : undefined,
+    }),
+    [liveQuotes],
+  )
 
   const [basis, setBasis] = useState<PriceBasis>("CIF")
   const [portId, setPortId] = useState<string>(PORTS[0].id)
@@ -614,8 +637,8 @@ function RequestProductDialog({
   const port = PORTS.find((p) => p.id === portId) ?? seed?.port ?? PORTS[0]
 
   const quote = useMemo(
-    () => (product ? getQuote(product, port, basis, new Date()) : null),
-    [product, port, basis],
+    () => (product ? getQuote(product, port, basis, new Date(), resolveLiveAnchor(product, live)) : null),
+    [product, port, basis, live],
   )
 
   const qtyNum = Number.parseFloat(quantity.replace(/,/g, ""))

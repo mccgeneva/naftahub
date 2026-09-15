@@ -235,22 +235,80 @@ function dailyBase(product: PetroleumProduct, d: Date): number {
   return product.base * (1 + today * product.volatility)
 }
 
+// --- Live market anchoring ---------------------------------------------------
+//
+// The board is derived from two live crude benchmarks (Brent BZ=F, WTI CL=F,
+// both USD/bbl, fetched from `/api/market`). When a live anchor is supplied the
+// grade's daily base becomes the REAL current price instead of the frozen seed,
+// so the whole 26-grade board tracks the market and refreshes every time the
+// section is opened (the SWR feed revalidates on focus + every 12s). Without
+// live data it falls back to the deterministic seeded base, so nothing breaks
+// offline / on weekends.
+
+/** A live benchmark quote as returned by `/api/market` (changePct in PERCENT). */
+export interface LiveBenchmark {
+  price: number
+  /** Percent change vs previous close, e.g. 1.06 = +1.06%. */
+  changePct: number
+}
+export interface LiveBenchmarks {
+  brent?: LiveBenchmark
+  wti?: LiveBenchmark
+}
+/** Resolved anchor fed into `getQuote` (changePct as a FRACTION, e.g. 0.0106). */
+export interface LiveAnchor {
+  base: number
+  changePct: number
+}
+
+const BRENT_SEED_BASE = PRODUCTS.find((p) => p.id === "brent")?.base ?? 82.4
+const WTI_SEED_BASE = PRODUCTS.find((p) => p.id === "wti")?.base ?? 78.1
+
+/**
+ * Resolve a live daily-base anchor for a product from the live crude benchmarks.
+ * Brent and WTI anchor directly to their own live price. Every other grade has
+ * no direct live symbol here, so it scales its curated seed base by the real
+ * Brent (fallback WTI) move — keeping realistic absolute levels and inter-grade
+ * spreads while the whole complex follows the live market. Returns undefined
+ * when no live data is available (caller then uses the deterministic base).
+ */
+export function resolveLiveAnchor(
+  product: PetroleumProduct,
+  live: LiveBenchmarks | undefined,
+): LiveAnchor | undefined {
+  if (!live) return undefined
+  const { brent, wti } = live
+  if (product.id === "brent" && brent && brent.price > 0) {
+    return { base: brent.price, changePct: brent.changePct / 100 }
+  }
+  if (product.id === "wti" && wti && wti.price > 0) {
+    return { base: wti.price, changePct: wti.changePct / 100 }
+  }
+  const ref =
+    brent && brent.price > 0
+      ? { price: brent.price, seed: BRENT_SEED_BASE, chg: brent.changePct }
+      : wti && wti.price > 0
+        ? { price: wti.price, seed: WTI_SEED_BASE, chg: wti.changePct }
+        : null
+  if (!ref || ref.seed <= 0) return undefined
+  return { base: product.base * (ref.price / ref.seed), changePct: ref.chg / 100 }
+}
+
 /**
  * Compute a single quotation for a product at a port on a given basis.
- * `now` defaults to the current time; prices only move on the hour.
+ * `now` defaults to the current time. When `anchor` is supplied the price is
+ * anchored to the live market; otherwise prices only move on the hour.
  */
 export function getQuote(
   product: PetroleumProduct,
   port: Port,
   basis: PriceBasis,
   now: Date = new Date(),
+  anchor?: LiveAnchor,
 ): Quote {
-  const base = dailyBase(product, now)
-
-  // Previous-day base to derive a day-over-day change.
-  const yesterday = new Date(now)
-  yesterday.setUTCDate(now.getUTCDate() - 1)
-  const prevBase = dailyBase(product, yesterday)
+  // Daily anchor: the LIVE benchmark price when supplied, else the deterministic
+  // seeded daily base.
+  const base = anchor ? anchor.base : dailyBase(product, now)
 
   // Intraday wobble seeded by the hour so the board "ticks" hourly.
   const hour = now.getUTCHours()
@@ -266,9 +324,19 @@ export function getQuote(
   const cifPremium = (0.012 + port.freightTier * 0.009 + product.volatility * 0.4)
   const price = basis === "CIF" ? fob * (1 + cifPremium) : fob
 
-  const prevFob = prevBase * (1 + port.fobDiff) * discount
-  const prevPrice = basis === "CIF" ? prevFob * (1 + cifPremium) : prevFob
-  const changePct = (price - prevPrice) / prevPrice
+  let changePct: number
+  if (anchor) {
+    // Real day-over-day move of the underlying benchmark (already a fraction).
+    changePct = anchor.changePct
+  } else {
+    // Previous-day base to derive a deterministic day-over-day change.
+    const yesterday = new Date(now)
+    yesterday.setUTCDate(now.getUTCDate() - 1)
+    const prevBase = dailyBase(product, yesterday)
+    const prevFob = prevBase * (1 + port.fobDiff) * discount
+    const prevPrice = basis === "CIF" ? prevFob * (1 + cifPremium) : prevFob
+    changePct = (price - prevPrice) / prevPrice
+  }
 
   return { product, port, basis, price, changePct }
 }

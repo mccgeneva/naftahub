@@ -7,8 +7,11 @@ import {
   PORTS,
   PRODUCTS,
   getQuote,
+  resolveLiveAnchor,
   formatQuotePrice,
+  type LiveBenchmarks,
 } from "@/lib/commodity-quotations"
+import { useMarketQuotes } from "@/lib/use-market"
 import { cn } from "@/lib/utils"
 
 // A compact CIF/FOB board for the console: the desk's key grades priced at a
@@ -31,14 +34,25 @@ export function CommodityPanel() {
   const now = useMemo(() => new Date(), [tick])
   const port = PORTS.find((p) => p.id === portId) ?? PORTS[0]
 
+  // Live crude benchmarks so the compact board tracks the real market and
+  // refreshes on entry (SWR revalidates on focus + every 12s).
+  const { quotes: liveQuotes } = useMarketQuotes(["BRENT", "WTI"])
+  const live = useMemo<LiveBenchmarks>(
+    () => ({
+      brent: liveQuotes.BRENT ? { price: liveQuotes.BRENT.price, changePct: liveQuotes.BRENT.changePct } : undefined,
+      wti: liveQuotes.WTI ? { price: liveQuotes.WTI.price, changePct: liveQuotes.WTI.changePct } : undefined,
+    }),
+    [liveQuotes],
+  )
+
   const rows = useMemo(
     () =>
       PRODUCTS.filter((p) => KEY_PRODUCT_IDS.includes(p.id)).map((product) => ({
         product,
-        fob: getQuote(product, port, "FOB", now),
-        cif: getQuote(product, port, "CIF", now),
+        fob: getQuote(product, port, "FOB", now, resolveLiveAnchor(product, live)),
+        cif: getQuote(product, port, "CIF", now, resolveLiveAnchor(product, live)),
       })),
-    [port, now],
+    [port, now, live],
   )
 
   return (
