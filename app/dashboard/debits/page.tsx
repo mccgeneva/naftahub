@@ -22,6 +22,7 @@ import { useLedger } from "@/lib/ledger-store"
 import { buildDebitSchedule, type DebitKind } from "@/lib/debit-schedule"
 import { formatMoney } from "@/lib/fund-reservation"
 import { DebitFacilities } from "@/components/dashboard/debits/debit-facilities"
+import { DebitIncomePanel } from "@/components/dashboard/debits/debit-income-panel"
 import { DebitCalendar } from "@/components/dashboard/debits/debit-calendar"
 import { DebitChargeList } from "@/components/dashboard/debits/debit-charge-list"
 import { DebitScenarios } from "@/components/dashboard/debits/debit-scenarios"
@@ -238,6 +239,12 @@ export default function DebitsPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Income side — what ROI is coming in to cover the financing, so the
+              customer can weigh incomes against debits at a glance. */}
+          {hasActive && (
+            <DebitIncomePanel monthlyInterest={schedule.totals.monthlyRunRate} currency={primaryCurrency} />
+          )}
 
           {/* Secondary figures — lifetime + projection, clearly labelled. */}
           <div className="grid gap-4 sm:grid-cols-2">
