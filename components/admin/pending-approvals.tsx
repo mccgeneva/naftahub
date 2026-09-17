@@ -116,6 +116,16 @@ import {
 } from "@/app/actions/bankeka"
 import { Messenger } from "@/components/bankeka/messenger"
 import type { ProjectFundingRequest, UploadedFundingDoc } from "@/lib/project-funding-store"
+import {
+  FACILITY_TYPE_LABELS,
+  formatTenor,
+  getLoanProduct,
+  isLoanFacility,
+  loanArrangementFee,
+  loanBaseArrangementFee,
+  loanCollateralSurcharge,
+  loanCoverageRatio,
+} from "@/lib/loan-products"
 
 const STATUS_OPTIONS: { value: ApprovalStatus | "all"; label: string }[] = [
   { value: "pending", label: "Pending" },
@@ -144,6 +154,40 @@ function fundingRecord(req: ApprovalRequest): ProjectFundingRequest | null {
   if (req.kind !== "project_funding") return null
   const rec = (req.payload as { record?: ProjectFundingRequest } | undefined)?.record
   return rec && typeof rec === "object" && rec.id ? rec : null
+}
+
+/** Loan-facility terms for a project-funding request (null for AES equity or any
+ *  other kind). Recomputes the arrangement fee AUTHORITATIVELY from facility +
+ *  collateral so the admin sees exactly what will be charged on approval. */
+function loanFacilityInfo(req: ApprovalRequest): {
+  label: string
+  currency: string
+  annualRate: number
+  tenorMonths: number
+  collateral: number
+  coverage: number
+  baseFee: number
+  surcharge: number
+  totalFee: number
+} | null {
+  const rec = fundingRecord(req)
+  if (!rec || !isLoanFacility(rec.facilityType)) return null
+  const t = rec.facilityType
+  const product = getLoanProduct(t)
+  if (!product) return null
+  const facility = Number(rec.facility) || 0
+  const collateral = Number(rec.collateralValue) || 0
+  return {
+    label: FACILITY_TYPE_LABELS[t],
+    currency: rec.currency || req.currency || "USD",
+    annualRate: product.annualRate,
+    tenorMonths: product.maxTenorMonths,
+    collateral,
+    coverage: loanCoverageRatio(facility, collateral, t),
+    baseFee: loanBaseArrangementFee(facility, t),
+    surcharge: loanCollateralSurcharge(facility, collateral, t),
+    totalFee: loanArrangementFee(facility, collateral, t),
+  }
 }
 
 /** PPI picture for a leverage application: the original premium charged at
@@ -384,7 +428,7 @@ function FundingDocViewer({ doc, onClose }: { doc: UploadedFundingDoc; onClose: 
   const url = doc.pathname ? blobFileUrl(doc.pathname, ADMIN_PASSCODE) : ""
 
   // A plain `<a download>` does NOT trigger a save inside the installed PWA /
-  // in-app webview — it just navigates the single webview and traps the admin.
+  // in-app webview �� it just navigates the single webview and traps the admin.
   // Instead fetch the file and hand it to the OS: the native share sheet on
   // mobile (Save to Files) or an object-URL download on desktop, mirroring the
   // app's proven `deliverPdf` pattern. Falls back to opening the file if all
@@ -1691,6 +1735,66 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                         )
                       })()}
                       {req.kind === "commodity_amendment" && <AmendmentDiff payload={req.payload} />}
+                      {(() => {
+                        const loan = loanFacilityInfo(req)
+                        if (!loan) return null
+                        return (
+                          <div className="mt-1.5 rounded-md border border-border bg-muted/20 p-2.5 text-[11px]">
+                            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-foreground">
+                              <FileText className="h-3.5 w-3.5 text-primary" />
+                              {loan.label} — terms &amp; conditions
+                            </div>
+                            <dl className="space-y-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <dt className="text-muted-foreground">Interest rate</dt>
+                                <dd className="font-medium text-foreground">
+                                  {(loan.annualRate * 100).toFixed(2)}% / yr
+                                </dd>
+                              </div>
+                              <div className="flex items-center justify-between gap-2">
+                                <dt className="text-muted-foreground">Tenor</dt>
+                                <dd className="font-medium text-foreground">{formatTenor(loan.tenorMonths)}</dd>
+                              </div>
+                              <div className="flex items-center justify-between gap-2">
+                                <dt className="text-muted-foreground">Collateral coverage</dt>
+                                <dd className="font-medium text-foreground">
+                                  {loan.collateral > 0 ? formatMoney2(loan.collateral, loan.currency) : "None"} ·{" "}
+                                  {(loan.coverage * 100).toFixed(0)}%
+                                </dd>
+                              </div>
+                            </dl>
+                            <div className="mt-1.5 space-y-1 border-t border-border/60 pt-1.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <dt className="text-muted-foreground">Base arrangement fee</dt>
+                                <dd className="text-foreground">{formatMoney2(loan.baseFee, loan.currency)}</dd>
+                              </div>
+                              {loan.surcharge > 0 && (
+                                <div className="flex items-start justify-between gap-2">
+                                  <dt className="text-amber-600 dark:text-amber-400">
+                                    Under-collateral surcharge
+                                    <span className="block text-[10px] text-muted-foreground">
+                                      {(100 - loan.coverage * 100).toFixed(0)}% uncovered
+                                    </span>
+                                  </dt>
+                                  <dd className="text-amber-600 dark:text-amber-400">
+                                    +{formatMoney2(loan.surcharge, loan.currency)}
+                                  </dd>
+                                </div>
+                              )}
+                              <div className="flex items-center justify-between gap-2">
+                                <dt className="font-semibold text-foreground">Total upfront cost</dt>
+                                <dd className="font-semibold text-foreground">
+                                  {formatMoney2(loan.totalFee, loan.currency)}
+                                </dd>
+                              </div>
+                            </div>
+                            <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
+                              The total upfront arrangement fee is charged to the client&apos;s Master Account on
+                              approval. Interest then accrues monthly on the facility across the tenor.
+                            </p>
+                          </div>
+                        )
+                      })()}
                       {funding && <FundingDocuments docs={funding.uploadedDocuments} />}
                       {ppi && (
                         <div className="mt-1.5 rounded-md border border-orange-500/30 bg-orange-500/5 p-2.5">

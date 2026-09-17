@@ -2,7 +2,7 @@
 
 import { createContext, useContext } from "react"
 import type { AesEquityComponent } from "@/lib/aes"
-import type { FacilityType } from "@/lib/loan-products"
+import { FACILITY_TYPE_LABELS, formatTenor, isLoanFacility, type FacilityType } from "@/lib/loan-products"
 import { mirrorSubmission } from "@/lib/approval-sync"
 import { useServerRequestList } from "@/lib/use-server-request-list"
 
@@ -193,7 +193,9 @@ export function ProjectFundingProvider({ children }: { children: React.ReactNode
     void mirrorSubmission({
       kind: "project_funding",
       title: `${full.projectName} · ${full.sector}`,
-      summary: `${full.currency} ${full.facility.toLocaleString("en-US")} facility for ${full.projectName} (${full.jurisdiction}) — equity ${full.currency} ${full.totalEquity.toLocaleString("en-US")} @ ${full.effectiveRate}%`,
+      summary: isLoanFacility(full.facilityType)
+        ? `${full.currency} ${full.facility.toLocaleString("en-US")} ${FACILITY_TYPE_LABELS[full.facilityType]} for ${full.projectName} (${full.jurisdiction}) — ${((full.annualRate ?? 0) * 100).toFixed(2)}%/yr, ${formatTenor(full.tenorMonths ?? 0)}, arrangement fee ${full.currency} ${(full.arrangementFee ?? 0).toLocaleString("en-US")} on approval`
+        : `${full.currency} ${full.facility.toLocaleString("en-US")} facility for ${full.projectName} (${full.jurisdiction}) — equity ${full.currency} ${full.totalEquity.toLocaleString("en-US")} @ ${full.effectiveRate}%`,
       amount: full.facility,
       currency: full.currency,
       payload: { localId: full.id, sector: full.sector, jurisdiction: full.jurisdiction, record: full },
