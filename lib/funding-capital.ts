@@ -1,4 +1,5 @@
 import { AES_ANNUAL_COST_RATE, AES_EARLY_REDEMPTION_RATE, AES_STANDARD_TENOR_YEARS } from "@/lib/aes"
+import { FACILITY_TYPE_LABELS, isLoanFacility } from "@/lib/loan-products"
 import type { LedgerEntry } from "@/lib/ledger-store"
 import type { FundingSettlementSnapshot, ProjectFundingRequest } from "@/lib/project-funding-store"
 import {
@@ -68,6 +69,33 @@ export function fundingSettlementFeeId(requestId: string): string {
 /** The date a request's capital is credited (and from which interest accrues). */
 export function fundingCreditDate(r: ProjectFundingRequest): Date {
   return r.decidedAt ? new Date(r.decidedAt) : new Date(r.submittedAt)
+}
+
+/**
+ * The capital-credit ledger entry (body, minus direction) for an approved
+ * facility. Loan facilities read as a loan drawdown; AES equity keeps its
+ * existing label. Both the client-side FundingCapitalReconciler and the
+ * server-side approve path build the entry through THIS helper so they produce
+ * byte-identical rows on the shared deterministic `FND-CAP-<recordId>` id —
+ * whichever posts first, the other's upsert is a no-op (never doubled).
+ */
+export function fundingCapitalCreditEntry(r: ProjectFundingRequest): Omit<LedgerEntry, "direction"> {
+  const ft = r.facilityType
+  const loan = ft ? isLoanFacility(ft) : false
+  return {
+    id: fundingCapitalCreditId(r.id),
+    amount: r.facility,
+    currency: r.currency,
+    status: "completed",
+    date: fundingCreditDate(r).toISOString(),
+    counterparty: loan ? "MCC Capital — Loan Drawdown" : "MCC Capital — AES Facility Drawdown",
+    reference: r.id,
+    category: "Project Funding",
+    comment:
+      ft && isLoanFacility(ft)
+        ? `Approved ${FACILITY_TYPE_LABELS[ft]} facility for "${r.projectName}" drawn down to the master account.`
+        : `Approved AES facility for "${r.projectName}" credited to the master account.`,
+  }
 }
 
 const MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000
@@ -159,20 +187,7 @@ export function buildFundingLedgerPosts(
     // 1. Capital credit (once).
     const creditId = fundingCapitalCreditId(r.id)
     if (!existingIds.has(creditId)) {
-      posts.push({
-        direction: "credit",
-        entry: {
-          id: creditId,
-          amount: r.facility,
-          currency: r.currency,
-          status: "completed",
-          date: approvedAt.toISOString(),
-          counterparty: "MCC Capital — AES Facility Drawdown",
-          reference: r.id,
-          category: "Project Funding",
-          comment: `Approved AES facility for "${r.projectName}" credited to the master account.`,
-        },
-      })
+      posts.push({ direction: "credit", entry: fundingCapitalCreditEntry(r) })
     }
 
     // 2. Monthly cost-of-capital charges at each elapsed calendar month-end,

@@ -26,6 +26,8 @@ import {
 import { getGuaranteeConfig } from "@/lib/guarantees-config-db"
 import { getOverdraftStatusForOwner, computeOverdraftStatus, getSettledBalanceEur } from "@/lib/overdraft"
 import { FACILITY_TYPE_LABELS, isLoanFacility, loanArrangementFee } from "@/lib/loan-products"
+import { fundingCapitalCreditEntry } from "@/lib/funding-capital"
+import type { ProjectFundingRequest } from "@/lib/project-funding-store"
 import { buildOverdraftInterestPosts } from "@/lib/overdraft-interest"
 import { buildTreasuryFinancingLedgerPosts, pickAuthoritativeTreasuryFinancing } from "@/lib/treasury-financing"
 import { query } from "@/lib/db"
@@ -4558,6 +4560,21 @@ export async function adminDecideApproval(
       // hiccup never blocks the approval (it settles into the authorized
       // overdraft like the app's other approve-time charges).
       if (updated.kind === "project_funding") {
+        // Disburse the facility PRINCIPAL to the client's Master Account on
+        // approval. Uses the SAME deterministic FND-CAP-<recordId> id as the
+        // client-side FundingCapitalReconciler, so the two paths dedupe and the
+        // facility is never double-credited — this just makes the loan/AES
+        // capital reflect IMMEDIATELY on approval instead of only when the
+        // client next loads their own dashboard (the reconciler is client-side).
+        try {
+          const fundingRec = (updated.payload as { record?: ProjectFundingRequest } | undefined)?.record
+          if (fundingRec && Number(fundingRec.facility) > 0) {
+            const ownerId = await resolveDataOwnerIdFor(updated.userId)
+            await upsertLedgerEntry(ownerId, { direction: "credit", ...fundingCapitalCreditEntry(fundingRec) })
+          }
+        } catch (err) {
+          console.log("[v0] funding capital credit on approve failed:", (err as Error).message)
+        }
         try {
           const rec = (updated.payload as Record<string, unknown> | undefined)?.record as
             | {
