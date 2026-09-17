@@ -4,7 +4,7 @@
 import { jsPDF } from "jspdf"
 import type { GeneratedPdf } from "@/lib/pdf-core"
 import { drawBrandMark } from "@/lib/pdf-logos"
-import { issuerBankLines } from "@/lib/issuer-bank"
+import { issuerBankLines, ISSUER_BANK } from "@/lib/issuer-bank"
 
 export interface ReceiptData {
   reference: string
@@ -197,14 +197,26 @@ export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
     name: data.accountHolder || BRAND.name,
     lines: [data.accountHolderAddress || BRAND.address, ...(isCredit ? [] : issuerBankLines())],
   }
+  // On an incoming credit the sender is the platform's fixed UBS Switzerland
+  // issuer account. The ledger carries the UBS bank/BIC but its `iban`/`account`
+  // field holds the RECIPIENT's own receiving IBAN — so when the sender bank is
+  // the UBS issuer, print the canonical issuer coordinates (correct UBS Swiss
+  // IBAN) instead of the recipient's account IBAN.
+  const senderBankText = `${data.bank ?? ""} ${data.bic ?? ""}`.toUpperCase()
+  const senderIsIssuer =
+    isCredit &&
+    (senderBankText.includes(ISSUER_BANK.swift) ||
+      senderBankText.includes(ISSUER_BANK.name.toUpperCase()))
   const otherParty = {
     name: data.counterparty,
-    lines: [
-      data.counterpartyAddress || "",
-      data.bank ? `Bank: ${data.bank}` : "",
-      data.bic ? `BIC/SWIFT: ${data.bic}` : "",
-      data.iban ? `IBAN: ${data.iban}` : "",
-    ],
+    lines: senderIsIssuer
+      ? [data.counterpartyAddress || "", ...issuerBankLines()]
+      : [
+          data.counterpartyAddress || "",
+          data.bank ? `Bank: ${data.bank}` : "",
+          data.bic ? `BIC/SWIFT: ${data.bic}` : "",
+          data.iban ? `IBAN: ${data.iban}` : "",
+        ],
   }
 
   // For credits: sender = counterparty, beneficiary = client.
