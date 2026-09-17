@@ -2823,6 +2823,13 @@ function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
   // the bug where "reserved" reappears for a delivered deal.
   const isDelivered = (req.payload as { delivered?: boolean } | undefined)?.delivered === true
 
+  // Stamp the ledger entry with the approval's OWN decision date (falling back
+  // to its creation date), NOT "now". This builder also runs on every reconcile
+  // / backfill, so using the current time would re-date an approval from last
+  // week to today every time the ledger hydrates — making genuinely old credits
+  // (monetization, leverage, etc.) all appear dated today.
+  const entryDate = req.decidedAt ?? req.createdAt ?? new Date().toISOString()
+
   const fx = req.ledgerEffect
   if (fx) {
     const amount = Number(fx.amount)
@@ -2836,7 +2843,7 @@ function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
       amount,
       currency: fx.currency || req.currency || BASE_CURRENCY,
       status: settledByDelivery ? "completed" : baseStatus,
-      date: new Date().toISOString(),
+      date: entryDate,
       counterparty: fx.counterparty ?? req.title,
       account: fx.account,
       bank: fx.bank,
@@ -2863,7 +2870,7 @@ function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
       amount,
       currency: req.currency || BASE_CURRENCY,
       status: "completed",
-      date: new Date().toISOString(),
+      date: entryDate,
       counterparty: req.title,
       reference: req.id,
       comment: `Approved ${KIND_LABELS[req.kind]} — ${req.title}`,
@@ -2904,7 +2911,7 @@ function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
       amount: initialBorrowed,
       currency: record.currency || req.currency || BASE_CURRENCY,
       status: "completed",
-      date: new Date().toISOString(),
+      date: entryDate,
       counterparty: record.accountLabel || req.title,
       reference: req.id,
       comment: `Borrowed funds credited — approved ${KIND_LABELS[req.kind]} (${req.title})`,
@@ -2925,7 +2932,7 @@ function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
       // Delivered → settled (paid out, leaves the balance); otherwise → hold
       // (reserved/blocked). This keeps the backfill consistent with delivery.
       status: isDelivered ? "completed" : "hold",
-      date: new Date().toISOString(),
+      date: entryDate,
       counterparty: req.title,
       reference: req.id,
       comment: isDelivered
