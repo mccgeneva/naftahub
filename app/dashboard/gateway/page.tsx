@@ -796,7 +796,12 @@ function AccountCard({
   const Icon = typeIcons[account.type]
   const status = statusConfig[account.status]
   const StatusIcon = status.icon
-  const bank = directory.find((b) => b.key === account.coordinates?.partnerBankKey)
+  // The account stores only the chosen bank's KEY, so resolve the display name
+  // from the live directory (which includes admin-added custom banks like
+  // "ubs-geneva"). Fall back to the preferred bank when no coordinates are
+  // assigned yet, so the bank the customer picked is always shown.
+  const preferredBank = directory.find((b) => b.key === account.preferredBankKey)
+  const bank = directory.find((b) => b.key === account.coordinates?.partnerBankKey) ?? preferredBank
   const reconciled = reconciledTotal(account)
   const pending = pendingFundingTotal(account)
 
@@ -858,8 +863,18 @@ function AccountCard({
         )}
 
         {account.status === "pending" && (
-          <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 p-3 text-sm text-yellow-500">
-            Awaiting Administrator approval and partner-bank assignment.
+          <div className="space-y-2 rounded-lg border border-yellow-500/20 bg-yellow-500/5 p-3">
+            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Building2 className="h-4 w-4 text-primary" />
+              {preferredBank ? preferredBank.name : "Partner bank"} · {account.currency}
+              {preferredBank?.country ? (
+                <span className="text-xs font-normal text-muted-foreground">{preferredBank.country}</span>
+              ) : null}
+            </div>
+            <p className="text-sm text-yellow-500 text-pretty">
+              Request received. Awaiting Administrator approval — your dedicated IBAN, BIC and remittance reference
+              will appear here once {preferredBank ? preferredBank.name : "the partner bank"} assigns them.
+            </p>
           </div>
         )}
 
