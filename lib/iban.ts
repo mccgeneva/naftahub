@@ -95,6 +95,21 @@ export function countrySupportsIban(countryCode?: string): boolean {
   return !!countryCode && countryCode.toUpperCase() in IBAN_SPECS
 }
 
+// Countries whose IBAN embeds a NUMERIC domestic clearing code (Bankleitzahl,
+// sort code, ABI/CAB, etc.). For these, a bank with no `nationalBankCode`
+// produces a non-existent bank code (all-zeros, or a random sort code) — so the
+// real code is mandatory when adding such a bank. Countries not listed here
+// derive their bank segment from the BIC stem, so a missing code is harmless.
+const NUMERIC_BANK_CODE_COUNTRIES = new Set([
+  "CH", "DE", "LU", "AT", "FR", "ES", "IT", "BE", "PT", "FI", "SE", "NO", "DK", "AE", "SA", "GB", "IE",
+])
+
+/** True when a bank in this country must supply a real domestic clearing code
+ *  for its generated IBAN to reference an existing institution. */
+export function ibanRequiresNationalBankCode(countryCode?: string): boolean {
+  return !!countryCode && NUMERIC_BANK_CODE_COUNTRIES.has(countryCode.toUpperCase())
+}
+
 function randomChars(kind: SegmentKind, length: number): string {
   const alphabet = kind === "n" ? DIGITS : kind === "a" ? LETTERS : ALNUM
   let out = ""

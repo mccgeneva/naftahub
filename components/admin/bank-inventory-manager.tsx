@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/select"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { PARTNER_BANKS, type BankRegion, BANK_REGIONS } from "@/lib/partner-banks"
+import { ibanRequiresNationalBankCode } from "@/lib/iban"
 import {
   getBankInventoryAdmin,
   setBankAvailabilityAdmin,
@@ -459,7 +460,14 @@ function AddBankDialog({
     setNationalBankCode("")
   }
 
+  const codeRequired = ibanRequiresNationalBankCode(countryCode)
+  const codeMissing = codeRequired && !nationalBankCode.replace(/[^0-9A-Za-z]/g, "").trim()
+
   const submit = async () => {
+    if (codeMissing) {
+      toast.error("This country embeds a domestic clearing code in the IBAN — enter the bank's real code first.")
+      return
+    }
     setSaving(true)
     const res = await addPartnerBankAdmin(ADMIN_PASSCODE, {
       name,
@@ -550,25 +558,33 @@ function AddBankDialog({
             <p className="text-xs text-muted-foreground">Comma- or space-separated ISO codes.</p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="ab-nbc">National bank code (optional)</Label>
+            <Label htmlFor="ab-nbc">National bank code {codeRequired ? "(required)" : "(optional)"}</Label>
             <Input
               id="ab-nbc"
               value={nationalBankCode}
               onChange={(e) => setNationalBankCode(e.target.value)}
               placeholder="e.g. UK sort code 040004"
+              aria-invalid={codeMissing}
+              className={cn(codeMissing && "border-destructive focus-visible:ring-destructive")}
             />
-            <p className="text-xs text-muted-foreground">
-              The bank&apos;s real domestic clearing code (UK sort code, DE Bankleitzahl, etc.). It is
-              embedded into generated IBANs so the bank code is a real, existing one. Leave blank to
-              use a random code (the IBAN stays checksum-valid but its bank code may not exist).
-            </p>
+            {codeMissing ? (
+              <p className="text-xs text-destructive text-pretty">
+                {countryCode} IBANs embed the bank&apos;s domestic clearing code (sort code / Bankleitzahl / ABI-CAB).
+                Enter the bank&apos;s real code — without it the generated IBAN would carry a non-existent bank code.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground text-pretty">
+                The bank&apos;s real domestic clearing code (UK sort code, DE Bankleitzahl, etc.). It is
+                embedded into generated IBANs so the bank code is a real, existing one.
+              </p>
+            )}
           </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={saving}>
+          <Button onClick={() => void submit()} disabled={saving || codeMissing}>
             {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}
             Add bank
           </Button>
