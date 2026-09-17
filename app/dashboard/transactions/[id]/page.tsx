@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { useLedger } from "@/lib/ledger-store"
 import { generateReceiptPdf } from "@/lib/receipt-pdf"
+import { displayIssuerAccount } from "@/lib/issuer-bank"
 import { useHolderIdentity } from "@/lib/holder-identity"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { toast } from "sonner"
@@ -92,6 +93,13 @@ export default function TransactionDetailPage() {
   }
 
   const isCredit = entry.direction === "credit"
+  // Incoming credits issue from the fixed UBS Switzerland account — show its
+  // canonical IBAN as the sender coordinate, not the recipient's own account.
+  const displayAccount = displayIssuerAccount({
+    direction: entry.direction,
+    bank: entry.bank,
+    account: entry.account,
+  })
 
   const handleCopy = (value: string, label: string) => {
     navigator.clipboard?.writeText(value).then(
@@ -114,7 +122,7 @@ export default function TransactionDetailPage() {
       counterparty: entry.counterparty,
       bank: bankName || entry.bank,
       bic: bicMatch?.[1],
-      iban: entry.account,
+      iban: displayAccount,
       notes: entry.comment,
       accountHolder: holder.holderName,
       accountHolderAddress: holder.holderAddress,
@@ -126,7 +134,7 @@ export default function TransactionDetailPage() {
     { label: "Category", value: entry.category, icon: Tag },
     { label: isCredit ? "Sender" : "Beneficiary", value: entry.counterparty, icon: Building2 },
     { label: "Bank", value: entry.bank, icon: Building2 },
-    { label: "IBAN / Account", value: entry.account, copy: true, icon: Hash },
+    { label: "IBAN / Account", value: displayAccount, copy: true, icon: Hash },
     { label: "Value date", value: formatDateTime(entry.date), icon: CalendarDays },
   ]
 

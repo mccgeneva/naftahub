@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils"
 import { useLedger, type LedgerEntry } from "@/lib/ledger-store"
 import { generateReceiptPdf } from "@/lib/receipt-pdf"
+import { displayIssuerAccount } from "@/lib/issuer-bank"
 import { useHolderIdentity } from "@/lib/holder-identity"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 
@@ -251,7 +252,14 @@ export function RecentTransactions() {
                   value: selected.counterparty,
                 },
                 { label: "Bank", value: selected.bank },
-                { label: "IBAN / Account", value: selected.account },
+                {
+                  label: "IBAN / Account",
+                  value: displayIssuerAccount({
+                    direction: selected.direction,
+                    bank: selected.bank,
+                    account: selected.account,
+                  }),
+                },
               ]
                 .filter((row) => row.value)
                 .map((row) => (

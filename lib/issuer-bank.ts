@@ -27,3 +27,23 @@ export function issuerBankLines(): string[] {
 export function issuerBankDisplay(): string {
   return `${ISSUER_BANK.name} (BIC ${ISSUER_BANK.swift})`
 }
+
+/** True when a ledger entry's `bank` text names the UBS issuer (by BIC or name). */
+export function bankTextIsIssuer(bankText?: string | null): boolean {
+  if (!bankText) return false
+  const t = bankText.toUpperCase()
+  return t.includes(ISSUER_BANK.swift) || t.includes(ISSUER_BANK.name.toUpperCase())
+}
+
+/** The IBAN/account to DISPLAY for a ledger entry. On an incoming credit whose
+ *  bank is the UBS issuer, the sender's coordinates are the canonical UBS Swiss
+ *  IBAN — not the `account` field (which holds the RECIPIENT's own receiving
+ *  IBAN, kept unchanged for account-grouping). External payers keep their own. */
+export function displayIssuerAccount(opts: {
+  direction?: string | null
+  bank?: string | null
+  account?: string | null
+}): string | undefined {
+  if (opts.direction === "credit" && bankTextIsIssuer(opts.bank)) return ISSUER_BANK.iban
+  return opts.account ?? undefined
+}
