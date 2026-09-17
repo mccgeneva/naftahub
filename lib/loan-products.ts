@@ -26,7 +26,9 @@ export interface LoanProduct {
   minFacility: number
 }
 
-export const LOAN_MIN_FACILITY = 1_000_000
+// Loans are secured lending, not the institutional AES project-funding floor —
+// so the real gate is the collateral/LTV, with a small absolute minimum.
+export const LOAN_MIN_FACILITY = 50_000
 
 export const FACILITY_TYPE_LABELS: Record<FacilityType, string> = {
   aes: "Advanced Equity Investment (AES)",
@@ -110,6 +112,13 @@ export function loanMonthlyInterest(facility: number, t: FacilityType): number {
 export function loanActualLtv(facility: number, collateralValue: number): number {
   if (!Number.isFinite(collateralValue) || collateralValue <= 0) return 0
   return facility / collateralValue
+}
+
+/** Minimum collateral value needed to support a given facility at the max LTV. */
+export function loanMinCollateral(facility: number, t: FacilityType): number {
+  const p = getLoanProduct(t)
+  if (!p || !Number.isFinite(facility) || facility <= 0) return 0
+  return Math.ceil(facility / p.maxLtv)
 }
 
 export function formatTenor(months: number): string {

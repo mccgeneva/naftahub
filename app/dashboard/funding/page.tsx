@@ -93,6 +93,7 @@ import {
   loanArrangementFee,
   loanMaxAdvance,
   loanActualLtv,
+  loanMinCollateral,
   loanMonthlyInterest,
   formatTenor,
   type FacilityType,
@@ -397,7 +398,7 @@ export default function ProjectFundingPage() {
       }
       if (loanLtvExceeded) {
         setFormError(
-          `The requested facility exceeds the maximum ${formatPercent(loanProduct.maxLtv)} LTV for a ${loanProduct.label}. Maximum advance on this collateral is ${formatMoney(loanMaxAdv, currency)}.`,
+          `To borrow ${formatMoney(numericFacility, currency)} you need at least ${formatMoney(loanMinCollateral(numericFacility, facilityType), currency)} of collateral (max ${formatPercent(loanProduct.maxLtv)} LTV). Increase the collateral value, or lower the facility to ${formatMoney(loanMaxAdv, currency)} or less.`,
         )
         return
       }
@@ -1043,8 +1044,9 @@ export default function ProjectFundingPage() {
                         loanLtvExceeded ? "text-red-500" : "text-muted-foreground",
                       )}
                     >
-                      Security for the facility. Max advance at {formatPercent(loanProduct.maxLtv)} LTV:{" "}
-                      {formatMoney(loanMaxAdv, currency)}.
+                      {loanLtvExceeded
+                        ? `Increase collateral to at least ${formatMoney(loanMinCollateral(numericFacility, facilityType), currency)} to borrow ${formatMoney(numericFacility, currency)} at ${formatPercent(loanProduct.maxLtv)} LTV.`
+                        : `Security for the facility. Max advance at ${formatPercent(loanProduct.maxLtv)} LTV: ${formatMoney(loanMaxAdv, currency)}.`}
                     </p>
                   </div>
                 )}
@@ -1401,8 +1403,10 @@ export default function ProjectFundingPage() {
                       <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3">
                         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
                         <p className="text-xs leading-relaxed text-red-500">
-                          Requested facility exceeds the {formatPercent(loanProduct.maxLtv)} maximum LTV.
-                          Max advance on this collateral: {formatMoney(loanMaxAdv, currency)}.
+                          Increase collateral to at least{" "}
+                          {formatMoney(loanMinCollateral(numericFacility, facilityType), currency)} to borrow{" "}
+                          {formatMoney(numericFacility, currency)}, or lower the facility to{" "}
+                          {formatMoney(loanMaxAdv, currency)} or less ({formatPercent(loanProduct.maxLtv)} max LTV).
                         </p>
                       </div>
                     )}
