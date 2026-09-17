@@ -87,6 +87,16 @@ import {
   fundingCreditDate,
   computeFundingSettlement,
 } from "@/lib/funding-capital"
+import {
+  FACILITY_TYPE_LABELS,
+  getLoanProduct,
+  loanArrangementFee,
+  loanMaxAdvance,
+  loanActualLtv,
+  loanMonthlyInterest,
+  formatTenor,
+  type FacilityType,
+} from "@/lib/loan-products"
 
 const SUPPORTED_CURRENCIES = ["USD", "EUR", "GBP", "CHF"] as const
 
@@ -148,6 +158,8 @@ const stageIndexForStatus = (status: keyof typeof statusConfig) => {
 
 export default function ProjectFundingPage() {
   const [activeTab, setActiveTab] = useState("framework")
+  const [facilityType, setFacilityType] = useState<FacilityType>("aes")
+  const [collateralValue, setCollateralValue] = useState("")
   const [projectName, setProjectName] = useState("")
   const [sector, setSector] = useState("")
   const [jurisdiction, setJurisdiction] = useState("")
@@ -317,6 +329,17 @@ export default function ProjectFundingPage() {
 
   // Live AES calculation for the application form.
   const numericFacility = Number(facility.replace(/[^0-9.]/g, "")) || 0
+
+  // Loan facility (non-recourse / bridge / mortgage) live derivations. Null for AES.
+  const loanProduct = getLoanProduct(facilityType)
+  const numericCollateral = Number(collateralValue.replace(/[^0-9.]/g, "")) || 0
+  const loanArrFee = loanProduct ? loanArrangementFee(numericFacility, facilityType) : 0
+  const loanMaxAdv = loanProduct ? loanMaxAdvance(numericCollateral, facilityType) : 0
+  const loanLtv = loanProduct ? loanActualLtv(numericFacility, numericCollateral) : 0
+  const loanMonthly = loanProduct ? loanMonthlyInterest(numericFacility, facilityType) : 0
+  const loanLtvExceeded = !!loanProduct && numericCollateral > 0 && numericFacility > loanMaxAdv + 0.01
+  const activeMinFacility = loanProduct ? loanProduct.minFacility : AES_MIN_FACILITY
+  const facilityLabel = FACILITY_TYPE_LABELS[facilityType]
   const equity = useMemo(() => calculateAesEquity(numericFacility), [numericFacility])
   const cashCommitment = useMemo(
     () => calculateCashCommitment(numericFacility, equity.totalEquity),
@@ -329,6 +352,8 @@ export default function ProjectFundingPage() {
   }
 
   const resetForm = () => {
+    setFacilityType("aes")
+    setCollateralValue("")
     setProjectName("")
     setSector("")
     setJurisdiction("")
@@ -359,11 +384,23 @@ export default function ProjectFundingPage() {
       setFormError("Please enter the project jurisdiction (country).")
       return
     }
-    if (!numericFacility || numericFacility < AES_MIN_FACILITY) {
+    if (!numericFacility || numericFacility < activeMinFacility) {
       setFormError(
-        `The minimum financing facility structured under AES is ${formatMoney(AES_MIN_FACILITY, currency)}.`,
+        `The minimum financing facility for a ${facilityLabel} is ${formatMoney(activeMinFacility, currency)}.`,
       )
       return
+    }
+    if (loanProduct) {
+      if (!numericCollateral || numericCollateral <= 0) {
+        setFormError("Enter the total collateral value securing this facility.")
+        return
+      }
+      if (loanLtvExceeded) {
+        setFormError(
+          `The requested facility exceeds the maximum ${formatPercent(loanProduct.maxLtv)} LTV for a ${loanProduct.label}. Maximum advance on this collateral is ${formatMoney(loanMaxAdv, currency)}.`,
+        )
+        return
+      }
     }
     if (components.length === 0) {
       setFormError("Select at least one equity component (assets, instruments, and/or cash).")
@@ -424,14 +461,33 @@ export default function ProjectFundingPage() {
       waiverFeeAmount: waiverFeeApplies ? BANK_STATEMENT_WAIVER_FEE : undefined,
       waiverFeeCurrency: waiverFeeApplies ? BANK_STATEMENT_WAIVER_CURRENCY : undefined,
       uploadedDocuments,
+      facilityType,
+      ...(loanProduct
+        ? {
+            totalEquity: 0,
+            effectiveRate: 0,
+            cashCommitmentMin: 0,
+            cashCommitmentMax: 0,
+            annualRate: loanProduct.annualRate,
+            maxLtv: loanProduct.maxLtv,
+            tenorMonths: loanProduct.maxTenorMonths,
+            arrangementFeeRate: loanProduct.arrangementFeeRate,
+            arrangementFee: loanArrFee,
+            collateralValue: numericCollateral,
+            ltvActual: loanLtv,
+          }
+        : {}),
     })
 
     log({
-      action: `Submitted project funding application "${projectName.trim()}" for Administrator approval`,
+      action: `Submitted ${facilityLabel} application "${projectName.trim()}" for Administrator approval`,
       category: "Project Funding / AES",
       details: {
         summary: `Client submitted a project funding dossier for "${projectName.trim()}" (${sector}, ${jurisdiction.trim()}) requesting a facility of ${formatMoney(numericFacility, currency)}. The AES tiered matrix computed a total equity requirement of ${formatMoney(equity.totalEquity, currency)} (effective rate ${formatPercent(equity.effectiveRate)}). The application is pending mandatory Administrator approval and external due diligence.`,
         referenceId: request.id,
+        facilityType: facilityLabel,
+        arrangementFee: loanProduct ? `${formatMoney(loanArrFee, currency)} (${formatPercent(loanProduct.arrangementFeeRate)}, charged on approval)` : "N/A (equity)",
+        collateralValue: loanProduct ? formatMoney(numericCollateral, currency) : "N/A (equity)",
         project: projectName.trim(),
         sector,
         jurisdiction: jurisdiction.trim(),
@@ -887,6 +943,24 @@ export default function ProjectFundingPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
+                  <Label>Facility Type</Label>
+                  <Select value={facilityType} onValueChange={(v) => setFacilityType(v as FacilityType)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="aes">Advanced Equity Investment (AES)</SelectItem>
+                      <SelectItem value="non_recourse">Non-Recourse Loan</SelectItem>
+                      <SelectItem value="bridge">Bridge Loan</SelectItem>
+                      <SelectItem value="mortgage">Mortgage</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {loanProduct && (
+                    <p className="text-xs leading-relaxed text-muted-foreground">{loanProduct.blurb}</p>
+                  )}
+                </div>
+
+                <div className="space-y-2">
                   <Label htmlFor="pf-name">Project Name</Label>
                   <Input
                     id="pf-name"
@@ -951,11 +1025,32 @@ export default function ProjectFundingPage() {
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Minimum facility: {formatMoney(AES_MIN_FACILITY, currency)}
+                  Minimum facility: {formatMoney(activeMinFacility, currency)}
                 </p>
 
+                {loanProduct && (
+                  <div className="space-y-2">
+                    <Label htmlFor="pf-collateral">Total Collateral Value</Label>
+                    <MoneyInput
+                      id="pf-collateral"
+                      placeholder="e.g. 80,000,000"
+                      value={collateralValue}
+                      onValueChange={setCollateralValue}
+                    />
+                    <p
+                      className={cn(
+                        "text-xs",
+                        loanLtvExceeded ? "text-red-500" : "text-muted-foreground",
+                      )}
+                    >
+                      Security for the facility. Max advance at {formatPercent(loanProduct.maxLtv)} LTV:{" "}
+                      {formatMoney(loanMaxAdv, currency)}.
+                    </p>
+                  </div>
+                )}
+
                 <div className="space-y-2">
-                  <Label>Equity Composition</Label>
+                  <Label>{loanProduct ? "Collateral Composition" : "Equity Composition"}</Label>
                   <div className="space-y-2">
                     {AES_EQUITY_COMPONENTS.map((c) => (
                       <label
@@ -1233,12 +1328,95 @@ export default function ProjectFundingPage() {
             {/* Live AES calculation */}
             <Card className="border-border bg-card lg:col-span-2">
               <CardHeader className="pb-2">
-                <CardTitle className="text-lg font-semibold">AES Equity Calculation</CardTitle>
+                <CardTitle className="text-lg font-semibold">
+                  {loanProduct ? `${loanProduct.label} — Indicative Terms` : "AES Equity Calculation"}
+                </CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  Live, based on the facility you enter. Progressive across tranches.
+                  {loanProduct
+                    ? "Live terms based on the facility and collateral you enter."
+                    : "Live, based on the facility you enter. Progressive across tranches."}
                 </p>
               </CardHeader>
               <CardContent className="space-y-4">
+                {loanProduct ? (
+                  <div className="space-y-4">
+                    <div className="rounded-lg border border-border bg-muted/30 p-4">
+                      <p className="text-xs text-muted-foreground">Requested Facility</p>
+                      <p className="mt-1 text-3xl font-bold text-foreground">
+                        {formatMoney(numericFacility, currency)}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {loanProduct.label} · up to {formatPercent(loanProduct.maxLtv)} LTV
+                      </p>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium text-foreground">Interest Rate</p>
+                        <p className="text-sm font-medium text-foreground">
+                          {formatPercent(loanProduct.annualRate)}{" "}
+                          <span className="text-xs text-muted-foreground">/ yr</span>
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium text-foreground">Est. Monthly Interest</p>
+                        <p className="text-sm font-medium text-foreground">
+                          {formatMoney(loanMonthly, currency)}
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium text-foreground">Max Tenor</p>
+                        <p className="text-sm font-medium text-foreground">
+                          {formatTenor(loanProduct.maxTenorMonths)}
+                        </p>
+                      </div>
+                      <Separator />
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-foreground">Arrangement Fee</p>
+                          <p className="text-xs text-muted-foreground">
+                            {formatPercent(loanProduct.arrangementFeeRate)} of facility · charged on approval
+                          </p>
+                        </div>
+                        <p className="text-right text-sm font-medium text-foreground">
+                          {formatMoney(loanArrFee, currency)}
+                        </p>
+                      </div>
+                      {numericCollateral > 0 && (
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-medium text-foreground">Collateral / LTV</p>
+                          <p
+                            className={cn(
+                              "text-sm font-medium",
+                              loanLtvExceeded ? "text-red-500" : "text-foreground",
+                            )}
+                          >
+                            {formatMoney(numericCollateral, currency)} · {(loanLtv * 100).toFixed(1)}%
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {loanLtvExceeded && (
+                      <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                        <p className="text-xs leading-relaxed text-red-500">
+                          Requested facility exceeds the {formatPercent(loanProduct.maxLtv)} maximum LTV.
+                          Max advance on this collateral: {formatMoney(loanMaxAdv, currency)}.
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/20 p-3">
+                      <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        Indicative terms. Final pricing, tenor and covenants are fixed on approval after
+                        external due diligence.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <>
                 <div className="rounded-lg border border-border bg-muted/30 p-4">
                   <p className="text-xs text-muted-foreground">Total Equity Requirement</p>
                   <p className="mt-1 text-3xl font-bold text-foreground">
@@ -1308,6 +1486,8 @@ export default function ProjectFundingPage() {
                     risk score (0&ndash;10) issued by JURIS TREUHAND AG.
                   </p>
                 </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           </div>

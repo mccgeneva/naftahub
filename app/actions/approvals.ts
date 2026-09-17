@@ -25,6 +25,7 @@ import {
 } from "@/lib/account-limits-eval"
 import { getGuaranteeConfig } from "@/lib/guarantees-config-db"
 import { getOverdraftStatusForOwner, computeOverdraftStatus, getSettledBalanceEur } from "@/lib/overdraft"
+import { FACILITY_TYPE_LABELS, isLoanFacility } from "@/lib/loan-products"
 import { buildOverdraftInterestPosts } from "@/lib/overdraft-interest"
 import { buildTreasuryFinancingLedgerPosts, pickAuthoritativeTreasuryFinancing } from "@/lib/treasury-financing"
 import { query } from "@/lib/db"
@@ -4548,6 +4549,40 @@ export async function adminDecideApproval(
         await applyLedgerEffect(updated)
       } catch (err) {
         console.log("[v0] applyLedgerEffect failed:", (err as Error).message)
+      }
+
+      // Loan facilities (non-recourse / bridge / mortgage) carry an arrangement
+      // fee charged to the client's Master Account when the facility is
+      // approved. AES equity applications carry no arrangement fee. Idempotent
+      // via the deterministic `FUND-ARR-FEE-<id>` id; best-effort so a fee
+      // hiccup never blocks the approval (it settles into the authorized
+      // overdraft like the app's other approve-time charges).
+      if (updated.kind === "project_funding") {
+        try {
+          const rec = (updated.payload as Record<string, unknown> | undefined)?.record as
+            | { facilityType?: string; arrangementFee?: number; currency?: string; projectName?: string }
+            | undefined
+          const ft = rec?.facilityType
+          const arrFee = Number(rec?.arrangementFee) || 0
+          if (rec && isLoanFacility(ft) && arrFee > 0) {
+            const feeCcy = rec.currency || updated.currency || "USD"
+            const ownerId = await resolveDataOwnerIdFor(updated.userId)
+            await upsertLedgerEntry(ownerId, {
+              id: `FUND-ARR-FEE-${updated.id}`,
+              direction: "debit",
+              amount: Math.round(arrFee * 100) / 100,
+              currency: feeCcy,
+              status: "completed",
+              date: updated.decidedAt ?? new Date().toISOString(),
+              counterparty: rec.projectName || updated.title,
+              reference: updated.id,
+              comment: `Arrangement fee on approval of ${FACILITY_TYPE_LABELS[ft]} facility "${rec.projectName ?? updated.title}".`,
+              category: "Facility Arrangement Fee",
+            })
+          }
+        } catch (err) {
+          console.log("[v0] funding arrangement fee charge failed:", (err as Error).message)
+        }
       }
 
       // Settle the monetization UPFRONT-COST RESERVE on administrator

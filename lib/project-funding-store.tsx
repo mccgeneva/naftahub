@@ -2,6 +2,7 @@
 
 import { createContext, useContext } from "react"
 import type { AesEquityComponent } from "@/lib/aes"
+import type { FacilityType } from "@/lib/loan-products"
 import { mirrorSubmission } from "@/lib/approval-sync"
 import { useServerRequestList } from "@/lib/use-server-request-list"
 
@@ -60,6 +61,22 @@ export interface ProjectFundingRequest {
   waiverFeeCurrency?: string
   /** Documents uploaded with the application (metadata only). */
   uploadedDocuments: UploadedFundingDoc[]
+
+  // --- Facility type (AES equity by default, or a debt facility) -----------
+  /** Which product this application is for. Legacy records omit it = "aes". */
+  facilityType?: FacilityType
+  /** Loan snapshot (only for non_recourse / bridge / mortgage facilities). */
+  annualRate?: number
+  maxLtv?: number
+  tenorMonths?: number
+  arrangementFeeRate?: number
+  /** Arrangement fee charged to the Master Account on approval. */
+  arrangementFee?: number
+  /** Total collateral value pledged as security for a loan facility. */
+  collateralValue?: number
+  /** Actual loan-to-value at submission (facility / collateral). */
+  ltvActual?: number
+
   status: ProjectFundingStatus
   submittedAt: string
   decidedAt?: string
