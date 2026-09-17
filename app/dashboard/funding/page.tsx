@@ -927,7 +927,7 @@ export default function ProjectFundingPage() {
         <TabsContent value="apply" className="mt-6">
           <div className="grid gap-6 lg:grid-cols-5">
             {/* Form */}
-            <Card className="border-border bg-card lg:col-span-3">
+            <Card className="min-w-0 border-border bg-card lg:col-span-3">
               <CardHeader className="pb-2">
                 <CardTitle className="text-lg font-semibold">Project Funding Application</CardTitle>
                 <p className="text-sm text-muted-foreground">
@@ -1320,7 +1320,7 @@ export default function ProjectFundingPage() {
             </Card>
 
             {/* Live AES calculation */}
-            <Card className="border-border bg-card lg:col-span-2">
+            <Card className="min-w-0 border-border bg-card lg:col-span-2">
               <CardHeader className="pb-2">
                 <CardTitle className="text-lg font-semibold">
                   {loanProduct ? `${loanProduct.label} — Indicative Terms` : "AES Equity Calculation"}
