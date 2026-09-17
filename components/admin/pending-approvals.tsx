@@ -2082,14 +2082,12 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                         size="sm"
                         variant="outline"
                         className="h-8 gap-1 text-emerald-600"
-                        disabled={acting || fundingNeedsDiscussion || needsFeeCharge}
+                        disabled={acting || needsFeeCharge}
                         onClick={() => (req.kind === "card" ? openCardApprove(req) : approveOne(req.id))}
                         title={
                           needsFeeCharge
                             ? "Charge the audit & PPI fees first, then execute this leverage line."
-                            : fundingNeedsDiscussion
-                              ? "Open the discussion with the applicant before activating this facility."
-                              : req.kind === "card"
+                            : req.kind === "card"
                                 ? "Enter the card number, expiry and CVV to issue this card."
                                 : isLeverage
                                   ? "Execute the leverage line and credit the borrowed funds."
