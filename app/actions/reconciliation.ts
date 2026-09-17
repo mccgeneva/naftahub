@@ -44,6 +44,52 @@ function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100
 }
 
+/**
+ * Posts the incoming-transaction fee as its OWN ledger line (a separate debit)
+ * instead of netting it into the credit — so the recipient sees the FULL
+ * payment amount and the fee as the next transaction. Idempotent via the
+ * deterministic `<baseEntryId>-FEE` id; the net balance impact equals the old
+ * net credit (gross − fee). Dated 1s before the credit so it sorts immediately
+ * below the payment in the newest-first history.
+ */
+async function postSeparateIncomingFee(opts: {
+  ownerId: string
+  baseEntryId: string
+  feeAmount: number
+  currency: string
+  payerName: string
+  paymentApprovalId: string
+  grossLabel: string
+  account?: string | null
+  receivedAccount?: string | null
+}): Promise<void> {
+  const fee = round2(opts.feeAmount)
+  if (!Number.isFinite(fee) || fee <= 0) return
+  await query(
+    `INSERT INTO ledger_entries
+       (user_id, entry_id, direction, amount, currency, status, entry_date,
+        counterparty, account, bank, reference, comment, category, received_account)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     ON CONFLICT (user_id, entry_id) DO NOTHING`,
+    [
+      opts.ownerId,
+      `${opts.baseEntryId}-FEE`,
+      "debit",
+      fee,
+      opts.currency,
+      "completed",
+      new Date(Date.now() - 1000).toISOString(),
+      opts.payerName,
+      opts.account ?? null,
+      null,
+      opts.paymentApprovalId,
+      `Incoming-transaction fee (2%) on payment ${opts.paymentApprovalId} (${opts.grossLabel}).`,
+      "Incoming Transaction Fee",
+      opts.receivedAccount ?? null,
+    ],
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Auth helpers (mirror app/actions/gateway.ts)
 // ---------------------------------------------------------------------------
@@ -341,7 +387,11 @@ export async function recordGatewayDepositForApproval(
       standardIncomingFee,
     )
     const incomingFee = incomingCashback.netFee
-    const amount = round2(grossConverted - fxFee - incomingFee)
+    const feeTotal = round2(fxFee + incomingFee)
+    // Credit the FULL received amount; the fee is posted as its OWN separate
+    // transaction so the payment shows in full and the fee shows as the next
+    // line. Net balance impact is unchanged (gross − fee).
+    const amount = round2(grossConverted)
     if (!Number.isFinite(amount) || amount <= 0) return { matched: false }
 
     // The payer is the client who SENT the funds (the approval owner).
@@ -354,7 +404,7 @@ export async function recordGatewayDepositForApproval(
       : ""
     const feeNote =
       incomingCashback.originalFee > 0
-        ? ` An incoming-transaction fee of ${accountCurrency} ${incomingFee.toLocaleString("en-US")} (${((incomingFee / grossConverted) * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}% effective, tiered) was deducted.${cashbackNote(incomingCashback, accountCurrency)}`
+        ? ` An incoming-transaction fee of ${accountCurrency} ${incomingFee.toLocaleString("en-US")} (${((incomingFee / grossConverted) * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}% effective, tiered) was charged as a separate transaction.${cashbackNote(incomingCashback, accountCurrency)}`
         : ""
 
     const entry: LedgerEntry = {
@@ -406,6 +456,17 @@ export async function recordGatewayDepositForApproval(
     // deposit. When self-healing an existing one, the credit (re)post above is
     // enough and we must not duplicate the funding event or log line.
     if (!alreadyFunded) {
+      await postSeparateIncomingFee({
+        ownerId: ledgerOwnerId,
+        baseEntryId: entry.id,
+        feeAmount: feeTotal,
+        currency: entry.currency,
+        payerName: sender.fullName,
+        paymentApprovalId: approval.id,
+        grossLabel: `${entry.currency} ${amount.toLocaleString("en-US")}`,
+        account: entry.account ?? null,
+        receivedAccount: null,
+      })
       const now = new Date().toISOString()
       const event: FundingEvent = {
         id: `FND-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
@@ -690,7 +751,11 @@ export async function recordRegisteredAccountDepositForApproval(
     const standardIncomingFee = incomingTransactionFee(grossConverted, await getFeeTiers())
     const incomingCashback = await applyCashbackForOwner(recipientOwnerId, "transaction", standardIncomingFee)
     const incomingFee = incomingCashback.netFee
-    const amount = round2(grossConverted - fxFee - incomingFee)
+    const feeTotal = round2(fxFee + incomingFee)
+    // Credit the FULL received amount; the fee is posted as its OWN separate
+    // transaction so the payment shows in full and the fee shows as the next
+    // line. Net balance impact is unchanged (gross − fee).
+    const amount = round2(grossConverted)
     if (!Number.isFinite(amount) || amount <= 0) return { matched: false }
 
     const sender = await resolveAccountProfileById(approval.userId)
@@ -700,7 +765,7 @@ export async function recordRegisteredAccountDepositForApproval(
       : ""
     const feeNote =
       incomingCashback.originalFee > 0
-        ? ` An incoming-transaction fee of ${accountCurrency} ${incomingFee.toLocaleString("en-US")} (${((incomingFee / grossConverted) * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}% effective, tiered) was deducted.${cashbackNote(incomingCashback, accountCurrency)}`
+        ? ` An incoming-transaction fee of ${accountCurrency} ${incomingFee.toLocaleString("en-US")} (${((incomingFee / grossConverted) * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}% effective, tiered) was charged as a separate transaction.${cashbackNote(incomingCashback, accountCurrency)}`
         : ""
 
     // Has this credit already been posted? (decide whether to also log.)
@@ -735,6 +800,17 @@ export async function recordRegisteredAccountDepositForApproval(
     )
 
     if (!alreadyPosted) {
+      await postSeparateIncomingFee({
+        ownerId: recipientOwnerId,
+        baseEntryId: ledgerEntryId,
+        feeAmount: feeTotal,
+        currency: account.currency,
+        payerName: sender.fullName,
+        paymentApprovalId: approval.id,
+        grossLabel: `${account.currency} ${amount.toLocaleString("en-US")}`,
+        account: account.iban,
+        receivedAccount: account.iban,
+      })
       await logActivity({
         action: `Approved payment ${approval.id} auto-matched by IBAN and credited ${account.currency} ${amount.toLocaleString("en-US")} to registered account ${account.bankName}${isFx ? ` (FX from ${sentCurrency})` : ""}`,
         category: "Administration",
@@ -945,14 +1021,18 @@ export async function recordMasterBankingDepositForApproval(
   const standardIncomingFee = incomingTransactionFee(sentAmount, await getFeeTiers())
   const incomingCashback = await applyCashbackForOwner(recipientOwnerId, "transaction", standardIncomingFee)
   const incomingFee = incomingCashback.netFee
-  const amount = round2(sentAmount - incomingFee)
+  const feeTotal = round2(incomingFee)
+  // Credit the FULL received amount; the fee is posted as its OWN separate
+  // transaction so the payment shows in full and the fee shows as the next
+  // line. Net balance impact is unchanged (gross − fee).
+  const amount = round2(sentAmount)
     if (!Number.isFinite(amount) || amount <= 0) return { matched: false }
 
     const sender = await resolveAccountProfileById(approval.userId)
     const reference = record.reference?.trim() || approval.id
     const feeNote =
       incomingCashback.originalFee > 0
-        ? ` An incoming-transaction fee of ${sentCurrency} ${incomingFee.toLocaleString("en-US")} (${((incomingFee / sentAmount) * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}% effective, tiered) was deducted.${cashbackNote(incomingCashback, sentCurrency)}`
+        ? ` An incoming-transaction fee of ${sentCurrency} ${incomingFee.toLocaleString("en-US")} (${((incomingFee / sentAmount) * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}% effective, tiered) was charged as a separate transaction.${cashbackNote(incomingCashback, sentCurrency)}`
         : ""
 
     const existing = await query(`SELECT 1 FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [
@@ -986,6 +1066,17 @@ export async function recordMasterBankingDepositForApproval(
     )
 
     if (!alreadyPosted) {
+      await postSeparateIncomingFee({
+        ownerId: recipientOwnerId,
+        baseEntryId: ledgerEntryId,
+        feeAmount: feeTotal,
+        currency: sentCurrency,
+        payerName: sender.fullName,
+        paymentApprovalId: approval.id,
+        grossLabel: `${sentCurrency} ${amount.toLocaleString("en-US")}`,
+        account: beneficiaryIban,
+        receivedAccount: beneficiaryIban,
+      })
       await logActivity({
         action: `Approved payment ${approval.id} auto-matched by IBAN and credited ${sentCurrency} ${amount.toLocaleString("en-US")} to a customer's Master Account bank (${bankName})`,
         category: "Administration",
