@@ -20,6 +20,7 @@ import { getApprovalById } from "@/lib/approvals-db"
 import { deleteLedgerEntry } from "@/lib/ledger-db"
 import { convertCurrency } from "@/lib/fx"
 import { incomingTransactionFee } from "@/lib/incoming-fees"
+import { issuerBankDisplay } from "@/lib/issuer-bank"
 import { applyCashbackForOwner } from "@/lib/fee-cashback-db"
 import { cashbackNote } from "@/lib/fee-cashback"
 import { getFeeTiers } from "@/lib/tiered-fees-db"
@@ -364,7 +365,10 @@ export async function recordGatewayDepositForApproval(
       status: "completed",
       date: new Date().toISOString(),
       counterparty: sender.fullName,
-      bank: bankName,
+      // Every platform payment issues from the fixed UBS issuer account, so the
+      // sender bank shown on the recipient's credit is always UBS — not the
+      // recipient's own receiving account (that stays in the comment).
+      bank: issuerBankDisplay(),
       reference: account.id,
       category: isFx ? "Reconciled Collection (FX)" : "Reconciled Collection",
       comment: `Inbound transfer from ${sender.fullName} (approved payment ${approval.id}, reference ${reference}) auto-matched by IBAN to gateway account ${account.id} and credited to the Master Account.${fxNote}${feeNote}`,
@@ -722,7 +726,7 @@ export async function recordRegisteredAccountDepositForApproval(
         new Date().toISOString(),
         sender.fullName,
         account.iban,
-        account.bankName,
+        issuerBankDisplay(),
         reference,
         `Inbound transfer from ${sender.fullName} (approved payment ${approval.id}, reference ${reference}) auto-matched by IBAN to registered account ${account.bankName} (${account.iban}) and credited to the Master Account.${fxNote}${feeNote}`,
         isFx ? "Reconciled Collection (FX)" : "Reconciled Collection",
@@ -973,7 +977,7 @@ export async function recordMasterBankingDepositForApproval(
         new Date().toISOString(),
         sender.fullName,
         beneficiaryIban,
-        bankName,
+        issuerBankDisplay(),
         reference,
         `Inbound transfer from ${sender.fullName} (approved payment ${approval.id}, reference ${reference}) auto-matched by IBAN to your registered bank account (${bankName} · ${beneficiaryIban}) and credited to your Master Account.${feeNote}`,
         "Reconciled Collection",

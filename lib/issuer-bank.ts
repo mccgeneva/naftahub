@@ -19,3 +19,11 @@ export const ISSUER_BANK = {
 export function issuerBankLines(): string[] {
   return [`Bank: ${ISSUER_BANK.name}`, `BIC/SWIFT: ${ISSUER_BANK.swift}`, `IBAN: ${ISSUER_BANK.iban}`]
 }
+
+/** One-line "UBS Switzerland (BIC UBSWCHGG)" for a ledger entry's `bank` field.
+ *  Every platform payment issues from this bank, so on the RECIPIENT's incoming
+ *  credit the sender/issuer bank shown is always this — not the recipient's own
+ *  receiving account. The receipt renderer splits this into name + BIC. */
+export function issuerBankDisplay(): string {
+  return `${ISSUER_BANK.name} (BIC ${ISSUER_BANK.swift})`
+}
