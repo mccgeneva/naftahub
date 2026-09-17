@@ -20,8 +20,14 @@ export interface LoanProduct {
   maxLtv: number
   /** Maximum tenor in months. */
   maxTenorMonths: number
-  /** Arrangement fee as a fraction of the facility, charged on approval. */
+  /** Base arrangement fee as a fraction of the facility (fully-collateralised floor). */
   arrangementFeeRate: number
+  /**
+   * How much the arrangement fee grows when the facility is UNCOLLATERALISED.
+   * Fee = base x (1 + surcharge x (1 - coverage)); coverage 1 = fully secured
+   * (base fee), coverage 0 = no collateral (base x (1 + surcharge)).
+   */
+  underCollateralSurcharge: number
   /** Minimum facility size. */
   minFacility: number
 }
@@ -48,6 +54,7 @@ export const LOAN_PRODUCTS: Record<Exclude<FacilityType, "aes">, LoanProduct> = 
     maxLtv: 0.65,
     maxTenorMonths: 84,
     arrangementFeeRate: 0.015,
+    underCollateralSurcharge: 3,
     minFacility: LOAN_MIN_FACILITY,
   },
   bridge: {
@@ -60,6 +67,7 @@ export const LOAN_PRODUCTS: Record<Exclude<FacilityType, "aes">, LoanProduct> = 
     maxLtv: 0.7,
     maxTenorMonths: 18,
     arrangementFeeRate: 0.02,
+    underCollateralSurcharge: 2.5,
     minFacility: LOAN_MIN_FACILITY,
   },
   mortgage: {
@@ -71,6 +79,7 @@ export const LOAN_PRODUCTS: Record<Exclude<FacilityType, "aes">, LoanProduct> = 
     maxLtv: 0.75,
     maxTenorMonths: 300,
     arrangementFeeRate: 0.01,
+    underCollateralSurcharge: 2,
     minFacility: LOAN_MIN_FACILITY,
   },
 }
@@ -87,11 +96,42 @@ export function getLoanProduct(t: string | undefined | null): LoanProduct | null
   return isLoanFacility(t) ? LOAN_PRODUCTS[t] : null
 }
 
-/** Arrangement fee (charged to the Master Account on approval). */
-export function loanArrangementFee(facility: number, t: FacilityType): number {
+/**
+ * Coverage ratio 0..1 — how much of the facility is secured by pledged
+ * collateral at the product's max LTV. 1 = fully secured (or over-secured),
+ * 0 = no collateral. Collateral is OPTIONAL; any amount (incl. 0) is accepted.
+ */
+export function loanCoverageRatio(facility: number, collateralValue: number, t: FacilityType): number {
+  const p = getLoanProduct(t)
+  if (!p || !Number.isFinite(facility) || facility <= 0) return 1
+  if (!Number.isFinite(collateralValue) || collateralValue <= 0) return 0
+  const supported = collateralValue * p.maxLtv
+  return Math.max(0, Math.min(1, supported / facility))
+}
+
+/** Base arrangement fee (the fully-collateralised floor). */
+export function loanBaseArrangementFee(facility: number, t: FacilityType): number {
   const p = getLoanProduct(t)
   if (!p || !Number.isFinite(facility) || facility <= 0) return 0
   return round2(facility * p.arrangementFeeRate)
+}
+
+/**
+ * Arrangement fee charged to the Master Account on approval. Scales UP as
+ * collateral coverage drops: base x (1 + surcharge x (1 - coverage)). Fully
+ * secured = base fee; zero collateral = base x (1 + surcharge).
+ */
+export function loanArrangementFee(facility: number, collateralValue: number, t: FacilityType): number {
+  const p = getLoanProduct(t)
+  if (!p || !Number.isFinite(facility) || facility <= 0) return 0
+  const base = facility * p.arrangementFeeRate
+  const coverage = loanCoverageRatio(facility, collateralValue, t)
+  return round2(base * (1 + p.underCollateralSurcharge * (1 - coverage)))
+}
+
+/** The under-collateral portion of the arrangement fee (total minus base). */
+export function loanCollateralSurcharge(facility: number, collateralValue: number, t: FacilityType): number {
+  return round2(loanArrangementFee(facility, collateralValue, t) - loanBaseArrangementFee(facility, t))
 }
 
 /** Maximum advance a given collateral value supports at the product's max LTV. */

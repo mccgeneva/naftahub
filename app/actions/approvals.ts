@@ -25,7 +25,7 @@ import {
 } from "@/lib/account-limits-eval"
 import { getGuaranteeConfig } from "@/lib/guarantees-config-db"
 import { getOverdraftStatusForOwner, computeOverdraftStatus, getSettledBalanceEur } from "@/lib/overdraft"
-import { FACILITY_TYPE_LABELS, isLoanFacility } from "@/lib/loan-products"
+import { FACILITY_TYPE_LABELS, isLoanFacility, loanArrangementFee } from "@/lib/loan-products"
 import { buildOverdraftInterestPosts } from "@/lib/overdraft-interest"
 import { buildTreasuryFinancingLedgerPosts, pickAuthoritativeTreasuryFinancing } from "@/lib/treasury-financing"
 import { query } from "@/lib/db"
@@ -4560,10 +4560,24 @@ export async function adminDecideApproval(
       if (updated.kind === "project_funding") {
         try {
           const rec = (updated.payload as Record<string, unknown> | undefined)?.record as
-            | { facilityType?: string; arrangementFee?: number; currency?: string; projectName?: string }
+            | {
+                facilityType?: string
+                arrangementFee?: number
+                facility?: number
+                collateralValue?: number
+                currency?: string
+                projectName?: string
+              }
             | undefined
           const ft = rec?.facilityType
-          const arrFee = Number(rec?.arrangementFee) || 0
+          // Recompute the fee authoritatively from facility + collateral so a
+          // tampered client value can't underpay (less collateral = higher fee).
+          const facilityAmt = Number(rec?.facility) || 0
+          const collateralAmt = Number(rec?.collateralValue) || 0
+          const arrFee =
+            rec && isLoanFacility(ft) && facilityAmt > 0
+              ? loanArrangementFee(facilityAmt, collateralAmt, ft)
+              : Number(rec?.arrangementFee) || 0
           if (rec && isLoanFacility(ft) && arrFee > 0) {
             const feeCcy = rec.currency || updated.currency || "USD"
             const ownerId = await resolveDataOwnerIdFor(updated.userId)
@@ -5911,7 +5925,7 @@ export interface CommodityNegotiationInput {
  * Buyer pays GROSS in full, so the reserved/blocked total is:
  *   (grossUnitPrice + freight + ppi + lloyds) × quantity
  * The gross→net difference is the discount (× quantity), split 50 / 50 between
- * the buyer (a notional saving) and the seller (MCC margin) — recorded for the
+ * the buyer (a notional saving) and the seller (MCC margin) �� recorded for the
  * audit trail but it does NOT reduce what the buyer pays.
  *
  * The commodity reservation hold (`APPR-<id>`) is placed on APPROVAL from the

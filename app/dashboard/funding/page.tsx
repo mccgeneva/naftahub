@@ -91,9 +91,10 @@ import {
   FACILITY_TYPE_LABELS,
   getLoanProduct,
   loanArrangementFee,
-  loanMaxAdvance,
+  loanBaseArrangementFee,
+  loanCollateralSurcharge,
+  loanCoverageRatio,
   loanActualLtv,
-  loanMinCollateral,
   loanMonthlyInterest,
   formatTenor,
   type FacilityType,
@@ -334,11 +335,15 @@ export default function ProjectFundingPage() {
   // Loan facility (non-recourse / bridge / mortgage) live derivations. Null for AES.
   const loanProduct = getLoanProduct(facilityType)
   const numericCollateral = Number(collateralValue.replace(/[^0-9.]/g, "")) || 0
-  const loanArrFee = loanProduct ? loanArrangementFee(numericFacility, facilityType) : 0
-  const loanMaxAdv = loanProduct ? loanMaxAdvance(numericCollateral, facilityType) : 0
+  // Collateral is OPTIONAL. The arrangement fee scales up as coverage drops:
+  // fully secured = base fee, no collateral = base x (1 + surcharge).
+  const loanBaseFee = loanProduct ? loanBaseArrangementFee(numericFacility, facilityType) : 0
+  const loanArrFee = loanProduct ? loanArrangementFee(numericFacility, numericCollateral, facilityType) : 0
+  const loanSurcharge = loanProduct ? loanCollateralSurcharge(numericFacility, numericCollateral, facilityType) : 0
+  const loanCoverage = loanProduct ? loanCoverageRatio(numericFacility, numericCollateral, facilityType) : 1
+  const loanMaxFee = loanProduct ? loanArrangementFee(numericFacility, 0, facilityType) : 0
   const loanLtv = loanProduct ? loanActualLtv(numericFacility, numericCollateral) : 0
   const loanMonthly = loanProduct ? loanMonthlyInterest(numericFacility, facilityType) : 0
-  const loanLtvExceeded = !!loanProduct && numericCollateral > 0 && numericFacility > loanMaxAdv + 0.01
   const activeMinFacility = loanProduct ? loanProduct.minFacility : AES_MIN_FACILITY
   const facilityLabel = FACILITY_TYPE_LABELS[facilityType]
   const equity = useMemo(() => calculateAesEquity(numericFacility), [numericFacility])
@@ -390,18 +395,6 @@ export default function ProjectFundingPage() {
         `The minimum financing facility for a ${facilityLabel} is ${formatMoney(activeMinFacility, currency)}.`,
       )
       return
-    }
-    if (loanProduct) {
-      if (!numericCollateral || numericCollateral <= 0) {
-        setFormError("Enter the total collateral value securing this facility.")
-        return
-      }
-      if (loanLtvExceeded) {
-        setFormError(
-          `To borrow ${formatMoney(numericFacility, currency)} you need at least ${formatMoney(loanMinCollateral(numericFacility, facilityType), currency)} of collateral (max ${formatPercent(loanProduct.maxLtv)} LTV). Increase the collateral value, or lower the facility to ${formatMoney(loanMaxAdv, currency)} or less.`,
-        )
-        return
-      }
     }
     if (components.length === 0) {
       setFormError("Select at least one equity component (assets, instruments, and/or cash).")
@@ -487,7 +480,7 @@ export default function ProjectFundingPage() {
         summary: `Client submitted a project funding dossier for "${projectName.trim()}" (${sector}, ${jurisdiction.trim()}) requesting a facility of ${formatMoney(numericFacility, currency)}. The AES tiered matrix computed a total equity requirement of ${formatMoney(equity.totalEquity, currency)} (effective rate ${formatPercent(equity.effectiveRate)}). The application is pending mandatory Administrator approval and external due diligence.`,
         referenceId: request.id,
         facilityType: facilityLabel,
-        arrangementFee: loanProduct ? `${formatMoney(loanArrFee, currency)} (${formatPercent(loanProduct.arrangementFeeRate)}, charged on approval)` : "N/A (equity)",
+        arrangementFee: loanProduct ? `${formatMoney(loanArrFee, currency)} (${(loanCoverage * 100).toFixed(0)}% collateral coverage, charged on approval)` : "N/A (equity)",
         collateralValue: loanProduct ? formatMoney(numericCollateral, currency) : "N/A (equity)",
         project: projectName.trim(),
         sector,
@@ -1031,22 +1024,21 @@ export default function ProjectFundingPage() {
 
                 {loanProduct && (
                   <div className="space-y-2">
-                    <Label htmlFor="pf-collateral">Total Collateral Value</Label>
+                    <Label htmlFor="pf-collateral">Total Collateral Value (optional)</Label>
                     <MoneyInput
                       id="pf-collateral"
-                      placeholder="e.g. 80,000,000"
+                      placeholder="e.g. 80,000,000 (0 accepted)"
                       value={collateralValue}
                       onValueChange={setCollateralValue}
                     />
-                    <p
-                      className={cn(
-                        "text-xs",
-                        loanLtvExceeded ? "text-red-500" : "text-muted-foreground",
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      Optional — any amount is accepted, including nothing. More collateral lowers your
+                      upfront arrangement fee: full coverage charges the base{" "}
+                      {formatMoney(loanBaseFee, currency)}; no collateral charges{" "}
+                      {formatMoney(loanMaxFee, currency)}.
+                      {numericFacility > 0 && (
+                        <> Current coverage: {(loanCoverage * 100).toFixed(0)}%.</>
                       )}
-                    >
-                      {loanLtvExceeded
-                        ? `Increase collateral to at least ${formatMoney(loanMinCollateral(numericFacility, facilityType), currency)} to borrow ${formatMoney(numericFacility, currency)} at ${formatPercent(loanProduct.maxLtv)} LTV.`
-                        : `Security for the facility. Max advance at ${formatPercent(loanProduct.maxLtv)} LTV: ${formatMoney(loanMaxAdv, currency)}.`}
                     </p>
                   </div>
                 )}
@@ -1372,44 +1364,39 @@ export default function ProjectFundingPage() {
                           {formatTenor(loanProduct.maxTenorMonths)}
                         </p>
                       </div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium text-foreground">Collateral Coverage</p>
+                        <p className="text-sm font-medium text-foreground">
+                          {numericCollateral > 0 ? formatMoney(numericCollateral, currency) : "None"} ·{" "}
+                          {(loanCoverage * 100).toFixed(0)}%
+                        </p>
+                      </div>
                       <Separator />
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm text-muted-foreground">Base arrangement fee</p>
+                        <p className="text-sm text-foreground">{formatMoney(loanBaseFee, currency)}</p>
+                      </div>
+                      {loanSurcharge > 0 && (
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="text-sm text-amber-500">
+                            Under-collateral surcharge
+                            <span className="block text-xs text-muted-foreground">
+                              {(100 - loanCoverage * 100).toFixed(0)}% uncovered
+                            </span>
+                          </p>
+                          <p className="text-right text-sm text-amber-500">+{formatMoney(loanSurcharge, currency)}</p>
+                        </div>
+                      )}
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <p className="text-sm font-medium text-foreground">Arrangement Fee</p>
-                          <p className="text-xs text-muted-foreground">
-                            {formatPercent(loanProduct.arrangementFeeRate)} of facility · charged on approval
-                          </p>
+                          <p className="text-sm font-semibold text-foreground">Total Arrangement Fee</p>
+                          <p className="text-xs text-muted-foreground">Charged to your Master Account on approval</p>
                         </div>
-                        <p className="text-right text-sm font-medium text-foreground">
+                        <p className="text-right text-sm font-semibold text-foreground">
                           {formatMoney(loanArrFee, currency)}
                         </p>
                       </div>
-                      {numericCollateral > 0 && (
-                        <div className="flex items-center justify-between">
-                          <p className="text-sm font-medium text-foreground">Collateral / LTV</p>
-                          <p
-                            className={cn(
-                              "text-sm font-medium",
-                              loanLtvExceeded ? "text-red-500" : "text-foreground",
-                            )}
-                          >
-                            {formatMoney(numericCollateral, currency)} · {(loanLtv * 100).toFixed(1)}%
-                          </p>
-                        </div>
-                      )}
                     </div>
-
-                    {loanLtvExceeded && (
-                      <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3">
-                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-                        <p className="text-xs leading-relaxed text-red-500">
-                          Increase collateral to at least{" "}
-                          {formatMoney(loanMinCollateral(numericFacility, facilityType), currency)} to borrow{" "}
-                          {formatMoney(numericFacility, currency)}, or lower the facility to{" "}
-                          {formatMoney(loanMaxAdv, currency)} or less ({formatPercent(loanProduct.maxLtv)} max LTV).
-                        </p>
-                      </div>
-                    )}
 
                     <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/20 p-3">
                       <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
