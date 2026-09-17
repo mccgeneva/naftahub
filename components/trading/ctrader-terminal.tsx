@@ -54,6 +54,11 @@ export type TerminalPosition = {
   current: number
   decimals: number
   pnl: number
+  stopLoss?: number
+  takeProfit?: number
+  // Unsigned P&L magnitude per one unit of price move (engine-exact), used to
+  // project the loss/profit at a chosen stop-loss / take-profit level.
+  valuePerPrice?: number
 }
 
 type TerminalTab = "markets" | "charts" | "positions" | "blotter" | "account"
@@ -72,6 +77,7 @@ interface CtraderTerminalProps {
   marketStatus: (category: string) => { open: boolean; label: string }
   onTrade: (symbol: string, side: "LONG" | "SHORT") => void
   onClose: (id: string) => void
+  onSetProtection: (id: string, next: { stopLoss: number | null; takeProfit: number | null }) => void
   onManage: () => void
   onFund: () => void
   onWithdraw: () => void
@@ -1022,6 +1028,7 @@ function PositionManage({
   onDouble,
   onAddSide,
   onFullChart,
+  onSetProtection,
 }: {
   position: TerminalPosition
   instrument?: TerminalInstrument
@@ -1034,6 +1041,7 @@ function PositionManage({
   onDouble: () => void
   onAddSide: (side: "LONG" | "SHORT") => void
   onFullChart: () => void
+  onSetProtection: (id: string, next: { stopLoss: number | null; takeProfit: number | null }) => void
 }) {
   const p = position
   const long = p.side === "LONG"
@@ -1080,7 +1088,27 @@ function PositionManage({
 
   const [size, setSize] = useState(p.lots)
   const setSizeClamped = (v: number) => setSize(Math.max(0.01, Math.round(v * 100) / 100))
-  const [slOn, setSlOn] = useState(false)
+
+  // --- Stop loss / take profit editor -------------------------------------
+  // Value-per-price magnitude: prefer the engine-exact figure, else derive it
+  // from the live P&L so the projected loss/profit at a level is honest.
+  const vpp =
+    Number.isFinite(p.valuePerPrice) && (p.valuePerPrice ?? 0) > 0 ? (p.valuePerPrice as number) : valuePerPrice
+  const pnlAt = (lvl: number) => vpp * (lvl - p.entry) * sideSign
+  const roundDp = (v: number) => Number(v.toFixed(Math.min(Math.max(decimals, 0), 8)))
+  const nudgeStep = Math.max(Math.pow(10, -decimals), Math.abs(livePrice) * 0.001)
+  const slDefault = roundDp(long ? livePrice * 0.98 : livePrice * 1.02)
+  const tpDefault = roundDp(long ? livePrice * 1.02 : livePrice * 0.98)
+  const [slDraft, setSlDraft] = useState<string>(p.stopLoss ? String(p.stopLoss) : String(slDefault))
+  const [tpDraft, setTpDraft] = useState<string>(p.takeProfit ? String(p.takeProfit) : String(tpDefault))
+  const slNum = Number.parseFloat(slDraft)
+  const tpNum = Number.parseFloat(tpDraft)
+  // A stop loss sits on the losing side of the live price, a take profit on the
+  // winning side — direction flips for a short.
+  const slValid = Number.isFinite(slNum) && slNum > 0 && (long ? slNum < livePrice : slNum > livePrice)
+  const tpValid = Number.isFinite(tpNum) && tpNum > 0 && (long ? tpNum > livePrice : tpNum < livePrice)
+  const nudge = (setter: (fn: (v: string) => string) => void, fallback: number, dir: 1 | -1) =>
+    setter((v) => String(roundDp((Number.parseFloat(v) || fallback) + dir * nudgeStep)))
 
   return (
     <div className="absolute inset-0 z-40 flex flex-col" style={{ backgroundColor: "#eff0f2" }}>
@@ -1221,18 +1249,142 @@ function PositionManage({
         <div className="mx-3 mt-2 rounded-2xl bg-white p-3">
           <div className="flex items-center justify-between">
             <span className="text-[15px] font-bold">Stop loss</span>
-            <button
-              onClick={() => setSlOn((s) => !s)}
-              aria-label="Toggle stop loss"
-              className="flex size-8 items-center justify-center rounded-full text-white"
-              style={{ backgroundColor: slOn ? GREEN : "#1c1f24" }}
-            >
-              {slOn ? <Plus className="size-4" /> : <X className="size-4" />}
-            </button>
+            {p.stopLoss ? (
+              <span className="rounded-full px-2 py-0.5 text-[12px] font-semibold" style={{ backgroundColor: "#fbeceb", color: RED }}>
+                Active · {formatPrice(p.stopLoss, decimals)}
+              </span>
+            ) : (
+              <span className="text-[12px]" style={{ color: MUTED }}>
+                No stop loss set
+              </span>
+            )}
           </div>
           <p className="mt-1 text-[12px]" style={{ color: MUTED }}>
-            {slOn ? "Confirm the protective stop level in the order ticket." : "No stop loss on this position."}
+            Caps your loss — closes the position automatically if the price falls to this level.
           </p>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              onClick={() => nudge(setSlDraft, slDefault, -1)}
+              aria-label="Lower stop loss"
+              className="flex size-11 shrink-0 items-center justify-center rounded-xl"
+              style={{ backgroundColor: "#f0f0f2" }}
+            >
+              <Minus className="size-5" />
+            </button>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={slDraft}
+              onChange={(e) => setSlDraft(e.target.value)}
+              aria-label="Stop loss price"
+              className="min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-center text-[18px] font-bold tabular-nums outline-none"
+              style={{ borderColor: slValid ? "#d7d8dc" : RED }}
+            />
+            <button
+              onClick={() => nudge(setSlDraft, slDefault, 1)}
+              aria-label="Raise stop loss"
+              className="flex size-11 shrink-0 items-center justify-center rounded-xl"
+              style={{ backgroundColor: "#f0f0f2" }}
+            >
+              <Plus className="size-5" />
+            </button>
+          </div>
+          <p className="mt-1.5 text-[12px]" style={{ color: slValid ? MUTED : RED }}>
+            {slValid
+              ? `Projected loss if hit: -${formatEur(Math.abs(pnlAt(slNum)))}`
+              : long
+                ? "Enter a price below the current price."
+                : "Enter a price above the current price."}
+          </p>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button
+              onClick={() => onSetProtection(p.id, { stopLoss: roundDp(slNum), takeProfit: p.takeProfit ?? null })}
+              disabled={!slValid}
+              className="rounded-xl py-3 text-[15px] font-bold text-white disabled:opacity-40"
+              style={{ backgroundColor: RED }}
+            >
+              {p.stopLoss ? "Update stop loss" : "Set stop loss"}
+            </button>
+            <button
+              onClick={() => onSetProtection(p.id, { stopLoss: null, takeProfit: p.takeProfit ?? null })}
+              disabled={!p.stopLoss}
+              className="rounded-xl border py-3 text-[15px] font-bold disabled:opacity-40"
+              style={{ borderColor: "#d7d8dc" }}
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+
+        {/* Take profit */}
+        <div className="mx-3 mt-2 rounded-2xl bg-white p-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[15px] font-bold">Take profit</span>
+            {p.takeProfit ? (
+              <span className="rounded-full px-2 py-0.5 text-[12px] font-semibold" style={{ backgroundColor: "#eaf5ee", color: GREEN }}>
+                Active · {formatPrice(p.takeProfit, decimals)}
+              </span>
+            ) : (
+              <span className="text-[12px]" style={{ color: MUTED }}>
+                No take profit set
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-[12px]" style={{ color: MUTED }}>
+            Locks in your gain — closes the position automatically if the price reaches this level.
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              onClick={() => nudge(setTpDraft, tpDefault, -1)}
+              aria-label="Lower take profit"
+              className="flex size-11 shrink-0 items-center justify-center rounded-xl"
+              style={{ backgroundColor: "#f0f0f2" }}
+            >
+              <Minus className="size-5" />
+            </button>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={tpDraft}
+              onChange={(e) => setTpDraft(e.target.value)}
+              aria-label="Take profit price"
+              className="min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-center text-[18px] font-bold tabular-nums outline-none"
+              style={{ borderColor: tpValid ? "#d7d8dc" : RED }}
+            />
+            <button
+              onClick={() => nudge(setTpDraft, tpDefault, 1)}
+              aria-label="Raise take profit"
+              className="flex size-11 shrink-0 items-center justify-center rounded-xl"
+              style={{ backgroundColor: "#f0f0f2" }}
+            >
+              <Plus className="size-5" />
+            </button>
+          </div>
+          <p className="mt-1.5 text-[12px]" style={{ color: tpValid ? MUTED : RED }}>
+            {tpValid
+              ? `Projected profit if hit: +${formatEur(Math.abs(pnlAt(tpNum)))}`
+              : long
+                ? "Enter a price above the current price."
+                : "Enter a price below the current price."}
+          </p>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button
+              onClick={() => onSetProtection(p.id, { stopLoss: p.stopLoss ?? null, takeProfit: roundDp(tpNum) })}
+              disabled={!tpValid}
+              className="rounded-xl py-3 text-[15px] font-bold text-white disabled:opacity-40"
+              style={{ backgroundColor: GREEN }}
+            >
+              {p.takeProfit ? "Update take profit" : "Set take profit"}
+            </button>
+            <button
+              onClick={() => onSetProtection(p.id, { stopLoss: p.stopLoss ?? null, takeProfit: null })}
+              disabled={!p.takeProfit}
+              className="rounded-xl border py-3 text-[15px] font-bold disabled:opacity-40"
+              style={{ borderColor: "#d7d8dc" }}
+            >
+              Remove
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1282,6 +1434,7 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
     marketStatus,
     onTrade,
     onClose,
+    onSetProtection,
     onManage,
     onFund,
     onWithdraw,
@@ -1826,6 +1979,7 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
                 setSelected(pos.symbol)
                 setTab("charts")
               }}
+              onSetProtection={onSetProtection}
             />
           )
         })()}

@@ -155,6 +155,10 @@ type StoredPosition = {
   openedAt: string
   marginEur: number
   notionalEur: number
+  // Protective exit levels (price). When the live price hits one, the position
+  // auto-closes. Undefined = not set.
+  stopLoss?: number
+  takeProfit?: number
 }
 
 // A user price alert, persisted per browser. Fires a toast and self-clears when
@@ -920,14 +924,18 @@ export default function TradingPage() {
         const current = quotes[p.symbol]?.price ?? p.entry
         const sign = p.side === "LONG" ? 1 : -1
         const pnl = p.entry > 0 ? ((current - p.entry) / p.entry) * p.lots * NOTIONAL_PER_LOT * sign : 0
-        return { ...p, current, pnl }
+        // Unsigned P&L per unit of price move — lets the ticket project the exact
+        // loss/profit at any chosen stop-loss / take-profit level.
+        const valuePerPrice = p.entry > 0 ? (p.lots * NOTIONAL_PER_LOT) / p.entry : 0
+        return { ...p, current, pnl, valuePerPrice }
       }),
     [deployed, quotes],
   )
 
-  const closePosition = async (id: string) => {
+  const closePosition = async (id: string, reason: "manual" | "SL" | "TP" = "manual") => {
     const pos = livePositions.find((p) => p.id === id)
     if (!pos) return
+    const reasonLabel = reason === "SL" ? " (stop loss hit)" : reason === "TP" ? " (take profit hit)" : ""
     // Best-effort release of any legacy Master-Account margin hold from an
     // earlier build (positions opened before the ring-fenced wallet model).
     await removeMyLedgerEntry(`TRADE-MGN-${id}`).catch(() => {})
@@ -949,11 +957,69 @@ export default function TradingPage() {
         closedAt: new Date().toLocaleString("en-GB"),
       },
     })
-    toast[realized >= 0 ? "success" : "info"]("Position closed", {
+    toast[realized >= 0 ? "success" : "info"](`Position closed${reasonLabel}`, {
       description:
         realized >= 0
           ? `Realized profit ${formatEur(realized)} added to your trading wallet.`
           : `Realized loss ${formatEur(Math.abs(realized))} deducted from your trading wallet.`,
+    })
+  }
+
+  // Auto-close on protective levels. The engine already ticks live prices into
+  // livePositions, so a stop-loss / take-profit fires the instant the live price
+  // crosses it. The ref guards against a duplicate close between the trigger and
+  // the state settling; a re-armed level clears its id in setProtection.
+  const protectionRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    for (const p of livePositions) {
+      if (!p.stopLoss && !p.takeProfit) continue
+      if (protectionRef.current.has(p.id)) continue
+      const price = p.current
+      if (!(price > 0)) continue
+      let hit: "SL" | "TP" | null = null
+      if (p.side === "LONG") {
+        if (p.takeProfit && price >= p.takeProfit) hit = "TP"
+        else if (p.stopLoss && price <= p.stopLoss) hit = "SL"
+      } else {
+        if (p.takeProfit && price <= p.takeProfit) hit = "TP"
+        else if (p.stopLoss && price >= p.stopLoss) hit = "SL"
+      }
+      if (hit) {
+        protectionRef.current.add(p.id)
+        void closePosition(p.id, hit)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [livePositions])
+
+  const setProtection = (id: string, next: { stopLoss: number | null; takeProfit: number | null }) => {
+    const pos = deployed.find((p) => p.id === id)
+    setDeployed((prev) =>
+      prev.map((p) =>
+        p.id === id ? { ...p, stopLoss: next.stopLoss ?? undefined, takeProfit: next.takeProfit ?? undefined } : p,
+      ),
+    )
+    // Re-arm the guard so an updated level can trigger again.
+    protectionRef.current.delete(id)
+    const parts: string[] = []
+    if (next.stopLoss) parts.push(`SL ${pos ? formatPrice(next.stopLoss, pos.decimals) : next.stopLoss}`)
+    if (next.takeProfit) parts.push(`TP ${pos ? formatPrice(next.takeProfit, pos.decimals) : next.takeProfit}`)
+    if (pos) {
+      log({
+        action: `Updated protective levels on ${pos.symbol}`,
+        category: "NAFTAhub Trading",
+        details: {
+          summary: parts.length
+            ? `Client set ${parts.join(" · ")} on ${pos.side} ${pos.lots.toFixed(2)} lots ${pos.symbol}. The position auto-closes when the live price reaches a level.`
+            : `Client cleared the stop loss / take profit on ${pos.side} ${pos.lots.toFixed(2)} lots ${pos.symbol}.`,
+          instrument: pos.symbol,
+          stopLoss: next.stopLoss ? formatPrice(next.stopLoss, pos.decimals) : "none",
+          takeProfit: next.takeProfit ? formatPrice(next.takeProfit, pos.decimals) : "none",
+        },
+      })
+    }
+    toast.success(parts.length ? "Protection set" : "Protection cleared", {
+      description: parts.length ? parts.join(" · ") : "Stop loss and take profit removed from this position.",
     })
   }
 
@@ -1123,6 +1189,7 @@ export default function TradingPage() {
             if (full) openTrade(full, side)
           }}
           onClose={closePosition}
+          onSetProtection={setProtection}
           onManage={() => setManageOpen(true)}
           onFund={() => setFundOpen(true)}
           onWithdraw={() => setWithdrawOpen(true)}
