@@ -4,6 +4,7 @@
 import { jsPDF } from "jspdf"
 import type { GeneratedPdf } from "@/lib/pdf-core"
 import { drawBrandMark } from "@/lib/pdf-logos"
+import { issuerBankLines } from "@/lib/issuer-bank"
 
 export interface ReceiptData {
   reference: string
@@ -188,9 +189,13 @@ export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
   // Account holder is the platform CLIENT (the signed-in user), not MCC Capital.
   // MCC Capital appears only as the letterhead/bank, never as a transacting
   // party. Fall back to the brand only if no holder identity was supplied.
+  // On an OUTGOING payment the account holder is the sender/issuer. Regardless
+  // of the holder's own name or company, every payment is issued through the
+  // platform's fixed UBS Switzerland correspondent account, so always show the
+  // canonical issuer bank coordinates in the sender block for a debit.
   const clientParty = {
     name: data.accountHolder || BRAND.name,
-    lines: [data.accountHolderAddress || BRAND.address],
+    lines: [data.accountHolderAddress || BRAND.address, ...(isCredit ? [] : issuerBankLines())],
   }
   const otherParty = {
     name: data.counterparty,
