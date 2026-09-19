@@ -51,3 +51,28 @@ export const INTERNAL_TRANSFER_FEE_LABEL = "up to 2%"
 export function internalTransferFee(amount: number, tiers?: FeeTier[]): number {
   return calculateTieredFee(amount, tiers).totalFee
 }
+
+/**
+ * Largest amount a sender can transfer so that `amount + internalTransferFee(amount)`
+ * still fits within `available` — i.e. the "Max" the client can send while
+ * leaving enough to cover the on-top tiered fee. Because the fee is added on
+ * top and each marginal bracket rate is < 1, `total(A) = A + fee(A)` is strictly
+ * increasing, so we binary-search then floor to 2 decimals and step down until
+ * the rounded amount + its fee is guaranteed ≤ available (never leaves the
+ * sender short). Returns 0 for a non-positive / non-finite balance.
+ */
+export function maxSendableAfterTransferFee(available: number, tiers?: FeeTier[]): number {
+  if (!Number.isFinite(available) || available <= 0) return 0
+  let lo = 0
+  let hi = available
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2
+    if (mid + internalTransferFee(mid, tiers) <= available) lo = mid
+    else hi = mid
+  }
+  let amt = Math.floor(lo * 100) / 100
+  while (amt > 0 && amt + internalTransferFee(amt, tiers) > available + 1e-9) {
+    amt = Math.round((amt - 0.01) * 100) / 100
+  }
+  return amt < 0 ? 0 : amt
+}

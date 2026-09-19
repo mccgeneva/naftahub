@@ -59,7 +59,7 @@ import {
 import { resolveTransferRecipient } from "@/app/actions/transfers"
 import { sendInstantTransfer } from "@/app/actions/ledger"
 import { convertCurrency } from "@/lib/fx"
-import { internalTransferFee } from "@/lib/incoming-fees"
+import { internalTransferFee, maxSendableAfterTransferFee } from "@/lib/incoming-fees"
 import { toast } from "sonner"
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "JPY", "AUD", "CAD", "SGD"]
@@ -200,6 +200,20 @@ export default function SendMoneyPage() {
       : ""
   const fmtEur = (n: number) =>
     `EUR ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+  // "Max amount" = the most the client can send while still leaving enough to
+  // cover the on-top tiered transfer fee (so amount + fee ≤ available). When the
+  // account carries borrowed funds, also cap to the ring-fenced own-funds
+  // (freeEur, converted into the send currency) so Max can never exceed what is
+  // actually transferable.
+  const spendableInCurrency =
+    hasBorrowed && ringfence
+      ? Math.min(availableBalance, convertCurrency(ringfence.freeEur, "EUR", currency))
+      : availableBalance
+  const maxSendable = maxSendableAfterTransferFee(spendableInCurrency)
+  const applyMaxAmount = () => {
+    if (maxSendable > 0) setAmount(maxSendable.toFixed(2))
+  }
 
   // Live recipient resolution for the instant method. Every account is resolved
   // on the server (which checks the Neon `admin_users` table), so any account
@@ -700,11 +714,25 @@ export default function SendMoneyPage() {
                 </Select>
               </div>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Available:{" "}
-              <span className="font-medium text-foreground">
-                {formatCurrency(availableBalance, currency)}
-              </span>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                Available:{" "}
+                <span className="font-medium text-foreground">
+                  {formatCurrency(availableBalance, currency)}
+                </span>
+              </p>
+              <button
+                type="button"
+                onClick={applyMaxAmount}
+                disabled={maxSendable <= 0}
+                className="shrink-0 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Max {formatCurrency(maxSendable, currency)}
+              </button>
+            </div>
+            <p className="text-[11px] leading-4 text-muted-foreground">
+              Max already leaves enough to cover the transfer fee — the total debited stays within your
+              available balance.
             </p>
             {hasBorrowed && ringfence && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs">
