@@ -763,9 +763,8 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     const roiLabel =
       loan && rec.annualRate
         ? `${(rec.annualRate * 100).toFixed(2)}% per annum`
-        : "As defined in the MCC structuring term sheet"
-    const tenorLabel =
-      loan && rec.tenorMonths ? formatTenor(rec.tenorMonths) : "To be defined at structuring"
+        : "1.80% per annum (fixed institutional cost of capital)"
+    const tenorLabel = loan && rec.tenorMonths ? formatTenor(rec.tenorMonths) : "Up to 15 years"
     const facilityNote =
       loan && rec.facilityType
         ? `Debt facility reference: ${FACILITY_TYPE_LABELS[rec.facilityType]} — arrangement fee ${formatMoney2(
@@ -807,6 +806,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         tenorLabel,
         facilityNote,
         governingLaw: "Swiss Law",
+        dueDiligenceBody: "JURIS TREUHAND AG, Zurich",
       }),
     )
     setAgTarget(null)

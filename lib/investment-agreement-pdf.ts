@@ -52,6 +52,51 @@ export interface InvestmentAgreementInput {
   /** Optional debt-facility note appended to Investment Terms. */
   facilityNote?: string
   governingLaw: string
+  // ---- AES funding-scenario model (defaults from the MCC Capital AES sheet) ----
+  deploymentLabel?: string
+  earlyRedemptionLabel?: string
+  dueDiligenceBody?: string
+  bankingBeneficiary?: string
+  bankingInstitution?: string
+  bankingIban?: string
+  bankingBic?: string
+}
+
+// ---- AES tiered equity model (MCC Capital AES product sheet) ---------------
+// Progressive, tranche-based: each band's rate applies only to the portion of
+// the facility that falls within that band; total equity is the sum of tranche
+// obligations (NOT a flat rate).
+const AES_TIERS: Array<{ upper: number; rate: number; label: string }> = [
+  { upper: 10_000_000, rate: 0.05, label: "1M – 10M" },
+  { upper: 25_000_000, rate: 0.04, label: "10M – 25M" },
+  { upper: 100_000_000, rate: 0.03, label: "25M – 100M" },
+  { upper: 500_000_000, rate: 0.02, label: "100M – 500M" },
+  { upper: Number.POSITIVE_INFINITY, rate: 0.01, label: "Above 500M" },
+]
+
+interface AesTrancheRow {
+  band: string
+  rate: number
+  amountInBand: number
+  equity: number
+}
+
+function computeAesEquity(facility: number): { rows: AesTrancheRow[]; total: number } {
+  const rows: AesTrancheRow[] = []
+  let total = 0
+  let lower = 0
+  for (const tier of AES_TIERS) {
+    if (facility <= lower) break
+    const capped = Math.min(facility, tier.upper)
+    const amountInBand = capped - lower
+    if (amountInBand > 0) {
+      const equity = amountInBand * tier.rate
+      total += equity
+      rows.push({ band: tier.label, rate: tier.rate, amountInBand, equity })
+    }
+    lower = tier.upper
+  }
+  return { rows, total }
 }
 
 const dash = (v: string | undefined | null) => (v && v.trim() ? v.trim() : "—")
@@ -238,6 +283,42 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
     y += 4
   }
 
+  const table = (headers: string[], rows: string[][], widths: number[]) => {
+    const rowH = 15
+    ensureSpace(rowH * (rows.length + 1) + 12)
+    const startY = y - 11
+    doc.setFillColor(...BRAND.ink)
+    doc.rect(margin, startY, contentWidth, rowH, "F")
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(8)
+    doc.setTextColor(...BRAND.white)
+    let cx = margin + 6
+    headers.forEach((h, i) => {
+      doc.text(h, cx, y)
+      cx += widths[i]
+    })
+    y += rowH
+    doc.setFont("helvetica", "normal")
+    doc.setFontSize(8.5)
+    doc.setTextColor(...BRAND.ink)
+    rows.forEach((r, ri) => {
+      if (ri % 2 === 1) {
+        doc.setFillColor(...BRAND.light)
+        doc.rect(margin, y - 11, contentWidth, rowH, "F")
+      }
+      cx = margin + 6
+      r.forEach((c, i) => {
+        doc.text(c, cx, y)
+        cx += widths[i]
+      })
+      y += rowH
+    })
+    doc.setDrawColor(...BRAND.line)
+    doc.setLineWidth(0.75)
+    doc.rect(margin, startY, contentWidth, rowH * (rows.length + 1))
+    y += 12
+  }
+
   // ===== Title page header =====
   pageNo = 1
   drawHeaderBand()
@@ -309,22 +390,51 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
     { bold: true },
   )
 
-  // ===== 2. Investment Structure =====
-  sectionTitle("2. Investment Structure")
+  // ===== 2. Investment Structure — Adaptive Equity System (AES) =====
+  sectionTitle("2. Investment Structure — Adaptive Equity System (AES)")
   paragraph(
-    "MCC operates under a progressive equity-based financing model, not as a lending institution. The applicable equity participation, computed at submission, is:",
+    "MCC operates under the proprietary Adaptive Equity System (AES): a progressive, tranche-based equity participation model — not a lending facility. Equity is computed progressively across financing tranches and aggregated; each tranche carries its own rate, applied only to the portion of the facility falling within that band.",
   )
-  kvRows([
+  table(
+    ["Financing tranche", "Equity rate", "Accepted instruments"],
     [
-      "Investment range",
-      input.rangeMin > 0 || input.rangeMax > 0
-        ? `${money(input.rangeMin, ccy)} – ${money(input.rangeMax, ccy)}`
-        : money(input.investmentAmount, ccy),
+      [`${ccy} 1M – 10M`, "5.00%", "Assets / BG / SBLC / MTN / Cash"],
+      [`${ccy} 10M – 25M`, "4.00%", "Assets / BG / SBLC / MTN / Cash"],
+      [`${ccy} 25M – 100M`, "3.00%", "Assets / BG / SBLC / MTN / Cash"],
+      [`${ccy} 100M – 500M`, "2.00%", "Assets / BG / SBLC / MTN / Cash"],
+      [`Above ${ccy} 500M`, "1.00%", "Assets / BG / SBLC / MTN / Cash"],
     ],
-    ["Equity %", `${(input.equityPct * 100).toFixed(2)}%`],
-    ["Equity amount", money(input.equityAmount, ccy)],
+    [110, 80, 300],
+  )
+  const aes = computeAesEquity(input.investmentAmount)
+  if (aes.rows.length) {
+    paragraph(
+      `Progressive computation applied to the requested facility of ${money(input.investmentAmount, ccy)}:`,
+      { size: 9 },
+    )
+    table(
+      ["Tranche", "Rate", "Amount in band", "Tranche equity"],
+      aes.rows.map((r) => [
+        `${ccy} ${r.band}`,
+        `${(r.rate * 100).toFixed(2)}%`,
+        money(r.amountInBand, ccy),
+        money(r.equity, ccy),
+      ]),
+      [130, 55, 150, 156],
+    )
+    paragraph(`AES aggregate equity requirement on the facility: ${money(aes.total, ccy)}.`, {
+      bold: true,
+      size: 9,
+    })
+  }
+  kvRows([
+    ["Equity % (agreed)", `${(input.equityPct * 100).toFixed(2)}%`],
+    ["Equity amount (agreed)", money(input.equityAmount, ccy)],
   ])
-  paragraph(`Total Equity Participation Required: ${money(input.equityAmount, ccy)}.`, { bold: true })
+  paragraph(
+    `Total Equity Participation Required (as agreed for this transaction): ${money(input.equityAmount, ccy)}.`,
+    { bold: true },
+  )
 
   // ===== 3. Equity Contribution Terms =====
   sectionTitle("3. Equity Contribution Terms")
@@ -365,6 +475,18 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
     color: BRAND.slate,
     size: 9,
   })
+  paragraph("3.3 Mandatory Upfront Cash Commitment", { bold: true })
+  paragraph(
+    `Within the total equity obligation, a defined liquid cash component is required prior to funding activation — serving as commitment validation, a risk-alignment signal, and the activation trigger. It is bounded at a minimum of 0.10% of the total financing facility and a maximum of 10% of the total equity obligation, with the applicable rate set by the independent due-diligence risk score (scale 0–10).${
+      input.investmentAmount > 0 && input.investmentAmount <= 1_000_000
+        ? ` As the facility is at or below ${money(1_000_000, ccy)}, a fixed cash commitment of EUR 2,860 applies, payable upon execution of this Agreement.`
+        : ""
+    }`,
+  )
+  paragraph(
+    "All cash commitments are remitted by bank wire transfer and confirmed via MT103 SWIFT receipt within 24 hours of issuance.",
+    { color: BRAND.slate, size: 9 },
+  )
 
   // ===== 4. Nature of Relationship =====
   sectionTitle("4. Nature of Relationship")
@@ -380,17 +502,26 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
   kvRows([
     ["Funding Entity", dash(input.fundingEntity)],
     ["Investment Amount", money(input.investmentAmount, ccy)],
-    ["Annual Return (ROI)", dash(input.roiLabel)],
-    ["Payment Obligation", "ROI payable yearly to MCC"],
-    ["Tenor", dash(input.tenorLabel)],
+    ["Cost of Capital / Annual Return", dash(input.roiLabel)],
+    ["Payment Obligation", "Payable annually to MCC"],
+    ["Financing Tenor", dash(input.tenorLabel)],
+    ["Capital Deployment", input.deploymentLabel || "Approximately 5 business days post-activation"],
+    [
+      "Early Redemption Premium",
+      input.earlyRedemptionLabel || "70% of the residual investment balance on early exit",
+    ],
     ["Grace Period", dash(input.gracePeriod)],
   ])
+  paragraph(
+    "The stated cost of capital is the sole cost to the project. No management fees, arrangement fees, or performance levies are imposed by MCC outside the terms of this Agreement, and the structure carries no tax liability on the financing arrangement as constituted.",
+    { color: BRAND.slate, size: 9 },
+  )
   if (input.facilityNote) {
     paragraph(input.facilityNote, { color: BRAND.slate, size: 9 })
   }
 
   // ===== 6. Fund Management & Disbursement =====
-  sectionTitle("6. Fund Management & Disbursement")
+  sectionTitle("6. Fund Management & Controlled Disbursement")
   paragraph("For compliance and control purposes:")
   bullets([
     "Funds are not transferred directly to the Client.",
@@ -401,6 +532,17 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
     color: BRAND.slate,
     size: 9,
   })
+  paragraph(
+    "MCC administers its institutional treasury through a dedicated corporate banking relationship. All equity cash receipts and controlled disbursements are processed through regulated banking channels subject to full AML and KYC compliance:",
+    { size: 9 },
+  )
+  kvRows([
+    ["Beneficiary", input.bankingBeneficiary || "MCC Capital, Rue du Rhône 14, 1204 Geneva, Switzerland"],
+    ["Banking institution", input.bankingInstitution || "Banking Circle — German Branch, 80333 München, Germany"],
+    ["IBAN", input.bankingIban || "DE73 2022 0800 0029 2908 19"],
+    ["BIC / SWIFT", input.bankingBic || "SXPYDEHHXXX"],
+    ["Proof of payment", "MT103 SWIFT confirmation required within 24 hours of wire execution"],
+  ])
 
   // ===== 7. Management & Control =====
   sectionTitle("7. Management & Control")
@@ -410,8 +552,44 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
     "MCC maintains oversight strictly for financial compliance, risk control, and capital allocation.",
   ])
 
-  // ===== 8. Conditions Precedent =====
-  sectionTitle("8. Conditions Precedent")
+  // ===== 8. Due Diligence & Risk Scoring =====
+  sectionTitle("8. Due Diligence & Risk Scoring")
+  paragraph(
+    `All AES-governed transactions are subject to independent external due diligence conducted by ${dash(
+      input.dueDiligenceBody,
+    )}, discharged at no cost to the Client. The scope encompasses legal-entity verification, financial statement analysis, compliance screening, counterparty credibility, and project viability review.`,
+  )
+  paragraph(
+    "The process produces a formal risk score on a scale of 0 to 10, which directly determines the applicable upfront cash commitment rate. All equity-asset verifications (tangible assets and bank instruments) are conducted as part of this mandatary process.",
+    { color: BRAND.slate, size: 9 },
+  )
+
+  // ===== 9. AES Operational Lifecycle =====
+  sectionTitle("9. AES Operational Lifecycle (8 Stages)")
+  bullets([
+    "01 — Project Submission: the Client submits the formal project dossier for preliminary assessment.",
+    "02 — External Due Diligence: independent legal, financial, and compliance review.",
+    "03 — Risk Scoring & Approval: a formal risk score (0–10) is issued and approval confirmed in writing.",
+    "04 — AES Equity Calculation: the tiered equity matrix is applied progressively to the requested facility.",
+    "05 — Equity Structuring: the Client designates the equity composition (assets, bank instruments and/or cash).",
+    "06 — Upfront Cash Commitment: the mandatory liquid commitment is remitted (min 0.1% of facility; max 10% of equity).",
+    "07 — Funding Activation: capital is sourced via the MCC institutional credit line and deployed within approximately 5 business days.",
+    "08 — Controlled Disbursement: funds are released exclusively to verified suppliers, contractors, and project beneficiaries.",
+  ])
+
+  // ===== 10. Investor & Project Principal Protections =====
+  sectionTitle("10. Investor & Project Principal Protections")
+  bullets([
+    "Identity Confidentiality: the Client's identity is not disclosed to the lending institution; external banking is conducted under the MCC fiduciary umbrella.",
+    "Asset Non-Encumbrance: beyond the structural security expressly agreed in clause 3.2, MCC takes no ownership of and places no additional charge on the Client's equity assets, which remain under the Client's ownership and operational control throughout the lifecycle.",
+    "No Hidden Fees: the stated annual cost of capital is the sole cost to the project.",
+    "Zero Tax Liability: the structure is engineered to carry no tax liability on the financing arrangement as constituted.",
+    "Early Redemption: a Client electing to terminate or refinance prior to tenor remits 70% of the residual investment balance as an early redemption settlement.",
+    "Dispute Resolution: all disputes are subject to the exclusive jurisdiction of the courts of the Canton of Geneva, Switzerland.",
+  ])
+
+  // ===== 11. Conditions Precedent =====
+  sectionTitle("11. Conditions Precedent")
   paragraph("This Agreement is subject to:")
   bullets([
     "Successful completion of Due Diligence.",
@@ -420,22 +598,22 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
     "Receipt of the upfront equity contribution.",
   ])
 
-  // ===== 9. Confidentiality =====
-  sectionTitle("9. Confidentiality")
+  // ===== 12. Confidentiality =====
+  sectionTitle("12. Confidentiality")
   paragraph(
     "Both parties agree to maintain strict confidentiality regarding the financial structure, project details, and investment terms. Any breach may result in immediate termination.",
   )
 
-  // ===== 10. Governing Law =====
-  sectionTitle("10. Governing Law")
+  // ===== 13. Governing Law =====
+  sectionTitle("13. Governing Law")
   paragraph(
     `This Agreement shall be governed exclusively by ${dash(
       input.governingLaw,
     )}. Any dispute shall be subject to the jurisdiction of Geneva, Switzerland.`,
   )
 
-  // ===== 11. Acceptance & signatures =====
-  sectionTitle("11. Acceptance")
+  // ===== 14. Acceptance & signatures =====
+  sectionTitle("14. Acceptance")
   paragraph("By signing below, both parties acknowledge and accept the terms of this Agreement.")
   ensureSpace(200)
   y += 6
