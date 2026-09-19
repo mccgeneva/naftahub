@@ -380,24 +380,67 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
     )} (hereinafter the "Client" or "Project Owner").`,
     { color: BRAND.slate, size: 9.5, indent: 12 },
   )
+  paragraph('The Investor and the Client are together referred to as the "Parties" and each as a "Party".', {
+    color: BRAND.slate,
+    size: 9,
+  })
 
-  // ===== 1. Purpose =====
-  sectionTitle("1. Purpose of Agreement")
+  // ===== Recitals =====
+  sectionTitle("Recitals")
   paragraph(
-    "This Agreement defines the terms under which MCC shall provide project financing through equity participation for the Client's project.",
+    "This section sets out the background and mutual understanding that lead the Parties to enter into this Agreement. It is intended to give the Client a complete and transparent picture of the relationship being created before any commitment is made.",
+    { color: BRAND.slate, size: 9 },
+  )
+  bullets([
+    "WHEREAS the Client is the owner or authorised promoter of the project described in this Agreement and requires institutional capital to develop, complete, or expand that project;",
+    "WHEREAS the Investor is a private Swiss institutional financier that deploys capital into qualifying projects through a proprietary equity-participation model known as the Adaptive Equity System (AES), and NOT through lending, debt issuance, or any credit facility;",
+    "WHEREAS the Investor has agreed to consider participation subject to independent due diligence, a formal risk assessment, and the Client's provision of an agreed equity contribution;",
+    "WHEREAS the Parties wish to record, in clear and binding terms, the full scope of the service, the obligations of each Party, the economics of the participation, and the protections afforded to both sides;",
+    "NOW, THEREFORE, in consideration of the mutual covenants set out below, the Parties agree as follows.",
+  ])
+
+  // ===== 1. Purpose, Definitions & Interpretation =====
+  sectionTitle("1. Purpose, Definitions & Interpretation")
+  paragraph(
+    "The purpose of this Agreement is to define, completely and without ambiguity, the terms on which the Investor will provide project financing to the Client through equity participation rather than through a loan. It explains what the Client is committing to, what the Client will receive in return, how the capital is calculated and deployed, and the rights and safeguards that apply to each Party from the moment of signature through to the full conclusion of the financing.",
   )
   const words = amountInWords(input.investmentAmount, ccy)
   paragraph(
     `The Client has formally requested funding for the project "${dash(input.projectName)}"${
       dash(input.sector) !== "—" ? ` (${input.sector})` : ""
-    } in the amount of: ${money(input.investmentAmount, ccy)}${words ? ` (${words})` : ""}.`,
+    } in the amount of: ${money(input.investmentAmount, ccy)}${words ? ` (${words})` : ""} (the "Facility").`,
     { bold: true },
   )
+  paragraph("1.1 Definitions", { bold: true })
+  paragraph(
+    "To ensure the Client fully understands every term used in this Agreement, the following definitions apply throughout:",
+    { size: 9 },
+  )
+  kvRows([
+    ["AES", "The Adaptive Equity System — the Investor's progressive, tranche-based equity-participation model described in clause 2."],
+    ["Facility", "The total amount of project financing requested by, and to be provided to, the Client."],
+    ["Equity Participation", "The Client's agreed contribution (in cash and/or approved assets) that aligns the Client's interest with the capital deployed."],
+    ["Cost of Capital", "The annual amount payable by the project to the Investor in consideration of the capital deployed, in place of loan interest."],
+    ["Tenor", "The maximum duration of the financing arrangement."],
+    ["Due Diligence", "The independent legal, financial, and compliance review conducted before activation."],
+    ["Activation", "The point at which, all conditions being satisfied, the Investor commits and begins deploying capital."],
+  ])
+  paragraph("1.2 Interpretation", { bold: true })
+  bullets([
+    "Headings are for convenience only and do not affect interpretation.",
+    "References to a clause are to a clause of this Agreement, and references to an amount in a currency are to that currency.",
+    "The singular includes the plural and vice versa, and words importing one gender include the others.",
+    'The words "including" and "such as" are illustrative and do not limit the words preceding them.',
+  ])
 
   // ===== 2. Investment Structure — Adaptive Equity System (AES) =====
   sectionTitle("2. Investment Structure — Adaptive Equity System (AES)")
   paragraph(
     "MCC operates under the proprietary Adaptive Equity System (AES): a progressive, tranche-based equity participation model — not a lending facility. Equity is computed progressively across financing tranches and aggregated; each tranche carries its own rate, applied only to the portion of the facility falling within that band.",
+  )
+  paragraph(
+    "In plain terms: the AES determines how much the Client must contribute alongside the Investor's capital. Rather than applying a single flat percentage to the whole Facility, the AES divides the Facility into bands and applies a decreasing rate to each successive band. This means larger projects benefit from a lower marginal equity rate on their upper portions, and the Client's total contribution is simply the sum of the contributions calculated for each band. The table below sets out the standard AES matrix, followed by the exact calculation applied to this transaction so the Client can verify every figure.",
+    { color: BRAND.slate, size: 9 },
   )
   table(
     ["Financing tranche", "Equity rate", "Accepted instruments"],
@@ -442,6 +485,10 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
 
   // ===== 3. Equity Contribution Terms =====
   sectionTitle("3. Equity Contribution Terms")
+  paragraph(
+    "This clause explains how the Client provides the equity participation calculated above. The contribution is made in two complementary parts — a cash commitment and an asset-based contribution — plus a mandatory liquid cash component that activates the funding. Each part is defined below, together with what it is for and how it is treated.",
+    { color: BRAND.slate, size: 9 },
+  )
   paragraph("3.1 Upfront Commitment", { bold: true })
   paragraph(
     input.upfrontPct != null
@@ -494,15 +541,23 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
 
   // ===== 4. Nature of Relationship =====
   sectionTitle("4. Nature of Relationship")
+  paragraph(
+    "It is essential that the Client understands the legal character of this arrangement. This is an equity-participation investment, not a loan. The distinction is material: there is no principal to repay, no interest, no debt recorded against the Client, and no lender-borrower relationship. The Investor participates in the project's capital and is remunerated by the agreed annual cost of capital. Accordingly:",
+  )
   bullets([
-    "MCC acts strictly as a private investor.",
-    "This Agreement does not constitute a loan.",
-    "No debt instruments or lending mechanisms are involved.",
-    "No insurance structures (including PPI) are used.",
+    "MCC acts strictly as a private investor and provider of institutional capital.",
+    "This Agreement does not constitute a loan, credit facility, or debt instrument of any kind.",
+    "No debt instruments or lending mechanisms are involved, and no borrowing is recorded against the Client.",
+    "No insurance structures (including Payment Protection Insurance) are used or charged.",
+    "The Client is not exposed to margin calls, acceleration, or repayment demands characteristic of lending.",
   ])
 
   // ===== 5. Investment Terms =====
   sectionTitle("5. Investment Terms")
+  paragraph(
+    "The following table sets out the commercial terms of the participation. Read together, they tell the Client exactly what is being provided, what it costs, how long it lasts, how quickly the capital is deployed, and what happens on an early exit. Each term is defined in clause 1.1 and explained in plain language beneath the table.",
+    { color: BRAND.slate, size: 9 },
+  )
   kvRows([
     ["Funding Entity", dash(input.fundingEntity)],
     ["Investment Amount", money(input.investmentAmount, ccy)],
@@ -523,10 +578,31 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
   if (input.facilityNote) {
     paragraph(input.facilityNote, { color: BRAND.slate, size: 9 })
   }
+  paragraph("5.1 What each term means for the Client", { bold: true })
+  bullets([
+    "Cost of Capital / Annual Return: the only recurring charge. It replaces loan interest and is payable annually to the Investor for the duration of the tenor.",
+    "Financing Tenor: the maximum time the capital remains deployed in the project before it is concluded or renewed by agreement.",
+    "Capital Deployment: once the Agreement is activated, the Investor begins releasing capital to the project's verified counterparties, typically within the stated window.",
+    "Early Redemption Premium: if the Client chooses to exit or refinance before the tenor ends, a settlement equal to the stated premium of the residual balance applies — this is explained with a worked example below.",
+    "Grace Period: any agreed period before the first cost-of-capital payment becomes due.",
+  ])
+  paragraph("5.2 Illustrative scenarios (for understanding only)", { bold: true })
+  paragraph(
+    "The following non-binding examples show how the arrangement behaves in practice. Actual figures are governed by the terms of this Agreement.",
+    { color: BRAND.slate, size: 9 },
+  )
+  bullets([
+    "Normal course: the Client provides the agreed equity, the Facility is activated, capital is deployed to suppliers and contractors, the project pays the annual cost of capital, and at the end of the tenor the arrangement is concluded in the ordinary way.",
+    "Early exit: the Client elects to conclude the arrangement before the tenor ends. The Client settles the early redemption premium on the residual balance, the participation is unwound, and any pledged assets are released on completion.",
+    "Delay in a payment: where a grace period applies, the first payment is deferred accordingly; a missed payment is addressed cooperatively under the compliance framework rather than by lending-style acceleration, since no debt exists.",
+    "Asset shortfall: if approved assets do not fully cover the asset-based portion of the equity, the Client may complete the balance in cash, or the Parties may re-scope the Facility to match the available equity.",
+  ])
 
   // ===== 6. Fund Management & Disbursement =====
   sectionTitle("6. Fund Management & Controlled Disbursement")
-  paragraph("For compliance and control purposes:")
+  paragraph(
+    "To protect both the project and the deployed capital, funds are not handed to the Client as a lump sum. Instead, the Investor operates a controlled-disbursement model in which capital is released directly against verified project costs. This safeguards the Client from misapplication risk, keeps the capital ring-fenced for the project, and satisfies the Investor's compliance obligations. In practice this means:",
+  )
   bullets([
     "Funds are not transferred directly to the Client.",
     "MCC manages capital deployment internally.",
@@ -550,10 +626,14 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
 
   // ===== 7. Management & Control =====
   sectionTitle("7. Management & Control")
+  paragraph(
+    "The Client remains the owner and operator of the project throughout. The Investor's role is financial, not managerial: it provides and safeguards capital, but does not take over the running of the business. The balance of responsibilities is as follows:",
+  )
   bullets([
-    "The Client retains full operational control of the project.",
-    "MCC does not interfere in daily management.",
+    "The Client retains full operational control of the project and all day-to-day decision-making.",
+    "MCC does not interfere in daily management, staffing, commercial strategy, or operations.",
     "MCC maintains oversight strictly for financial compliance, risk control, and capital allocation.",
+    "The Client agrees to provide reasonable reporting and access necessary for that financial oversight.",
   ])
 
   // ===== 8. Due Diligence & Risk Scoring =====
@@ -594,26 +674,28 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
 
   // ===== 11. Conditions Precedent =====
   sectionTitle("11. Conditions Precedent")
-  paragraph("This Agreement is subject to:")
+  paragraph(
+    "Before the Investor is obliged to activate and deploy capital, the following conditions must each be satisfied. Until they are, this Agreement stands as the Parties' agreed framework but no capital is committed:",
+  )
   bullets([
-    "Successful completion of Due Diligence.",
+    "Successful completion of Due Diligence and issuance of the risk score.",
     "Validation by MCC's external legal counsel.",
-    "Acceptance of the asset collateral structure.",
-    "Receipt of the upfront equity contribution.",
+    "Acceptance of the asset collateral structure (where an asset-based contribution applies).",
+    "Receipt of the upfront equity contribution and the mandatory cash commitment.",
   ])
 
   // ===== 12. Confidentiality =====
   sectionTitle("12. Confidentiality")
   paragraph(
-    "Both parties agree to maintain strict confidentiality regarding the financial structure, project details, and investment terms. Any breach may result in immediate termination.",
+    "The Parties recognise that this arrangement involves sensitive commercial and financial information on both sides. Each Party therefore agrees to maintain strict confidentiality regarding the financial structure, project details, counterparties, and investment terms, and to use such information solely for the purpose of performing this Agreement. This obligation survives termination. Any breach may result in immediate termination and any remedies available at law.",
   )
 
   // ===== 13. Governing Law =====
-  sectionTitle("13. Governing Law")
+  sectionTitle("13. Governing Law & Jurisdiction")
   paragraph(
-    `This Agreement shall be governed exclusively by ${dash(
+    `This Agreement, and any non-contractual obligations arising out of or in connection with it, shall be governed exclusively by ${dash(
       input.governingLaw,
-    )}. Any dispute shall be subject to the jurisdiction of Geneva, Switzerland.`,
+    )}. The Parties submit to the exclusive jurisdiction of the courts of the Canton of Geneva, Switzerland, for the resolution of any dispute, and will endeavour in good faith to resolve any difference amicably before commencing proceedings.`,
   )
 
   // ===== 14. Acceptance & signatures =====
