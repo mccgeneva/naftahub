@@ -738,10 +738,13 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     // Percentages entered by the admin are of the asked contract (facility) amount,
     // e.g. 5% of a USD 3,800,000 facility = USD 190,000.
     const pctBase = facility > 0 ? facility : total
-    const upNum = Number.parseFloat(agUpfrontValue)
-    const asNum = Number.parseFloat(agAssetValue)
-    if (!Number.isFinite(upNum) || upNum <= 0 || !Number.isFinite(asNum) || asNum <= 0) {
-      toast.error("Enter both the upfront cash commitment and the required equity asset.")
+    // Either portion may be 0 (a blank field counts as 0) — but not both.
+    const upRaw = Number.parseFloat(agUpfrontValue)
+    const asRaw = Number.parseFloat(agAssetValue)
+    const upNum = Number.isFinite(upRaw) ? upRaw : 0
+    const asNum = Number.isFinite(asRaw) ? asRaw : 0
+    if (upNum < 0 || asNum < 0 || upNum + asNum <= 0) {
+      toast.error("Enter the equity split — either portion may be 0, but not both.")
       return
     }
     const upfrontAmount = agUpfrontMode === "amount" ? upNum : (upNum / 100) * pctBase
@@ -2754,7 +2757,8 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
             <DialogDescription className="text-pretty">
               Set the equity-contribution split before generating the contract. Enter each as a percentage of the
               asked contract amount (the facility), or switch to a fixed amount to apply special conditions for this
-              client. The value you enter is exactly what prints in the agreement.
+              client. Either portion may be set to 0 (but not both). The value you enter is exactly what prints in the
+              agreement.
             </DialogDescription>
           </DialogHeader>
           {agTarget &&
@@ -2875,14 +2879,14 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
             <Button
               className="gap-1"
               onClick={generateAgreement}
-              disabled={
-                !(
-                  Number.isFinite(Number.parseFloat(agUpfrontValue)) &&
-                  Number.parseFloat(agUpfrontValue) > 0 &&
-                  Number.isFinite(Number.parseFloat(agAssetValue)) &&
-                  Number.parseFloat(agAssetValue) > 0
-                )
-              }
+              disabled={(() => {
+                const u = Number.parseFloat(agUpfrontValue)
+                const a = Number.parseFloat(agAssetValue)
+                const uu = Number.isFinite(u) ? u : 0
+                const aa = Number.isFinite(a) ? a : 0
+                // Allow 0 in either field; only block when both are 0/blank or negative.
+                return uu < 0 || aa < 0 || uu + aa <= 0
+              })()}
             >
               <FileSignature className="h-4 w-4" />
               Generate contract
