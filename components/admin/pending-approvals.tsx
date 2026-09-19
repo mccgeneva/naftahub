@@ -778,8 +778,10 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     const clientName = clientCompany || clientContact
     showPdf(
       generateInvestmentAgreementPdf({
-        investorName: "MCC HOLDING SA",
-        investorAddress: "Rue du Rhône 8–14, Geneva, Switzerland",
+        investorName: "MCC Holding S.A.",
+        investorAddress: "Viale Stefano Franscini 3, 6900 Lugano, Switzerland",
+        investorRegNo: "CHE-110.027.662",
+        investorOperativeAddress: "Rue du Rhône 14, 1204 Geneva, Switzerland",
         investorSignatory: "",
         investorTitle: "Chief Executive Officer",
         clientName,

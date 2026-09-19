@@ -17,6 +17,8 @@ export interface InvestmentAgreementInput {
   // Parties — Investor (MCC) is fixed by the template.
   investorName: string
   investorAddress: string
+  investorRegNo?: string
+  investorOperativeAddress?: string
   investorSignatory: string
   investorTitle: string
   // Client / Project Owner
@@ -362,11 +364,13 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
 
   paragraph(`This Agreement is made on ${formatDate(issue)}, between:`, { size: 9.5 })
 
-  paragraph("1. MCC HOLDING SA", { bold: true, size: 10 })
+  paragraph(`1. ${input.investorName.toUpperCase()}`, { bold: true, size: 10 })
   paragraph(
-    `A company incorporated under the laws of Switzerland, with registered office at ${dash(
-      input.investorAddress,
-    )} (hereinafter the "Investor" or "MCC").`,
+    `MCC Holding S.A. (trading under the brand names MCC Capital and MCC \u00AE\u2122), incorporated in Switzerland under registration no. ${
+      input.investorRegNo || "CHE-110.027.662"
+    }, with registered address at ${dash(input.investorAddress)}, and operative address at ${
+      input.investorOperativeAddress || "Rue du Rhône 14, 1204 Geneva, Switzerland"
+    } (hereinafter the "Investor" or "MCC").`,
     { color: BRAND.slate, size: 9.5, indent: 12 },
   )
   paragraph(`2. ${dash(input.clientName)}`, { bold: true, size: 10 })
