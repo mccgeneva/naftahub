@@ -2090,27 +2090,26 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                       {funding && (
                         <Button
                           size="sm"
-                          variant={fundingNeedsDiscussion ? "default" : "outline"}
-                          className="h-8 gap-1"
+                          className="h-8 w-full gap-1 border border-primary bg-primary/15 text-primary hover:bg-primary/25 sm:w-auto"
                           disabled={acting}
-                          onClick={() => openFundingDiscuss(req, funding)}
-                          title="Review the client's documents and negotiate the terms on Bankeka before activating."
+                          onClick={() => openInvestmentAgreement(req, funding)}
+                          title="Set the equity split (% upfront cash + % equity asset, or fixed amounts) and generate the Private Investment Agreement — no client discussion needed."
                         >
-                          <MessagesSquare className="h-3.5 w-3.5" />
-                          {funding.discussionOpenedAt ? "Continue discussion" : "Discuss"}
+                          <FileSignature className="h-3.5 w-3.5" />
+                          Set terms &amp; generate contract
                         </Button>
                       )}
                       {funding && (
                         <Button
                           size="sm"
-                          variant="outline"
+                          variant={fundingNeedsDiscussion ? "default" : "outline"}
                           className="h-8 gap-1"
                           disabled={acting}
-                          onClick={() => openInvestmentAgreement(req, funding)}
-                          title="Generate the Private Investment Agreement (equity participation) pre-filled with this application's data, with both parties' signature blocks, to review and sign before approving."
+                          onClick={() => openFundingDiscuss(req, funding)}
+                          title="Optional — review documents and negotiate terms with the client on Bankeka."
                         >
-                          <FileSignature className="h-3.5 w-3.5" />
-                          Investment Agreement
+                          <MessagesSquare className="h-3.5 w-3.5" />
+                          {funding.discussionOpenedAt ? "Continue discussion" : "Discuss"}
                         </Button>
                       )}
                       {canNegotiatePpi && ppi && (
