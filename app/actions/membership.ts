@@ -21,12 +21,13 @@
 // ---------------------------------------------------------------------------
 
 import { query } from "@/lib/db"
-import { adminActionAuthorized } from "@/lib/admin-auth"
+import { adminActionAuthorized, adminEmails } from "@/lib/admin-auth"
 import { type UserProfile } from "@/lib/users"
 import { resolveCurrentSession, resolveAccountProfileById } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import { saveTreasuryRecordAdmin } from "@/app/actions/treasury"
-import { getDynamicUserById, updateDynamicUserProfile } from "@/lib/admin-users-db"
+import { getDynamicUserById, getDynamicUserByEmail, updateDynamicUserProfile } from "@/lib/admin-users-db"
+import { insertNotification } from "@/lib/notifications-db"
 import {
   AVANTGARDE_REQUIRED_DEPOSIT,
   AVANTGARDE_LEVERAGE_CONTRIBUTION,
@@ -94,6 +95,36 @@ async function readRecord(userId: string): Promise<MembershipRecord | null> {
   await ensureTable()
   const { rows } = await query(`SELECT * FROM membership_upgrades WHERE user_id = $1`, [userId])
   return rows[0] ? rowToRecord(rows[0]) : null
+}
+
+/**
+ * Notify every authorized administrator that a client requested a membership
+ * upgrade, so it surfaces in the admin bell and links straight to the review
+ * queue. Without this the request saves silently to `membership_upgrades` and
+ * the admin has NO signal (the nav tile alone is easy to miss). Best-effort: a
+ * notify failure never blocks the client's request.
+ */
+async function notifyAdminsOfMembershipRequest(opts: { holder: string; tier: string }): Promise<void> {
+  try {
+    const emails = adminEmails()
+    const admins = await Promise.all(emails.map((e) => getDynamicUserByEmail(e).catch(() => undefined)))
+    const seen = new Set<string>()
+    await Promise.all(
+      admins
+        .filter((a): a is NonNullable<typeof a> => !!a && !seen.has(a.id) && (seen.add(a.id), true))
+        .map((admin) =>
+          insertNotification({
+            userId: admin.id,
+            tone: "warning",
+            title: `New ${opts.tier} membership upgrade request`,
+            body: `${opts.holder} requested to upgrade to the ${opts.tier} membership. Open the Administrator panel → Membership Upgrades to approve it and validate the security deposit.`,
+            href: "/dashboard/admin?view=membership",
+          }).catch(() => undefined),
+        ),
+    )
+  } catch {
+    // Never let admin-notification failure affect the client's request.
+  }
 }
 
 // --- Customer-facing (own record only) --------------------------------------
@@ -170,6 +201,11 @@ export async function requestMembershipUpgrade(tier: MembershipTierId): Promise<
       },
     })
 
+    await notifyAdminsOfMembershipRequest({
+      holder: `${session.profile.fullName} (${session.profile.company})`,
+      tier: MEMBERSHIP_TIER_LABEL[tier],
+    })
+
     return { ok: true, record: rowToRecord(rows[0]) }
   } catch (err) {
     console.log("[v0] requestMembershipUpgrade failed:", (err as Error).message)
@@ -215,6 +251,24 @@ export async function getAllMembershipRequestsAdmin(passcode: string): Promise<A
     return { ok: true, requests: await listAllForAdmin() }
   } catch (err) {
     return { ok: false, error: (err as Error).message }
+  }
+}
+
+/**
+ * Admin: count membership upgrade requests awaiting a decision (status
+ * 'pending'), for the command-center tile + nav badge so a request is never
+ * invisible. Returns 0 on any failure (non-fatal).
+ */
+export async function countPendingMembershipUpgradesAdmin(passcode: string): Promise<number> {
+  try {
+    await requireAdmin(passcode)
+    await ensureTable()
+    const { rows } = await query(
+      `SELECT COUNT(*)::int AS n FROM membership_upgrades WHERE status = 'pending'`,
+    )
+    return Number(rows[0]?.n ?? 0)
+  } catch {
+    return 0
   }
 }
 

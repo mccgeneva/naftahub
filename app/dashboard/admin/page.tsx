@@ -149,6 +149,7 @@ import { TreasuryManager } from "@/components/admin/treasury-manager"
 import { UserManager } from "@/components/admin/user-manager"
 import { MasterAccountManager } from "@/components/admin/master-account-manager"
 import { MembershipManager } from "@/components/admin/membership-manager"
+import { countPendingMembershipUpgradesAdmin } from "@/app/actions/membership"
 import { BeneficiaryManager } from "@/components/admin/beneficiary-manager"
 import { PendingApprovals } from "@/components/admin/pending-approvals"
 import {
@@ -557,6 +558,27 @@ export default function AdminPage() {
         if (!cancelled) setPendingEquityReleaseCount(n)
       } catch {
         // Non-fatal: the Equity Releases tile just shows 0 if it can't load.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [unlocked, activeView])
+
+  // Membership upgrade requests awaiting an administrator decision — surfaced on
+  // the command center + nav badge so a client's upgrade request is never
+  // invisible (it lives in its own membership_upgrades table, not the approvals
+  // backbone, so the tile would otherwise always read 0).
+  const [pendingMembershipCount, setPendingMembershipCount] = useState(0)
+  useEffect(() => {
+    if (!unlocked) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const n = await countPendingMembershipUpgradesAdmin(ADMIN_PASSCODE)
+        if (!cancelled) setPendingMembershipCount(n)
+      } catch {
+        // Non-fatal: the Membership Upgrades tile just shows 0 if it can't load.
       }
     })()
     return () => {
@@ -2344,6 +2366,7 @@ export default function AdminPage() {
     { id: "section-incomingswift", view: "incomingswift", label: "Incoming SWIFT", count: pendingIncomingSwiftCount, icon: Inbox },
     { id: "section-equityrelease", view: "equityrelease", label: "Equity Releases", count: pendingEquityReleaseCount, icon: PiggyBank },
     { id: "section-subaccounts", view: "subaccounts", label: "Sub-Account Requests", count: pendingSubAccountCount, icon: Layers },
+    { id: "section-membership", view: "membership", label: "Membership Upgrades", count: pendingMembershipCount, icon: Award },
     { id: "section-payments", view: "approvals", kind: "payment", label: "Outgoing Payments", count: (dbPending.payment ?? 0) + paymentsAwaitingDelivery, icon: ArrowUpRight },
     { id: "section-instruments", view: "approvals", kind: "instrument", label: "Bank Instruments", count: dbPending.instrument ?? 0, icon: FileText },
     { id: "section-instrument-upgrade", view: "instruments", label: "Instrument Upgrade Requests", count: instrumentUpgradeRequests, icon: Sparkles },
@@ -2428,7 +2451,7 @@ export default function AdminPage() {
         { id: "sectionaccess", label: "Section Access", description: "Lock or unlock any dashboard section for an individual user; grant a Visitor full access to a selected section.", icon: Lock, count: 0 },
         { id: "demoid", label: "Demo ID Log", description: "Inspect the ID documents, IP addresses and GPS positions captured from visitors testing the demo account.", icon: Fingerprint, count: 0 },
         { id: "subaccounts", label: "Sub-Accounts", description: "Assign an IBAN/BIC to activate client sub-account requests, or reject them.", icon: Layers, count: pendingSubAccountCount },
-        { id: "membership", label: "Membership Upgrades", description: "Approve tiers and validate deposits.", icon: Award, count: 0 },
+        { id: "membership", label: "Membership Upgrades", description: "Approve tiers and validate deposits.", icon: Award, count: pendingMembershipCount },
         { id: "balances", label: "Balances & Transactions", description: "Credit, debit, adjust and reverse.", icon: Wallet, count: 0 },
         { id: "fundblocks", label: "Fund Blocking Controls", description: "Block funds from a client's Master Account; release or permanently withdraw.", icon: Lock, count: 0 },
         { id: "kyc", label: "KYC / Beneficiaries", description: "Verify beneficiaries and KYC documents.", icon: BadgeCheck, count: pendingKycCount },
