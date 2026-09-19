@@ -619,7 +619,11 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
   // ===== 14. Acceptance & signatures =====
   sectionTitle("14. Acceptance")
   paragraph("By signing below, both parties acknowledge and accept the terms of this Agreement.")
-  ensureSpace(200)
+  paragraph(
+    "TIME IS OF THE ESSENCE IN THIS INVESTMENT AGREEMENT. IN WITNESS WHEREOF, the parties have duly affixed their signatures under hand and seal as of the Execution Date first written above.",
+    { size: 9 },
+  )
+  ensureSpace(210)
   y += 6
   const halfW = contentWidth / 2 - 10
   const blockTop = y
@@ -661,10 +665,11 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
 
   drawSignBlock(
     margin,
-    "FOR MCC HOLDING SA",
+    "FUND MANAGER (THE INVESTOR)",
     [
       ["Name", dash(input.investorSignatory)],
       ["Title", dash(input.investorTitle)],
+      ["On behalf of", "MCC Holding S.A. (MCC Capital \u00A9)"],
     ],
     ["Signature", "Date"],
   )
