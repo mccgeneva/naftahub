@@ -59,3 +59,47 @@ export async function notifyAllAdminsOfSubmission(opts: {
     // Admin notification is best-effort — never affect the customer's submission.
   }
 }
+
+/**
+ * Generic fan-out for a client request that lives OUTSIDE the approvals backbone
+ * (membership upgrades, sub-account requests, and any other own-table request
+ * that needs administrator action). Same all-admin, deduped, best-effort
+ * delivery as `notifyAllAdminsOfSubmission`, but with a caller-supplied title,
+ * body and deep-link so the bell points straight at the right review queue.
+ *
+ * This is the universal fix for "the customer asked for X but the admin panel
+ * shows no sign of it" — every such request must fire a bell here AND have a
+ * command-center count on its admin tile.
+ */
+export async function notifyAllAdminsOfClientRequest(opts: {
+  customerName: string
+  title: string
+  body: string
+  href?: string
+  excludeIds?: string[]
+}): Promise<void> {
+  try {
+    const emails = adminEmails()
+    const admins = await Promise.all(emails.map((e) => getDynamicUserByEmail(e).catch(() => undefined)))
+    const excluded = new Set((opts.excludeIds ?? []).filter(Boolean))
+    const seen = new Set<string>()
+    await Promise.all(
+      admins
+        .filter(
+          (a): a is NonNullable<typeof a> =>
+            !!a && !excluded.has(a.id) && !seen.has(a.id) && (seen.add(a.id), true),
+        )
+        .map((admin) =>
+          insertNotification({
+            userId: admin.id,
+            tone: "warning",
+            title: opts.title,
+            body: opts.body,
+            href: opts.href ?? "/dashboard/admin",
+          }).catch(() => undefined),
+        ),
+    )
+  } catch {
+    // Best-effort — never affect the customer's request.
+  }
+}

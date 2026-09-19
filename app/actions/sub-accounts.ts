@@ -1,6 +1,7 @@
 "use server"
 
 import { resolveCurrentSession } from "@/lib/session-user"
+import { notifyAllAdminsOfClientRequest } from "@/lib/notify-admins"
 import { getMyMembership } from "@/app/actions/membership"
 import { capabilitiesForAccount } from "@/lib/tier-capabilities"
 import { logActivity } from "@/app/actions/log-activity"
@@ -186,6 +187,14 @@ export async function requestSubAccount(input: {
         purpose: purpose || "(none)",
         verification,
       },
+    })
+
+    await notifyAllAdminsOfClientRequest({
+      customerName: `${session.profile.fullName} (${session.profile.company})`,
+      title: `New sub-account request — ${currency}`,
+      body: `${session.profile.fullName} (${session.profile.company}) opened a ${verification === "declared" ? "declared UBO" : "alias"} ${currency} sub-account request ("${label}") awaiting administrator IBAN assignment. Open the Administrator panel → Sub-Accounts to review it.`,
+      href: "/dashboard/admin?view=subaccounts",
+      excludeIds: [session.id, ownerId],
     })
 
     return { ok: true, data: created }
