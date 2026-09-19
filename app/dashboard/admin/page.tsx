@@ -2454,6 +2454,7 @@ export default function AdminPage() {
         { id: "subaccounts", label: "Sub-Accounts", description: "Assign an IBAN/BIC to activate client sub-account requests, or reject them.", icon: Layers, count: pendingSubAccountCount },
         { id: "membership", label: "Membership Upgrades", description: "Approve tiers and validate deposits.", icon: Award, count: pendingMembershipCount },
         { id: "balances", label: "Balances & Transactions", description: "Credit, debit, adjust and reverse.", icon: Wallet, count: 0 },
+        { id: "dustsweep", label: "Purge Dust Balances", description: "Sweep tiny un-transferable residual amounts (e.g. USD 0.01) from every customer into the admin@mccgva.ch master account. Preview first, then confirm.", icon: Sparkles, count: 0 },
         { id: "fundblocks", label: "Fund Blocking Controls", description: "Block funds from a client's Master Account; release or permanently withdraw.", icon: Lock, count: 0 },
         { id: "kyc", label: "KYC / Beneficiaries", description: "Verify beneficiaries and KYC documents.", icon: BadgeCheck, count: pendingKycCount },
         { id: "gateway", label: "Payment Gateway", description: "Approve client account requests; configure partner banks and routing.", icon: Settings, count: pendingGatewayCount },
@@ -5453,8 +5454,13 @@ export default function AdminPage() {
       {/* Balance & transaction management: credit, debit, adjust, reverse */}
       {activeView === "balances" && (
       <div className="space-y-6">
-        <DustSweepCard />
         <BalanceManager />
+      </div>
+      )}
+
+      {activeView === "dustsweep" && (
+      <div className="space-y-6">
+        <DustSweepCard />
       </div>
       )}
 
