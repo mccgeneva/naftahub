@@ -4,7 +4,8 @@ import { query, isDatabaseConfigured } from "@/lib/db"
 import { adminActionAuthorized, isAdminEmail } from "@/lib/admin-auth"
 import { type UserProfile } from "@/lib/users"
 import { resolveAccountProfileById, resolveCurrentSession, resolveDataOwnerIdFor } from "@/lib/session-user"
-import { getDynamicUserByEmail } from "@/lib/admin-users-db"
+import { getDynamicUserByEmail, listDynamicUsers } from "@/lib/admin-users-db"
+import { deleteLedgerEntry } from "@/lib/ledger-db"
 import { insertNotification } from "@/lib/notifications-db"
 import { listApprovalsForUser } from "@/lib/approvals-db"
 import { reconcileSubAccountFees } from "@/lib/sub-account-db"
@@ -513,6 +514,189 @@ export async function addLedgerEntryForUserAdmin(
   } catch (err) {
     console.log("[v0] addLedgerEntryForUserAdmin failed:", (err as Error).message)
     return { ok: false, error: "The entry could not be posted. Please try again." }
+  }
+}
+
+// --- Dust sweep -------------------------------------------------------------
+
+export interface DustSweepResult {
+  ok: boolean
+  error?: string
+  dryRun: boolean
+  ownersAffected: number
+  entriesSwept: number
+  totalsByCurrency: Record<string, number>
+  totalEur: number
+}
+
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
+
+/**
+ * MAIN-account available balance per currency from a set of ledger entries —
+ * settled credits − settled debits − held debits — EXCLUDING sub-account
+ * compartment rows, so the dust sweep never disturbs a sub-account's isolated
+ * balance (mirrors what the client sees on the master overview cards).
+ */
+function mainAvailableByCurrency(entries: LedgerEntry[]): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const e of entries) {
+    if (e.subAccountId) continue
+    const cur = e.currency || "USD"
+    if (out[cur] === undefined) out[cur] = 0
+    if (e.status === "hold") {
+      if (e.direction === "debit") out[cur] -= e.amount
+    } else {
+      out[cur] += e.direction === "credit" ? e.amount : -e.amount
+    }
+  }
+  return out
+}
+
+/**
+ * Admin: sweep tiny, un-transferable "dust" balances (e.g. USD 0.01 leftovers
+ * from FX rounding) out of EVERY client's master account and into the
+ * admin@mccgva.ch master account.
+ *
+ * A currency is swept when its MAIN available balance is `0 < amt <= threshold`
+ * (default 1.00 in that currency's own units). Sub-account compartments are left
+ * untouched. Each swept currency posts a completed DEBIT on the client and a
+ * matching completed CREDIT on the admin master (rolled back if the credit leg
+ * fails, so funds never vanish). Naturally idempotent: after a sweep the client
+ * balance is 0, so re-running finds no dust. Pass `dryRun: true` to PREVIEW the
+ * totals without moving any money.
+ */
+export async function purgeDustBalancesAdmin(
+  passcode: string,
+  options?: { thresholdPerCurrency?: number; dryRun?: boolean },
+): Promise<DustSweepResult> {
+  const dryRun = !!options?.dryRun
+  const base: DustSweepResult = {
+    ok: false,
+    dryRun,
+    ownersAffected: 0,
+    entriesSwept: 0,
+    totalsByCurrency: {},
+    totalEur: 0,
+  }
+
+  let admin: UserProfile
+  try {
+    admin = await requireAdmin(passcode)
+  } catch (err) {
+    return { ...base, error: (err as Error).message }
+  }
+
+  const t = Number(options?.thresholdPerCurrency)
+  const cap = Number.isFinite(t) && t > 0 ? t : 1
+
+  try {
+    const adminUser = await getDynamicUserByEmail("admin@mccgva.ch")
+    if (!adminUser) {
+      return { ...base, error: "Master account admin@mccgva.ch could not be resolved." }
+    }
+    const adminOwnerId = await resolveDataOwnerIdFor(adminUser.id)
+
+    // Dedupe by resolved data-owner so a Master + its Sub-accounts don't each
+    // sweep the shared balance more than once, and never sweep the master itself.
+    const users = await listDynamicUsers()
+    const ownerIds: string[] = []
+    const seen = new Set<string>()
+    for (const u of users) {
+      const oid = await resolveDataOwnerIdFor(u.id)
+      if (oid === adminOwnerId || seen.has(oid)) continue
+      seen.add(oid)
+      ownerIds.push(oid)
+    }
+
+    const batch = Date.now()
+    const totalsByCurrency: Record<string, number> = {}
+    const affected = new Set<string>()
+    let entriesSwept = 0
+
+    for (const ownerId of ownerIds) {
+      const entries = await readLedger(ownerId)
+      const avail = mainAvailableByCurrency(entries)
+      for (const [cur, rawAmt] of Object.entries(avail)) {
+        const amt = round2(rawAmt)
+        if (amt <= 0 || amt > cap) continue
+
+        if (dryRun) {
+          totalsByCurrency[cur] = round2((totalsByCurrency[cur] ?? 0) + amt)
+          affected.add(ownerId)
+          entriesSwept++
+          continue
+        }
+
+        const nowIso = new Date().toISOString()
+        const debitId = `DUST-SWP-${batch}-${cur}`
+        try {
+          await upsertEntry(ownerId, {
+            id: debitId,
+            direction: "debit",
+            amount: amt,
+            currency: cur,
+            status: "completed",
+            date: nowIso,
+            counterparty: "MCC Treasury — Dust Sweep",
+            category: "Dust Sweep",
+            comment: "Un-transferable residual balance swept to the MCC master account.",
+          })
+          await upsertEntry(adminOwnerId, {
+            id: `DUST-COL-${batch}-${ownerId.slice(-10)}-${cur}`,
+            direction: "credit",
+            amount: amt,
+            currency: cur,
+            status: "completed",
+            date: nowIso,
+            counterparty: "Dust sweep collection",
+            category: "Dust Sweep",
+            comment: `Residual ${cur} balance swept from client account ${ownerId}.`,
+          })
+          totalsByCurrency[cur] = round2((totalsByCurrency[cur] ?? 0) + amt)
+          affected.add(ownerId)
+          entriesSwept++
+        } catch (e) {
+          // Roll back the client debit so funds can never vanish without landing
+          // on the master account.
+          await deleteLedgerEntry(ownerId, debitId).catch(() => {})
+          console.log("[v0] dust sweep leg failed for", ownerId, cur, (e as Error).message)
+        }
+      }
+    }
+
+    let totalEur = 0
+    for (const [cur, amt] of Object.entries(totalsByCurrency)) {
+      totalEur += await convertCurrency(amt, cur, "EUR")
+    }
+    totalEur = round2(totalEur)
+
+    if (!dryRun && entriesSwept > 0) {
+      await logActivity({
+        action: `Administrator swept ${entriesSwept} dust balance${entriesSwept === 1 ? "" : "s"} (≈ EUR ${totalEur.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) from ${affected.size} account${affected.size === 1 ? "" : "s"} to the master account`,
+        category: "Administration",
+        user: `${admin.fullName} (${admin.company})`,
+        details: {
+          thresholdPerCurrency: cap,
+          totalsByCurrency: Object.entries(totalsByCurrency)
+            .map(([c, a]) => `${c} ${a.toFixed(2)}`)
+            .join(", "),
+          totalEur: `EUR ${totalEur.toFixed(2)}`,
+          accountsAffected: affected.size,
+        },
+      })
+    }
+
+    return {
+      ok: true,
+      dryRun,
+      ownersAffected: affected.size,
+      entriesSwept,
+      totalsByCurrency,
+      totalEur,
+    }
+  } catch (err) {
+    console.log("[v0] purgeDustBalancesAdmin failed:", (err as Error).message)
+    return { ...base, error: "The dust sweep could not be completed. Please try again." }
   }
 }
 

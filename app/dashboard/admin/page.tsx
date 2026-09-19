@@ -182,6 +182,7 @@ import {
 import { KIND_LABELS, type ApprovalKind } from "@/lib/approval-kinds"
 import { adminListPendingKyc } from "@/app/actions/beneficiaries"
 import { BalanceManager } from "@/components/admin/balance-manager"
+import { DustSweepCard } from "@/components/admin/dust-sweep-card"
 import { FundBlockManager } from "@/components/admin/fund-block-manager"
 import { SkrManager } from "@/components/admin/skr-manager"
 import { SkrOverview } from "@/components/admin/skr-overview"
@@ -5452,6 +5453,7 @@ export default function AdminPage() {
       {/* Balance & transaction management: credit, debit, adjust, reverse */}
       {activeView === "balances" && (
       <div className="space-y-6">
+        <DustSweepCard />
         <BalanceManager />
       </div>
       )}
