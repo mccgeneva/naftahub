@@ -317,7 +317,7 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
         ? `${money(input.rangeMin, ccy)} – ${money(input.rangeMax, ccy)}`
         : money(input.investmentAmount, ccy),
     ],
-    ["Equity %", `${input.equityPct}%`],
+    ["Equity %", `${(input.equityPct * 100).toFixed(2)}%`],
     ["Equity amount", money(input.equityAmount, ccy)],
   ])
   paragraph(`Total Equity Participation Required: ${money(input.equityAmount, ccy)}.`, { bold: true })
