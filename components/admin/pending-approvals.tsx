@@ -59,6 +59,7 @@ import {
   LockOpen,
   MessagesSquare,
   FileText,
+  FileSignature,
   Download,
   ArrowLeft,
   AlertTriangle,
@@ -116,6 +117,8 @@ import {
 } from "@/app/actions/bankeka"
 import { Messenger } from "@/components/bankeka/messenger"
 import type { ProjectFundingRequest, UploadedFundingDoc } from "@/lib/project-funding-store"
+import { usePdfViewer } from "@/lib/pdf-viewer"
+import { generateInvestmentAgreementPdf } from "@/lib/investment-agreement-pdf"
 import {
   FACILITY_TYPE_LABELS,
   formatTenor,
@@ -698,6 +701,71 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     }
     return (userId: string) => map.get(userId) ?? userId
   }, [clients])
+
+  // Generate the Private Investment Agreement (equity participation) PDF for a
+  // project-funding application, pre-filled with the applicant's data and both
+  // parties' signature blocks, so the administrator can review/execute it
+  // BEFORE approving. Opens in the shared in-app PDF viewer.
+  const { show: showPdf } = usePdfViewer()
+  const openInvestmentAgreement = (req: ApprovalRequest, rec: ProjectFundingRequest) => {
+    const currency = rec.currency || req.currency || "USD"
+    const facility = Number(rec.facility) || 0
+    const equityAmount = Number(rec.totalEquity) || 0
+    const upfront = Number(rec.cashCommitment ?? rec.cashCommitmentMin) || 0
+    const remaining = Math.max(0, equityAmount - upfront)
+    const upfrontPct = equityAmount > 0 ? Math.round((upfront / equityAmount) * 100) : 0
+    const remainingPct = equityAmount > 0 ? Math.max(0, 100 - upfrontPct) : 0
+    const loan = isLoanFacility(rec.facilityType)
+    const roiLabel =
+      loan && rec.annualRate
+        ? `${(rec.annualRate * 100).toFixed(2)}% per annum`
+        : "As defined in the MCC structuring term sheet"
+    const tenorLabel =
+      loan && rec.tenorMonths ? formatTenor(rec.tenorMonths) : "To be defined at structuring"
+    const facilityNote =
+      loan && rec.facilityType
+        ? `Debt facility reference: ${FACILITY_TYPE_LABELS[rec.facilityType]} — arrangement fee ${formatMoney2(
+            rec.arrangementFee || 0,
+            currency,
+          )}, pledged collateral ${formatMoney2(rec.collateralValue || 0, currency)}.`
+        : undefined
+    const label = clientLabel(req.userId)
+    const clientCompany = rec.ownerCompany || (label.includes(" · ") ? label.split(" · ")[1] : "") || ""
+    const clientContact = rec.ownerName || (label.includes(" · ") ? label.split(" · ")[0] : label)
+    const clientName = clientCompany || clientContact
+    showPdf(
+      generateInvestmentAgreementPdf({
+        investorName: "MCC HOLDING SA",
+        investorAddress: "Rue du Rhône 8–14, Geneva, Switzerland",
+        investorSignatory: "",
+        investorTitle: "Chief Executive Officer",
+        clientName,
+        clientJurisdiction: rec.jurisdiction || "",
+        clientAddress: "",
+        clientContact,
+        clientTitle: "",
+        clientCompany,
+        clientEmail: rec.ownerEmail || "",
+        projectName: rec.projectName || req.title || "",
+        sector: rec.sector || "",
+        currency,
+        investmentAmount: facility,
+        equityPct: Number(rec.effectiveRate) || 0,
+        equityAmount,
+        rangeMin: 0,
+        rangeMax: 0,
+        upfrontPct,
+        upfrontAmount: upfront,
+        remainingPct,
+        remainingAmount: remaining,
+        fundingEntity: "MCC Holding SA",
+        roiLabel,
+        tenorLabel,
+        facilityNote,
+        governingLaw: "Swiss Law",
+      }),
+    )
+  }
 
   // Lowercased searchable text per client (name + company + email + id) so the
   // free-text customer search can match on any of them.
@@ -2002,6 +2070,19 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                         >
                           <MessagesSquare className="h-3.5 w-3.5" />
                           {funding.discussionOpenedAt ? "Continue discussion" : "Discuss"}
+                        </Button>
+                      )}
+                      {funding && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 gap-1"
+                          disabled={acting}
+                          onClick={() => openInvestmentAgreement(req, funding)}
+                          title="Generate the Private Investment Agreement (equity participation) pre-filled with this application's data, with both parties' signature blocks, to review and sign before approving."
+                        >
+                          <FileSignature className="h-3.5 w-3.5" />
+                          Investment Agreement
                         </Button>
                       )}
                       {canNegotiatePpi && ppi && (
