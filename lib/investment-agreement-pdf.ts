@@ -538,9 +538,9 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
   )
   kvRows([
     ["Beneficiary", input.bankingBeneficiary || "MCC Capital, Rue du Rhône 14, 1204 Geneva, Switzerland"],
-    ["Banking institution", input.bankingInstitution || "Banking Circle — German Branch, 80333 München, Germany"],
-    ["IBAN", input.bankingIban || "DE73 2022 0800 0029 2908 19"],
-    ["BIC / SWIFT", input.bankingBic || "SXPYDEHHXXX"],
+    ["Banking institution", input.bankingInstitution || "HSBC — Geneva, Switzerland"],
+    ["IBAN", input.bankingIban || "CH89 0023 0LYJ Q5P6 1QKW H"],
+    ["BIC / SWIFT", input.bankingBic || "5P61QKWH"],
     ["Proof of payment", "MT103 SWIFT confirmation required within 24 hours of wire execution"],
   ])
 
