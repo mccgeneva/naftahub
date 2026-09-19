@@ -715,13 +715,17 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
   const [agAssetValue, setAgAssetValue] = useState("")
 
   const openInvestmentAgreement = (req: ApprovalRequest, rec: ProjectFundingRequest) => {
+    const facility = Number(rec.facility) || 0
     const total = Number(rec.totalEquity) || 0
+    // Percentages are of the asked contract (facility) amount, e.g. 5% of USD 3.8M.
+    const base = facility > 0 ? facility : total
     const upfront0 = Number(rec.cashCommitment ?? rec.cashCommitmentMin) || 0
-    const upPct0 = total > 0 ? Math.round((upfront0 / total) * 100) : 0
+    const upPct0 = base > 0 && upfront0 > 0 ? +((upfront0 / base) * 100).toFixed(2) : 0
+    const eqPct = base > 0 ? +((total / base) * 100).toFixed(2) : 0
     setAgUpfrontMode("pct")
     setAgUpfrontValue(upPct0 > 0 ? String(upPct0) : "")
     setAgAssetMode("pct")
-    setAgAssetValue(upPct0 > 0 ? String(Math.max(0, 100 - upPct0)) : "")
+    setAgAssetValue(eqPct > 0 ? String(Math.max(0, +(eqPct - upPct0).toFixed(2))) : "")
     setAgTarget({ req, rec })
   }
 
@@ -729,19 +733,22 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     if (!agTarget) return
     const { req, rec } = agTarget
     const total = Number(rec.totalEquity) || 0
+    const currency = rec.currency || req.currency || "USD"
+    const facility = Number(rec.facility) || 0
+    // Percentages entered by the admin are of the asked contract (facility) amount,
+    // e.g. 5% of a USD 3,800,000 facility = USD 190,000.
+    const pctBase = facility > 0 ? facility : total
     const upNum = Number.parseFloat(agUpfrontValue)
     const asNum = Number.parseFloat(agAssetValue)
     if (!Number.isFinite(upNum) || upNum <= 0 || !Number.isFinite(asNum) || asNum <= 0) {
       toast.error("Enter both the upfront cash commitment and the required equity asset.")
       return
     }
-    const upfrontAmount = agUpfrontMode === "amount" ? upNum : (upNum / 100) * total
+    const upfrontAmount = agUpfrontMode === "amount" ? upNum : (upNum / 100) * pctBase
     const upfrontPct = agUpfrontMode === "amount" ? null : upNum
-    const remainingAmount = agAssetMode === "amount" ? asNum : (asNum / 100) * total
+    const remainingAmount = agAssetMode === "amount" ? asNum : (asNum / 100) * pctBase
     const remainingPct = agAssetMode === "amount" ? null : asNum
 
-    const currency = rec.currency || req.currency || "USD"
-    const facility = Number(rec.facility) || 0
     const loan = isLoanFacility(rec.facilityType)
     const roiLabel =
       loan && rec.annualRate
@@ -2746,18 +2753,20 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
             </DialogTitle>
             <DialogDescription className="text-pretty">
               Set the equity-contribution split before generating the contract. Enter each as a percentage of the
-              total equity, or switch to a fixed amount to apply special conditions for this client. The value you
-              enter is exactly what prints in the agreement.
+              asked contract amount (the facility), or switch to a fixed amount to apply special conditions for this
+              client. The value you enter is exactly what prints in the agreement.
             </DialogDescription>
           </DialogHeader>
           {agTarget &&
             (() => {
               const total = Number(agTarget.rec.totalEquity) || 0
+              const facility = Number(agTarget.rec.facility) || 0
+              const pctBase = facility > 0 ? facility : total
               const ccy = agTarget.rec.currency || agTarget.req.currency || "USD"
               const upNum = Number.parseFloat(agUpfrontValue)
               const asNum = Number.parseFloat(agAssetValue)
-              const upAmt = agUpfrontMode === "amount" ? upNum : (upNum / 100) * total
-              const asAmt = agAssetMode === "amount" ? asNum : (asNum / 100) * total
+              const upAmt = agUpfrontMode === "amount" ? upNum : (upNum / 100) * pctBase
+              const asAmt = agAssetMode === "amount" ? asNum : (asNum / 100) * pctBase
               const sum = (Number.isFinite(upAmt) ? upAmt : 0) + (Number.isFinite(asAmt) ? asAmt : 0)
               const toggleCls = (activeMode: boolean) =>
                 `rounded px-2 py-0.5 text-xs font-medium transition-colors ${
@@ -2765,9 +2774,16 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                 }`
               return (
                 <div className="space-y-4">
-                  <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-                    Total equity participation:{" "}
-                    <span className="font-medium text-foreground">{formatMoney2(total, ccy)}</span>
+                  <div className="space-y-1 rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                    <div>
+                      Contract amount (facility):{" "}
+                      <span className="font-medium text-foreground">{formatMoney2(pctBase, ccy)}</span> — percentages
+                      below are of this amount.
+                    </div>
+                    <div>
+                      Total equity participation:{" "}
+                      <span className="font-medium text-foreground">{formatMoney2(total, ccy)}</span>
+                    </div>
                   </div>
 
                   <div className="space-y-1.5">
@@ -2797,11 +2813,11 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                     )}
                     <p className="text-[11px] text-muted-foreground">
                       {agUpfrontMode === "pct"
-                        ? Number.isFinite(upAmt) && total > 0
-                          ? `${upNum}% of total equity = ${formatMoney2(upAmt, ccy)} (clause 3.1)`
-                          : "Percentage of the total equity paid upfront in cash (clause 3.1)."
-                        : Number.isFinite(upAmt) && total > 0
-                          ? `${formatMoney2(upAmt, ccy)} = ${((upAmt / total) * 100).toFixed(2)}% of total equity — prints as a fixed amount (clause 3.1)`
+                        ? Number.isFinite(upAmt) && pctBase > 0
+                          ? `${upNum}% of the contract amount = ${formatMoney2(upAmt, ccy)} (clause 3.1)`
+                          : "Percentage of the asked contract amount paid upfront in cash (clause 3.1)."
+                        : Number.isFinite(upAmt) && pctBase > 0
+                          ? `${formatMoney2(upAmt, ccy)} = ${((upAmt / pctBase) * 100).toFixed(2)}% of the contract amount — prints as a fixed amount (clause 3.1)`
                           : "Fixed upfront cash amount — prints in place of the % (clause 3.1)."}
                     </p>
                   </div>
@@ -2833,11 +2849,11 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                     )}
                     <p className="text-[11px] text-muted-foreground">
                       {agAssetMode === "pct"
-                        ? Number.isFinite(asAmt) && total > 0
-                          ? `${asNum}% of total equity = ${formatMoney2(asAmt, ccy)} (clause 3.2)`
-                          : "Percentage of the total equity covered by pledged assets (clause 3.2)."
-                        : Number.isFinite(asAmt) && total > 0
-                          ? `${formatMoney2(asAmt, ccy)} = ${((asAmt / total) * 100).toFixed(2)}% of total equity — prints as a fixed amount (clause 3.2)`
+                        ? Number.isFinite(asAmt) && pctBase > 0
+                          ? `${asNum}% of the contract amount = ${formatMoney2(asAmt, ccy)} (clause 3.2)`
+                          : "Percentage of the asked contract amount covered by pledged assets (clause 3.2)."
+                        : Number.isFinite(asAmt) && pctBase > 0
+                          ? `${formatMoney2(asAmt, ccy)} = ${((asAmt / pctBase) * 100).toFixed(2)}% of the contract amount — prints as a fixed amount (clause 3.2)`
                           : "Fixed equity-asset amount — prints in place of the % (clause 3.2)."}
                     </p>
                   </div>

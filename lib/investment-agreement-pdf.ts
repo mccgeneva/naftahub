@@ -331,7 +331,10 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
   paragraph("3.1 Upfront Commitment", { bold: true })
   paragraph(
     input.upfrontPct != null
-      ? `The Client shall provide an initial down-payment equal to ${input.upfrontPct}% of the total equity — ${money(
+      ? `The Client shall provide an initial down-payment equal to ${input.upfrontPct}% of the project facility (${money(
+          input.investmentAmount,
+          ccy,
+        )}) — ${money(
           input.upfrontAmount,
           ccy,
         )} — payable via bank wire transfer. This payment constitutes proof of commitment, activation of the structuring process, and allocation of internal resources.`
@@ -343,7 +346,7 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
   paragraph("3.2 Remaining Equity (Asset-Based Contribution)", { bold: true })
   paragraph(
     input.remainingPct != null
-      ? `The remaining ${input.remainingPct}% of the equity (${money(
+      ? `A further ${input.remainingPct}% of the project facility (${money(
           input.remainingAmount,
           ccy,
         )}) may be covered through tangible or financial assets, including real estate, land holdings, project-owned infrastructure or equipment, and bank instruments (subject to approval).`
