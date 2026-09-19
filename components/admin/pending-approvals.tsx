@@ -83,6 +83,7 @@ import {
   adminAdjustLeveragePpi,
   adminAdjustMonetizationReserve,
   adminNegotiateCommodityDeal,
+  adminUpdateApprovalRecord,
   adminConfirmYieldTermination,
   adminRequestAccountTopUp,
   adminCreditTopUp,
@@ -715,6 +716,23 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
   const [agAssetValue, setAgAssetValue] = useState("")
 
   const openInvestmentAgreement = (req: ApprovalRequest, rec: ProjectFundingRequest) => {
+    // If the admin has already negotiated + generated an agreement for this
+    // request, restore EXACTLY what was entered last time (persisted onto the
+    // record) so reopening never loses the terms.
+    const saved = rec as unknown as {
+      agreementUpfrontMode?: "pct" | "amount"
+      agreementUpfrontValue?: string
+      agreementAssetMode?: "pct" | "amount"
+      agreementAssetValue?: string
+    }
+    if (saved.agreementUpfrontValue !== undefined || saved.agreementAssetValue !== undefined) {
+      setAgUpfrontMode(saved.agreementUpfrontMode === "amount" ? "amount" : "pct")
+      setAgUpfrontValue(saved.agreementUpfrontValue ?? "")
+      setAgAssetMode(saved.agreementAssetMode === "amount" ? "amount" : "pct")
+      setAgAssetValue(saved.agreementAssetValue ?? "")
+      setAgTarget({ req, rec })
+      return
+    }
     const facility = Number(rec.facility) || 0
     const total = Number(rec.totalEquity) || 0
     // Percentages are of the asked contract (facility) amount, e.g. 5% of USD 3.8M.
@@ -729,7 +747,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     setAgTarget({ req, rec })
   }
 
-  const generateAgreement = () => {
+  const generateAgreement = async () => {
     if (!agTarget) return
     const { req, rec } = agTarget
     const total = Number(rec.totalEquity) || 0
@@ -811,6 +829,32 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         dueDiligenceBody: "JURIS TREUHAND AG, Zurich",
       }),
     )
+    // BIND the negotiated terms to the request so that (a) reopening the dialog
+    // restores exactly what was entered, and (b) these are the equity conditions
+    // that apply on Approve. `effectiveRate` is stored as a FRACTION (0.05 = 5%),
+    // consistent with how the record's rate is treated everywhere. This does NOT
+    // change the facility principal disbursed on approval (driven by rec.facility)
+    // or the loan arrangement fee (facility + collateral) — only the equity terms.
+    try {
+      const res = await adminUpdateApprovalRecord(ADMIN_PASSCODE, req.id, {
+        totalEquity: effectiveEquityAmount,
+        effectiveRate: effectiveEquityPct,
+        cashCommitment: upfrontAmount,
+        agreementUpfrontMode: agUpfrontMode,
+        agreementUpfrontValue: agUpfrontValue,
+        agreementAssetMode: agAssetMode,
+        agreementAssetValue: agAssetValue,
+        agreementGeneratedAt: new Date().toISOString(),
+      })
+      if (res.ok) {
+        await mutate()
+        toast.success("Agreement terms saved — these are the conditions that apply on approval.")
+      } else {
+        toast.error(res.error || "The agreement was generated but its terms could not be saved.")
+      }
+    } catch {
+      toast.error("The agreement was generated but its terms could not be saved. Please try again.")
+    }
     setAgTarget(null)
   }
 
@@ -2767,7 +2811,8 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
               Set the equity-contribution split before generating the contract. Enter each as a percentage of the
               asked contract amount (the facility), or switch to a fixed amount to apply special conditions for this
               client. Either portion may be set to 0 (but not both). The value you enter is exactly what prints in the
-              agreement.
+              agreement, is saved to this request, and becomes the equity condition applied when you Approve — reopening
+              this dialog restores what you last entered.
             </DialogDescription>
           </DialogHeader>
           {agTarget &&
