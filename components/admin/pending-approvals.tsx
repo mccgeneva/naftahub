@@ -752,6 +752,13 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     const remainingAmount = agAssetMode === "amount" ? asNum : (asNum / 100) * pctBase
     const remainingPct = agAssetMode === "amount" ? null : asNum
 
+    // The Total Equity required by the contract is resized to exactly the portions
+    // the admin set: upfront cash + equity asset. So if the equity asset is left
+    // empty, only the upfront cash equity is assumed as the total equity, and its
+    // % of the facility is recomputed accordingly (rather than the original 190k).
+    const effectiveEquityAmount = upfrontAmount + remainingAmount
+    const effectiveEquityPct = pctBase > 0 ? effectiveEquityAmount / pctBase : 0
+
     const loan = isLoanFacility(rec.facilityType)
     const roiLabel =
       loan && rec.annualRate
@@ -787,8 +794,8 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         sector: rec.sector || "",
         currency,
         investmentAmount: facility,
-        equityPct: Number(rec.effectiveRate) || 0,
-        equityAmount: total,
+        equityPct: effectiveEquityPct,
+        equityAmount: effectiveEquityAmount,
         rangeMin: 0,
         rangeMax: 0,
         upfrontPct,
