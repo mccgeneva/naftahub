@@ -702,19 +702,46 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     return (userId: string) => map.get(userId) ?? userId
   }, [clients])
 
-  // Generate the Private Investment Agreement (equity participation) PDF for a
-  // project-funding application, pre-filled with the applicant's data and both
-  // parties' signature blocks, so the administrator can review/execute it
-  // BEFORE approving. Opens in the shared in-app PDF viewer.
+  // Private Investment Agreement — the admin sets the equity-contribution split
+  // (upfront cash commitment + required equity asset), each as a % of the total
+  // equity OR as a fixed amount for special client conditions, BEFORE generating
+  // the contract. The PDF is pre-filled with the applicant's data and both
+  // parties' signature blocks and opens in the shared in-app viewer.
   const { show: showPdf } = usePdfViewer()
+  const [agTarget, setAgTarget] = useState<{ req: ApprovalRequest; rec: ProjectFundingRequest } | null>(null)
+  const [agUpfrontMode, setAgUpfrontMode] = useState<"pct" | "amount">("pct")
+  const [agUpfrontValue, setAgUpfrontValue] = useState("")
+  const [agAssetMode, setAgAssetMode] = useState<"pct" | "amount">("pct")
+  const [agAssetValue, setAgAssetValue] = useState("")
+
   const openInvestmentAgreement = (req: ApprovalRequest, rec: ProjectFundingRequest) => {
+    const total = Number(rec.totalEquity) || 0
+    const upfront0 = Number(rec.cashCommitment ?? rec.cashCommitmentMin) || 0
+    const upPct0 = total > 0 ? Math.round((upfront0 / total) * 100) : 0
+    setAgUpfrontMode("pct")
+    setAgUpfrontValue(upPct0 > 0 ? String(upPct0) : "")
+    setAgAssetMode("pct")
+    setAgAssetValue(upPct0 > 0 ? String(Math.max(0, 100 - upPct0)) : "")
+    setAgTarget({ req, rec })
+  }
+
+  const generateAgreement = () => {
+    if (!agTarget) return
+    const { req, rec } = agTarget
+    const total = Number(rec.totalEquity) || 0
+    const upNum = Number.parseFloat(agUpfrontValue)
+    const asNum = Number.parseFloat(agAssetValue)
+    if (!Number.isFinite(upNum) || upNum <= 0 || !Number.isFinite(asNum) || asNum <= 0) {
+      toast.error("Enter both the upfront cash commitment and the required equity asset.")
+      return
+    }
+    const upfrontAmount = agUpfrontMode === "amount" ? upNum : (upNum / 100) * total
+    const upfrontPct = agUpfrontMode === "amount" ? null : upNum
+    const remainingAmount = agAssetMode === "amount" ? asNum : (asNum / 100) * total
+    const remainingPct = agAssetMode === "amount" ? null : asNum
+
     const currency = rec.currency || req.currency || "USD"
     const facility = Number(rec.facility) || 0
-    const equityAmount = Number(rec.totalEquity) || 0
-    const upfront = Number(rec.cashCommitment ?? rec.cashCommitmentMin) || 0
-    const remaining = Math.max(0, equityAmount - upfront)
-    const upfrontPct = equityAmount > 0 ? Math.round((upfront / equityAmount) * 100) : 0
-    const remainingPct = equityAmount > 0 ? Math.max(0, 100 - upfrontPct) : 0
     const loan = isLoanFacility(rec.facilityType)
     const roiLabel =
       loan && rec.annualRate
@@ -751,13 +778,13 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         currency,
         investmentAmount: facility,
         equityPct: Number(rec.effectiveRate) || 0,
-        equityAmount,
+        equityAmount: total,
         rangeMin: 0,
         rangeMax: 0,
         upfrontPct,
-        upfrontAmount: upfront,
+        upfrontAmount,
         remainingPct,
-        remainingAmount: remaining,
+        remainingAmount,
         fundingEntity: "MCC Holding SA",
         roiLabel,
         tenorLabel,
@@ -765,6 +792,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         governingLaw: "Swiss Law",
       }),
     )
+    setAgTarget(null)
   }
 
   // Lowercased searchable text per client (name + company + email + id) so the
@@ -2705,6 +2733,144 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
             <Button className="gap-1" onClick={confirmTopUp} disabled={acting}>
               {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}
               Send top-up request
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={agTarget !== null} onOpenChange={(o) => !o && setAgTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileSignature className="h-4 w-4 text-primary" />
+              Investment Agreement — equity terms
+            </DialogTitle>
+            <DialogDescription className="text-pretty">
+              Set the equity-contribution split before generating the contract. Enter each as a percentage of the
+              total equity, or switch to a fixed amount to apply special conditions for this client. The value you
+              enter is exactly what prints in the agreement.
+            </DialogDescription>
+          </DialogHeader>
+          {agTarget &&
+            (() => {
+              const total = Number(agTarget.rec.totalEquity) || 0
+              const ccy = agTarget.rec.currency || agTarget.req.currency || "USD"
+              const upNum = Number.parseFloat(agUpfrontValue)
+              const asNum = Number.parseFloat(agAssetValue)
+              const upAmt = agUpfrontMode === "amount" ? upNum : (upNum / 100) * total
+              const asAmt = agAssetMode === "amount" ? asNum : (asNum / 100) * total
+              const sum = (Number.isFinite(upAmt) ? upAmt : 0) + (Number.isFinite(asAmt) ? asAmt : 0)
+              const toggleCls = (activeMode: boolean) =>
+                `rounded px-2 py-0.5 text-xs font-medium transition-colors ${
+                  activeMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                }`
+              return (
+                <div className="space-y-4">
+                  <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                    Total equity participation:{" "}
+                    <span className="font-medium text-foreground">{formatMoney2(total, ccy)}</span>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label htmlFor="ag-upfront">Upfront cash equity commitment</Label>
+                      <div className="flex shrink-0 rounded-md border border-border p-0.5">
+                        <button type="button" onClick={() => setAgUpfrontMode("pct")} className={toggleCls(agUpfrontMode === "pct")}>
+                          %
+                        </button>
+                        <button type="button" onClick={() => setAgUpfrontMode("amount")} className={toggleCls(agUpfrontMode === "amount")}>
+                          {ccy}
+                        </button>
+                      </div>
+                    </div>
+                    {agUpfrontMode === "amount" ? (
+                      <MoneyInput id="ag-upfront" value={agUpfrontValue} onValueChange={setAgUpfrontValue} className="text-base md:text-sm" />
+                    ) : (
+                      <Input
+                        id="ag-upfront"
+                        type="text"
+                        inputMode="decimal"
+                        value={agUpfrontValue}
+                        onChange={(e) => setAgUpfrontValue(e.target.value.replace(/[^0-9.]/g, ""))}
+                        placeholder="e.g. 30"
+                        className="text-base md:text-sm"
+                      />
+                    )}
+                    <p className="text-[11px] text-muted-foreground">
+                      {agUpfrontMode === "pct"
+                        ? Number.isFinite(upAmt) && total > 0
+                          ? `${upNum}% of total equity = ${formatMoney2(upAmt, ccy)} (clause 3.1)`
+                          : "Percentage of the total equity paid upfront in cash (clause 3.1)."
+                        : Number.isFinite(upAmt) && total > 0
+                          ? `${formatMoney2(upAmt, ccy)} = ${((upAmt / total) * 100).toFixed(2)}% of total equity — prints as a fixed amount (clause 3.1)`
+                          : "Fixed upfront cash amount — prints in place of the % (clause 3.1)."}
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label htmlFor="ag-asset">Equity asset required</Label>
+                      <div className="flex shrink-0 rounded-md border border-border p-0.5">
+                        <button type="button" onClick={() => setAgAssetMode("pct")} className={toggleCls(agAssetMode === "pct")}>
+                          %
+                        </button>
+                        <button type="button" onClick={() => setAgAssetMode("amount")} className={toggleCls(agAssetMode === "amount")}>
+                          {ccy}
+                        </button>
+                      </div>
+                    </div>
+                    {agAssetMode === "amount" ? (
+                      <MoneyInput id="ag-asset" value={agAssetValue} onValueChange={setAgAssetValue} className="text-base md:text-sm" />
+                    ) : (
+                      <Input
+                        id="ag-asset"
+                        type="text"
+                        inputMode="decimal"
+                        value={agAssetValue}
+                        onChange={(e) => setAgAssetValue(e.target.value.replace(/[^0-9.]/g, ""))}
+                        placeholder="e.g. 70"
+                        className="text-base md:text-sm"
+                      />
+                    )}
+                    <p className="text-[11px] text-muted-foreground">
+                      {agAssetMode === "pct"
+                        ? Number.isFinite(asAmt) && total > 0
+                          ? `${asNum}% of total equity = ${formatMoney2(asAmt, ccy)} (clause 3.2)`
+                          : "Percentage of the total equity covered by pledged assets (clause 3.2)."
+                        : Number.isFinite(asAmt) && total > 0
+                          ? `${formatMoney2(asAmt, ccy)} = ${((asAmt / total) * 100).toFixed(2)}% of total equity — prints as a fixed amount (clause 3.2)`
+                          : "Fixed equity-asset amount — prints in place of the % (clause 3.2)."}
+                    </p>
+                  </div>
+
+                  {total > 0 && Number.isFinite(sum) && sum > 0 && Math.abs(sum - total) > 0.5 && (
+                    <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-[11px] text-amber-600 dark:text-amber-400">
+                      Upfront + equity asset = {formatMoney2(sum, ccy)}, which differs from the total equity of{" "}
+                      {formatMoney2(total, ccy)}. Allowed for special conditions — confirm it is intended before
+                      generating.
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAgTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              className="gap-1"
+              onClick={generateAgreement}
+              disabled={
+                !(
+                  Number.isFinite(Number.parseFloat(agUpfrontValue)) &&
+                  Number.parseFloat(agUpfrontValue) > 0 &&
+                  Number.isFinite(Number.parseFloat(agAssetValue)) &&
+                  Number.parseFloat(agAssetValue) > 0
+                )
+              }
+            >
+              <FileSignature className="h-4 w-4" />
+              Generate contract
             </Button>
           </DialogFooter>
         </DialogContent>

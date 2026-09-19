@@ -37,9 +37,13 @@ export interface InvestmentAgreementInput {
   equityAmount: number
   rangeMin: number
   rangeMax: number
-  upfrontPct: number
+  /** Upfront cash portion as a % of total equity, or null when set as a fixed
+   *  amount (special conditions) — in which case only the amount is printed. */
+  upfrontPct: number | null
   upfrontAmount: number
-  remainingPct: number
+  /** Required equity-asset portion as a % of total equity, or null when set as
+   *  a fixed amount — in which case only the amount is printed. */
+  remainingPct: number | null
   remainingAmount: number
   fundingEntity: string
   roiLabel: string
@@ -326,17 +330,27 @@ export function generateInvestmentAgreementPdf(input: InvestmentAgreementInput):
   sectionTitle("3. Equity Contribution Terms")
   paragraph("3.1 Upfront Commitment", { bold: true })
   paragraph(
-    `The Client shall provide an initial down-payment equal to ${input.upfrontPct}% of the total equity — ${money(
-      input.upfrontAmount,
-      ccy,
-    )} — payable via bank wire transfer. This payment constitutes proof of commitment, activation of the structuring process, and allocation of internal resources.`,
+    input.upfrontPct != null
+      ? `The Client shall provide an initial down-payment equal to ${input.upfrontPct}% of the total equity — ${money(
+          input.upfrontAmount,
+          ccy,
+        )} — payable via bank wire transfer. This payment constitutes proof of commitment, activation of the structuring process, and allocation of internal resources.`
+      : `The Client shall provide an initial cash down-payment of ${money(
+          input.upfrontAmount,
+          ccy,
+        )}, payable via bank wire transfer. This payment constitutes proof of commitment, activation of the structuring process, and allocation of internal resources.`,
   )
   paragraph("3.2 Remaining Equity (Asset-Based Contribution)", { bold: true })
   paragraph(
-    `The remaining ${input.remainingPct}% of the equity (${money(
-      input.remainingAmount,
-      ccy,
-    )}) may be covered through tangible or financial assets, including real estate, land holdings, project-owned infrastructure or equipment, and bank instruments (subject to approval).`,
+    input.remainingPct != null
+      ? `The remaining ${input.remainingPct}% of the equity (${money(
+          input.remainingAmount,
+          ccy,
+        )}) may be covered through tangible or financial assets, including real estate, land holdings, project-owned infrastructure or equipment, and bank instruments (subject to approval).`
+      : `A further ${money(
+          input.remainingAmount,
+          ccy,
+        )} of the equity may be covered through tangible or financial assets, including real estate, land holdings, project-owned infrastructure or equipment, and bank instruments (subject to approval).`,
   )
   paragraph("Security condition — all such assets shall be:", { bold: true, size: 9 })
   bullets([
