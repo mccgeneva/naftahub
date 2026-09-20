@@ -286,7 +286,75 @@ export async function buildCustomerInvestigation(
     }
   })
 
-  const merged = [...ledgerItems, ...activityItems].sort((a, b) => {
+  // Approval requests → narrative "applied for X" + "X approved/rejected"
+  // events. This is what turns the log into a readable story ("applied for a
+  // 1:10 leverage line", "purchased a BG", "went into yield with the BG") on
+  // top of the raw money movements the ledger already provides.
+  const approvalItems: TimelineItem[] = []
+  const decidedVerb: Record<string, string> = {
+    approved: "approved",
+    rejected: "rejected",
+    cancelled: "cancelled",
+    canceled: "cancelled",
+    awaiting_master: "awaiting master approval",
+  }
+  for (const a of approvals) {
+    const label = KIND_LABELS[a.kind] ?? a.kind
+    const detail = [a.summary, a.title]
+      .map((s) => (typeof s === "string" ? s.trim() : ""))
+      .filter(Boolean)
+      .filter((v, i, arr) => arr.indexOf(v) === i)
+      .join(" — ")
+    const amt = a.amount ?? null
+    const cur = a.currency ?? null
+    // "Applied for …" — at submission time.
+    if (a.createdAt && (!from || a.createdAt >= from) && (!to || a.createdAt <= to)) {
+      const description = detail ? `Applied — ${detail}` : `Applied for ${label}`
+      approvalItems.push({
+        at: a.createdAt,
+        source: "Activity",
+        section: label,
+        type: "Applied",
+        category: classifyEvent({ source: "Activity", section: label, type: "Applied", description, amount: amt, status: null }),
+        description,
+        amount: amt,
+        currency: cur,
+        status: "pending",
+        balanceAfter: null,
+        ref: a.id,
+        ip: null,
+        device: null,
+        actor: (a.initiatedByName || (a.userId && memberLabel.get(a.userId))) ?? null,
+        compartmentId: "",
+        compartment: "",
+      })
+    }
+    // Decision — at decision time, when actually decided.
+    const verb = decidedVerb[a.status]
+    if (verb && a.decidedAt && (!from || a.decidedAt >= from) && (!to || a.decidedAt <= to)) {
+      const description = `${label} ${verb}${a.decisionNote ? ` — ${a.decisionNote}` : ""}`
+      approvalItems.push({
+        at: a.decidedAt,
+        source: "Activity",
+        section: label,
+        type: verb === "approved" ? "Approved" : verb === "rejected" ? "Rejected" : "Decision",
+        category: classifyEvent({ source: "Activity", section: label, type: verb, description, amount: amt, status: null }),
+        description,
+        amount: amt,
+        currency: cur,
+        status: a.status,
+        balanceAfter: null,
+        ref: a.id,
+        ip: null,
+        device: null,
+        actor: a.decidedBy || null,
+        compartmentId: "",
+        compartment: "",
+      })
+    }
+  }
+
+  const merged = [...ledgerItems, ...activityItems, ...approvalItems].sort((a, b) => {
     if (a.at < b.at) return -1
     if (a.at > b.at) return 1
     // Stable tiebreak: money movements before activity at the same instant.
@@ -316,7 +384,11 @@ export async function buildCustomerInvestigation(
     compartments,
     facilities,
     timeline,
-    counts: { total: timeline.length, ledger: ledgerItems.length, activity: activityItems.length },
+    counts: {
+      total: timeline.length,
+      ledger: ledgerItems.length,
+      activity: activityItems.length + approvalItems.length,
+    },
     byCategory,
     truncated,
     generatedAt: new Date().toISOString(),
