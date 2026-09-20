@@ -17,6 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -690,11 +691,11 @@ function EventDetailModal({ event, onClose }: { event: TimelineItem; onClose: ()
   const isCredit = event.amount !== null && event.amount > 0
   const isDebit = event.amount !== null && event.amount < 0
   const isDoc = event.category === "Document"
-  return (
+  const content = (
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-foreground/50 p-0 sm:items-center sm:p-4"
+      className="fixed inset-0 z-[100] flex items-end justify-center bg-foreground/50 p-0 sm:items-center sm:p-4"
       onClick={onClose}
     >
       <div
@@ -794,4 +795,6 @@ function EventDetailModal({ event, onClose }: { event: TimelineItem; onClose: ()
       </div>
     </div>
   )
+  if (typeof document === "undefined") return null
+  return createPortal(content, document.body)
 }
