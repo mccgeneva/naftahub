@@ -83,12 +83,22 @@ function IdDocImage({
 
   if (isPdf) {
     if (variant === "thumb") {
+      // Render an actual preview of the PDF's first page. The iframe is
+      // pointer-events-none so the tap still reaches the parent button that
+      // opens the full viewer; a small badge marks it as a PDF.
       return (
-        <div
-          className={`flex flex-col items-center justify-center gap-1 bg-muted/40 text-center text-muted-foreground ${className}`}
-        >
-          <FileText className="h-6 w-6" />
-          <span className="text-[10px] font-medium leading-tight">PDF document</span>
+        <div className={`relative bg-white ${className}`}>
+          <iframe
+            src={`${base}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
+            title={alt}
+            aria-hidden="true"
+            tabIndex={-1}
+            className="pointer-events-none h-full w-full border-0"
+          />
+          <span className="pointer-events-none absolute bottom-1 right-1 flex items-center gap-1 rounded bg-background/85 px-1.5 py-0.5 text-[9px] font-semibold text-foreground shadow-sm">
+            <FileText className="h-3 w-3" />
+            PDF
+          </span>
         </div>
       )
     }
