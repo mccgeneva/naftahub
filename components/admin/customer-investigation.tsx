@@ -16,7 +16,7 @@
 // and restricted to administrators (the whole panel is passcode-gated).
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -97,6 +97,18 @@ export function CustomerInvestigation() {
   const [categoryFilter, setCategoryFilter] = useState<string>("all")
   const [eventSearch, setEventSearch] = useState("")
   const [pdfDoc, setPdfDoc] = useState<jsPDF | null>(null)
+
+  // The activity log renders below the (tall) positions card, so on mobile it
+  // sits off-screen after "Generate log". Scroll straight to it once the fresh
+  // report has rendered — but only when the admin explicitly generated it.
+  const logRef = useRef<HTMLDivElement>(null)
+  const wantScrollRef = useRef(false)
+  useEffect(() => {
+    if (report && wantScrollRef.current) {
+      wantScrollRef.current = false
+      requestAnimationFrame(() => logRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }))
+    }
+  }, [report])
 
   const loadOverview = useCallback(async () => {
     setLoadingOverview(true)
@@ -347,7 +359,11 @@ export function CustomerInvestigation() {
           </div>
           <Button
             size="sm"
-            onClick={() => selectedId && void runInvestigation(selectedId)}
+            onClick={() => {
+              if (!selectedId) return
+              wantScrollRef.current = true
+              void runInvestigation(selectedId)
+            }}
             disabled={loadingReport}
             className="gap-1"
           >
@@ -480,7 +496,7 @@ export function CustomerInvestigation() {
           </Card>
 
           {/* Activity log / timeline */}
-          <Card className="border-border bg-card">
+          <Card ref={logRef} className="scroll-mt-24 border-border bg-card">
             <CardHeader className="pb-2">
               <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
                 <Clock className="h-4 w-4 text-primary" /> Activity log
