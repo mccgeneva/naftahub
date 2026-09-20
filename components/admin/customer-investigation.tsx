@@ -246,7 +246,7 @@ export function CustomerInvestigation() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <ScrollText className="h-5 w-5 text-primary" />
-            Customer Investigation
+            Activity Log (date range)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             Pick a customer to inspect their current positions and reconstruct a complete, time-ordered activity log

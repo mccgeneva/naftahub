@@ -35,7 +35,7 @@ export function buildInvestigationDoc(data: CustomerInvestigation): jsPDF {
   doc.setTextColor(...BRAND.white)
   doc.setFont("helvetica", "bold")
   doc.setFontSize(15)
-  doc.text("Customer Investigation File", M, 13)
+  doc.text("Customer Activity Log", M, 13)
   doc.setFont("helvetica", "normal")
   doc.setFontSize(9)
   doc.text(`${BRAND.name} — Compliance & Audit · Administrator use only`, M, 20)
