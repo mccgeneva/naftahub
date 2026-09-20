@@ -124,7 +124,7 @@ function IdDocImage({
   }
 
   const src = bust > 0 ? `${base}&v=${bust}` : base
-  return (
+  const img = (
     // eslint-disable-next-line @next/next/no-img-element
     <img
       key={bust}
@@ -141,6 +141,41 @@ function IdDocImage({
         }
       }}
     />
+  )
+
+  if (variant === "thumb") return img
+
+  // Full viewer: mirror the PDF path — show the document AND a reliable
+  // Download action so every record behaves the same (image or PDF).
+  const ct = (contentType ?? "").toLowerCase()
+  const extMatch = pathname.toLowerCase().match(/\.(png|jpe?g|webp|heic|heif|gif)$/)
+  const ext = ct.includes("png")
+    ? "png"
+    : ct.includes("webp")
+      ? "webp"
+      : ct.includes("heic") || ct.includes("heif")
+        ? "heic"
+        : ct.includes("gif")
+          ? "gif"
+          : ct.includes("jpeg") || ct.includes("jpg")
+            ? "jpg"
+            : extMatch
+              ? extMatch[1].replace("jpeg", "jpg")
+              : "jpg"
+  return (
+    <div className="flex h-full w-full flex-col gap-2">
+      <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-auto">{img}</div>
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        onClick={() => void downloadFile(src, `${alt}.${ext}`)}
+        className="shrink-0 gap-2 self-center"
+      >
+        <Download className="h-4 w-4" />
+        Download document
+      </Button>
+    </div>
   )
 }
 
