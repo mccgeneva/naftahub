@@ -35,6 +35,24 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid pathname" }, { status: 400 })
   }
 
+  // Some ID documents were uploaded with a ".jpg" name even though the actual
+  // bytes are a PDF, so the Blob's stored contentType is a mislabeled
+  // "image/jpeg" and a viewer served that header renders blank. The admin UI
+  // knows the TRUE type from OCR (stored on the submission), so it may pass it
+  // via `?ct=` and we honor it — restricted to a safe allowlist so the header
+  // can never be attacker-controlled.
+  const CT_ALLOWLIST = new Set([
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+    "image/gif",
+    "application/pdf",
+  ])
+  const ctOverrideRaw = (request.nextUrl.searchParams.get("ct") ?? "").toLowerCase().trim()
+  const ctOverride = CT_ALLOWLIST.has(ctOverrideRaw) ? ctOverrideRaw : ""
+
   try {
     const result = await get(pathname, {
       access: "public",
@@ -54,7 +72,8 @@ export async function GET(request: NextRequest) {
 
     return new NextResponse(result.stream, {
       headers: {
-        "Content-Type": result.blob.contentType,
+        "Content-Type": ctOverride || result.blob.contentType,
+        "Content-Disposition": "inline",
         ETag: result.blob.etag,
         "Cache-Control": "private, no-cache",
       },

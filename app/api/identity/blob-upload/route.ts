@@ -43,6 +43,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             "image/heic",
             "image/heif",
             "image/webp",
+            // Some visitors upload a PDF scan of their ID rather than a photo;
+            // accept it so it stores with the correct type (and previews as a PDF).
+            "application/pdf",
           ],
           maximumSizeInBytes: 15 * 1024 * 1024,
           addRandomSuffix: true,

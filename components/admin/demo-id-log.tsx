@@ -24,8 +24,9 @@ import { Badge } from "@/components/ui/badge"
 import type { DemoIdSubmission } from "@/lib/demo-id-types"
 
 /** Admin-gated image URL for a retained demo ID document (passport-image proxy). */
-function imageUrl(pathname: string, passcode: string): string {
-  return `/api/passport-image?pathname=${encodeURIComponent(pathname)}&p=${encodeURIComponent(passcode)}`
+function imageUrl(pathname: string, passcode: string, contentType?: string): string {
+  const ct = contentType && contentType.trim() ? `&ct=${encodeURIComponent(contentType.trim())}` : ""
+  return `/api/passport-image?pathname=${encodeURIComponent(pathname)}&p=${encodeURIComponent(passcode)}${ct}`
 }
 
 /**
@@ -78,7 +79,7 @@ function IdDocImage({
     )
   }
 
-  const base = imageUrl(pathname, passcode)
+  const base = imageUrl(pathname, passcode, contentType)
 
   if (isPdf) {
     if (variant === "thumb") {

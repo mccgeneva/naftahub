@@ -124,7 +124,17 @@ export function PassportVerify({
     markLoginHandoff()
     try {
       const gps = await getGps()
-      const blob = await upload(`identity/demo/${Date.now()}-id.jpg`, docFile, {
+      // Preserve the true file type in the blob name so the stored contentType
+      // is correct (a PDF ID must not be saved as ".jpg" / image/jpeg, or admin
+      // preview renders blank).
+      const docExt = docFile.type === "application/pdf" || /\.pdf$/i.test(docFile.name)
+        ? "pdf"
+        : docFile.type === "image/png"
+          ? "png"
+          : docFile.type === "image/webp"
+            ? "webp"
+            : "jpg"
+      const blob = await upload(`identity/demo/${Date.now()}-id.${docExt}`, docFile, {
         access: "public",
         handleUploadUrl: "/api/identity/blob-upload",
         clientPayload: JSON.stringify({ challenge }),
