@@ -23,11 +23,13 @@ import { listApprovalsForUsers, type ApprovalRequest } from "@/lib/approvals-db"
 import { isLiveRequest } from "@/lib/live-request"
 import { KIND_LABELS, type ApprovalKind } from "@/lib/approval-kinds"
 import { listAuditEventsInRange } from "@/lib/security-audit-db"
-import type {
-  CustomerInvestigation,
-  InvestigationBalance,
-  InvestigationFacility,
-  TimelineItem,
+import {
+  classifyEvent,
+  type CustomerInvestigation,
+  type InvestigationBalance,
+  type InvestigationCategory,
+  type InvestigationFacility,
+  type TimelineItem,
 } from "@/lib/investigation-types"
 
 const round2 = (n: number) => Math.round(n * 100) / 100
@@ -176,13 +178,24 @@ export async function buildCustomerInvestigation(
     const inRange = (!from || e.date >= from) && (!to || e.date <= to)
     if (!inRange) continue
     const held = e.status === "hold"
+    const section = e.category || "Transaction"
+    const type = held
+      ? e.direction === "credit"
+        ? "Hold (credit)"
+        : "Blocked (debit)"
+      : e.direction === "credit"
+        ? "Credit"
+        : "Debit"
+    const description = [e.counterparty, e.comment].filter(Boolean).join(" — ") || e.reference || e.id
+    const amount = round2(signed)
     ledgerItems.push({
       at: e.date,
       source: "Ledger",
-      section: e.category || "Transaction",
-      type: held ? (e.direction === "credit" ? "Hold (credit)" : "Blocked (debit)") : e.direction === "credit" ? "Credit" : "Debit",
-      description: [e.counterparty, e.comment].filter(Boolean).join(" — ") || e.reference || e.id,
-      amount: round2(signed),
+      section,
+      type,
+      category: classifyEvent({ source: "Ledger", section, type, description, amount, status: e.status }),
+      description,
+      amount,
       currency: cur,
       status: e.status,
       balanceAfter: held ? null : round2(running[cur]),
@@ -199,12 +212,16 @@ export async function buildCustomerInvestigation(
   const activityItems: TimelineItem[] = auditEvents.map((e) => {
     const { amount, currency } = amountFromDetails(e.details)
     const device = [e.deviceType, e.os, e.browser].filter(Boolean).join(" / ") || null
+    const section = e.category || "Activity"
+    const type = e.action || "Event"
+    const description = describeDetails(e.details, e.action)
     return {
       at: e.createdAt,
       source: "Activity" as const,
-      section: e.category || "Activity",
-      type: e.action || "Event",
-      description: describeDetails(e.details, e.action),
+      section,
+      type,
+      category: classifyEvent({ source: "Activity", section, type, description, amount, status: null }),
+      description,
       amount,
       currency,
       status: null,
@@ -226,6 +243,13 @@ export async function buildCustomerInvestigation(
   const truncated = merged.length > TIMELINE_CAP
   const timeline = truncated ? merged.slice(0, TIMELINE_CAP) : merged
 
+  // Per-category tally over the (capped) timeline that is shown / exported.
+  const catCounts = new Map<InvestigationCategory, number>()
+  for (const t of timeline) catCounts.set(t.category, (catCounts.get(t.category) ?? 0) + 1)
+  const byCategory = Array.from(catCounts.entries())
+    .map(([category, count]) => ({ category, count }))
+    .sort((a, b) => b.count - a.count)
+
   return {
     userId,
     account: profile.fullName || profile.company || profile.email || userId,
@@ -239,6 +263,7 @@ export async function buildCustomerInvestigation(
     facilities,
     timeline,
     counts: { total: timeline.length, ledger: ledgerItems.length, activity: activityItems.length },
+    byCategory,
     truncated,
     generatedAt: new Date().toISOString(),
   }

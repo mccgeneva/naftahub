@@ -94,6 +94,7 @@ export function CustomerInvestigation() {
   const [loadingReport, setLoadingReport] = useState(false)
   const [reportError, setReportError] = useState("")
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all")
+  const [categoryFilter, setCategoryFilter] = useState<string>("all")
   const [eventSearch, setEventSearch] = useState("")
   const [pdfDoc, setPdfDoc] = useState<jsPDF | null>(null)
 
@@ -159,12 +160,13 @@ export function CustomerInvestigation() {
     const q = eventSearch.trim().toLowerCase()
     return report.timeline.filter((e) => {
       if (sourceFilter !== "all" && e.source !== sourceFilter) return false
+      if (categoryFilter !== "all" && e.category !== categoryFilter) return false
       if (!q) return true
       return [e.section, e.type, e.description, e.ref, e.actor, e.ip]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(q))
     })
-  }, [report, sourceFilter, eventSearch])
+  }, [report, sourceFilter, categoryFilter, eventSearch])
 
   const openPdf = useCallback(() => {
     if (!report) return
@@ -176,6 +178,7 @@ export function CustomerInvestigation() {
     const header = [
       "timestamp",
       "source",
+      "category",
       "section",
       "type",
       "description",
@@ -198,6 +201,7 @@ export function CustomerInvestigation() {
         [
           e.at,
           e.source,
+          e.category,
           e.section,
           e.type,
           e.description,
@@ -230,6 +234,7 @@ export function CustomerInvestigation() {
     setReportError("")
     setEventSearch("")
     setSourceFilter("all")
+    setCategoryFilter("all")
   }
 
   // ------------------------------------------------------------------ picker
@@ -486,6 +491,39 @@ export function CustomerInvestigation() {
                 </div>
               </div>
 
+              {/* Event-type (category) filter + summary */}
+              {report.byCategory.length ? (
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    onClick={() => setCategoryFilter("all")}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                      categoryFilter === "all"
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-secondary/40 text-muted-foreground hover:bg-secondary",
+                    )}
+                  >
+                    All types
+                    <span className="ml-1 opacity-70">{report.counts.total}</span>
+                  </button>
+                  {report.byCategory.map((c) => (
+                    <button
+                      key={c.category}
+                      onClick={() => setCategoryFilter((prev) => (prev === c.category ? "all" : c.category))}
+                      className={cn(
+                        "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                        categoryFilter === c.category
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-border bg-secondary/40 text-muted-foreground hover:bg-secondary",
+                      )}
+                    >
+                      {c.category}
+                      <span className="ml-1 opacity-70">{c.count}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
               {visibleTimeline.length === 0 ? (
                 <p className="py-8 text-center text-sm text-muted-foreground">
                   No events {report.timeline.length ? "match the filter" : "in the selected period"}.
@@ -535,6 +573,9 @@ function TimelineRow({ event }: { event: TimelineItem }) {
                 <Clock className="h-3 w-3" />
               )}
               {event.section}
+            </Badge>
+            <Badge variant="secondary" className="text-[10px]">
+              {event.category}
             </Badge>
             <span className="text-xs font-medium text-foreground">{event.type}</span>
           </div>

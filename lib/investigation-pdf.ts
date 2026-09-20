@@ -134,6 +134,26 @@ export function buildInvestigationDoc(data: CustomerInvestigation): jsPDF {
   }
   y += 3
 
+  // --- Activity by category (event-type summary) ---------------------------
+  if (data.byCategory.length) {
+    if (y > PAGE_H - 30) {
+      doc.addPage()
+      y = M
+    }
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(9.5)
+    doc.setTextColor(...BRAND.ink)
+    doc.text("Activity by category", M, y)
+    y += 4.6
+    doc.setFont("helvetica", "normal")
+    doc.setFontSize(8)
+    doc.setTextColor(...BRAND.slate)
+    const summary = data.byCategory.map((c) => `${c.category}: ${c.count}`).join("   ·   ")
+    const lines = doc.splitTextToSize(summary, CW) as string[]
+    doc.text(lines, M, y)
+    y += lines.length * 4 + 3
+  }
+
   // --- Chronological activity log ------------------------------------------
   const COL = { time: M, section: M + 30, event: M + 52, amount: M + 148, balance: M + CW }
   const drawHeader = () => {
