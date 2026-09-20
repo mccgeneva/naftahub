@@ -16,7 +16,7 @@
 // and restricted to administrators (the whole panel is passcode-gated).
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -36,6 +36,7 @@ import {
   Lock,
   Clock,
   ListFilter,
+  X,
 } from "lucide-react"
 import type { jsPDF } from "jspdf"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
@@ -97,6 +98,7 @@ export function CustomerInvestigation() {
   const [categoryFilter, setCategoryFilter] = useState<string>("all")
   const [eventSearch, setEventSearch] = useState("")
   const [pdfDoc, setPdfDoc] = useState<jsPDF | null>(null)
+  const [selectedEvent, setSelectedEvent] = useState<TimelineItem | null>(null)
 
   // The activity log renders below the (tall) positions card, so on mobile it
   // sits off-screen after "Generate log". Scroll straight to it once the fresh
@@ -583,7 +585,7 @@ export function CustomerInvestigation() {
               ) : (
                 <ol className="relative space-y-2">
                   {visibleTimeline.map((e, i) => (
-                    <TimelineRow key={`${e.ref ?? "e"}-${i}`} event={e} />
+                    <TimelineRow key={`${e.ref ?? "e"}-${i}`} event={e} onOpen={setSelectedEvent} />
                   ))}
                 </ol>
               )}
@@ -600,16 +602,24 @@ export function CustomerInvestigation() {
           onClose={() => setPdfDoc(null)}
         />
       ) : null}
+
+      {selectedEvent ? (
+        <EventDetailModal event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+      ) : null}
     </div>
   )
 }
 
-function TimelineRow({ event }: { event: TimelineItem }) {
+function TimelineRow({ event, onOpen }: { event: TimelineItem; onOpen: (e: TimelineItem) => void }) {
   const isCredit = event.amount !== null && event.amount > 0
   const isDebit = event.amount !== null && event.amount < 0
   return (
-    <li className="rounded-lg border border-border bg-secondary/20 p-3">
-      <div className="flex items-start justify-between gap-2">
+    <li>
+      <button
+        type="button"
+        onClick={() => onOpen(event)}
+        className="flex w-full items-start justify-between gap-2 rounded-lg border border-border bg-secondary/20 p-3 text-left transition-colors hover:border-primary/40 hover:bg-secondary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+      >
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge
@@ -659,7 +669,129 @@ function TimelineRow({ event }: { event: TimelineItem }) {
             ) : null}
           </div>
         ) : null}
-      </div>
+      </button>
     </li>
+  )
+}
+
+function DetailField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5 border-b border-border/60 py-2 last:border-0">
+      <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="break-words text-sm text-foreground">{children}</span>
+    </div>
+  )
+}
+
+// Full-detail "zoom" for a single log event. Bounded overlay (mobile-safe:
+// max-h + scrollable body + pinned footer) so the Close button is always
+// reachable on a phone.
+function EventDetailModal({ event, onClose }: { event: TimelineItem; onClose: () => void }) {
+  const isCredit = event.amount !== null && event.amount > 0
+  const isDebit = event.amount !== null && event.amount < 0
+  const isDoc = event.category === "Document"
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-[60] flex items-end justify-center bg-foreground/50 p-0 sm:items-center sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[88dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-border bg-card sm:rounded-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border p-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge
+                variant="outline"
+                className={cn(
+                  "gap-1 text-[10px]",
+                  event.source === "Ledger" ? "border-primary/40 text-primary" : "border-border text-muted-foreground",
+                )}
+              >
+                {event.source === "Ledger" ? (
+                  isCredit ? <ArrowDownLeft className="h-3 w-3" /> : <ArrowUpRight className="h-3 w-3" />
+                ) : (
+                  <Clock className="h-3 w-3" />
+                )}
+                {event.section}
+              </Badge>
+              <Badge variant="secondary" className="text-[10px]">
+                {event.category}
+              </Badge>
+            </div>
+            <h3 className="mt-1.5 text-pretty text-base font-semibold text-foreground">{event.type}</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            aria-label="Close"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {event.amount !== null && event.currency ? (
+            <div className="mb-3 rounded-lg border border-border bg-secondary/20 p-3">
+              <p
+                className={cn(
+                  "text-xl font-bold tabular-nums",
+                  isCredit ? "text-emerald-500" : isDebit ? "text-destructive" : "text-foreground",
+                )}
+              >
+                {signedMoney(event.amount, event.currency)}
+              </p>
+              {event.balanceAfter !== null ? (
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  Balance after · {fmtMoney(event.balanceAfter, event.currency)}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {event.description ? (
+            <p className="mb-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
+              {event.description}
+            </p>
+          ) : null}
+
+          <div className="rounded-lg border border-border px-3">
+            <DetailField label="When">{fmtWhen(event.at)}</DetailField>
+            <DetailField label="Event type">{event.type}</DetailField>
+            <DetailField label="Category">{event.category}</DetailField>
+            <DetailField label="Section">{event.section}</DetailField>
+            <DetailField label="Source">{event.source === "Ledger" ? "Money ledger" : "Activity trail"}</DetailField>
+            {event.status ? <DetailField label="Status">{event.status}</DetailField> : null}
+            {event.currency ? <DetailField label="Currency">{event.currency}</DetailField> : null}
+            {event.compartment ? <DetailField label="Pocket">{event.compartment}</DetailField> : null}
+            {event.actor ? <DetailField label="Acting account">{event.actor}</DetailField> : null}
+            {event.device ? <DetailField label="Device">{event.device}</DetailField> : null}
+            {event.ip ? <DetailField label="IP address">{event.ip}</DetailField> : null}
+            {event.ref ? (
+              <DetailField label="Reference">
+                <span className="font-mono text-xs">{event.ref}</span>
+              </DetailField>
+            ) : null}
+          </div>
+
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+            <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            {isDoc
+              ? "This entry records a document the client generated or downloaded at the time shown. That file is produced on demand and is not retained on the server, so there is no stored copy to reopen. Identity documents (passport / selfie) are kept in the customer dossier."
+              : "No document is attached to this event."}
+          </div>
+        </div>
+
+        <div className="shrink-0 border-t border-border p-3">
+          <Button variant="secondary" className="w-full" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </div>
   )
 }
