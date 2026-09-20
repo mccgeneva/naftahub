@@ -134,6 +134,40 @@ export function buildInvestigationDoc(data: CustomerInvestigation): jsPDF {
   }
   y += 3
 
+  // --- Balances by pocket (master + sub-account compartments) --------------
+  if (data.compartments.length > 1) {
+    if (y > PAGE_H - 30) {
+      doc.addPage()
+      y = M
+    }
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(9.5)
+    doc.setTextColor(...BRAND.ink)
+    doc.text("Balances by pocket", M, y)
+    y += 4.6
+    for (const c of data.compartments) {
+      if (y > PAGE_H - 20) {
+        doc.addPage()
+        y = M
+      }
+      doc.setFont("helvetica", "bold")
+      doc.setFontSize(8)
+      doc.setTextColor(...BRAND.ink)
+      doc.text(c.label, M, y)
+      y += 4
+      doc.setFont("helvetica", "normal")
+      doc.setTextColor(...BRAND.slate)
+      for (const b of c.balances) {
+        doc.text(b.currency, M + 4, y)
+        doc.text(money(b.available, b.currency), M + 55, y, { align: "right" })
+        doc.text(`hold ${money(b.onHold, b.currency)}`, M + CW, y, { align: "right" })
+        y += 4
+      }
+      y += 1.5
+    }
+    y += 1.5
+  }
+
   // --- Activity by category (event-type summary) ---------------------------
   if (data.byCategory.length) {
     if (y > PAGE_H - 30) {

@@ -58,6 +58,20 @@ export interface TimelineItem {
   device: string | null
   /** Which account within the environment acted (name/id) — for shared pools. */
   actor: string | null
+  /** Pocket id this money movement belongs to: "main" or a sub-account id. Empty for audit events. */
+  compartmentId: string
+  /** Human label for the pocket ("Main account" / sub-account label). Empty for audit events. */
+  compartment: string
+}
+
+/** Per-pocket (master vs each sub-account) current balance split. */
+export interface InvestigationCompartment {
+  /** "main" for the master account, else the sub-account id. */
+  id: string
+  /** "Main account" or the sub-account's label. */
+  label: string
+  /** Per-currency current balances for this pocket. */
+  balances: InvestigationBalance[]
 }
 
 /** Full investigation payload for one customer over a date range. */
@@ -73,6 +87,8 @@ export interface CustomerInvestigation {
   range: { from: string | null; to: string | null }
   /** Current positions (as of now, independent of the range). */
   balances: InvestigationBalance[]
+  /** Current balances split per pocket (master + each sub-account). */
+  compartments: InvestigationCompartment[]
   facilities: InvestigationFacility[]
   /** Chronological, exact-time-order reconstruction of the customer's activity. */
   timeline: TimelineItem[]

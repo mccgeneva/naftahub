@@ -179,6 +179,7 @@ export function CustomerInvestigation() {
       "timestamp",
       "source",
       "category",
+      "pocket",
       "section",
       "type",
       "description",
@@ -202,6 +203,7 @@ export function CustomerInvestigation() {
           e.at,
           e.source,
           e.category,
+          e.compartment,
           e.section,
           e.type,
           e.description,
@@ -440,6 +442,40 @@ export function CustomerInvestigation() {
                   </div>
                 </div>
               ) : null}
+
+              {/* Balances split per pocket — only meaningful with sub-accounts */}
+              {report.compartments.length > 1 ? (
+                <div className="space-y-2">
+                  <p className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
+                    <Layers className="h-3.5 w-3.5" /> Balances by pocket
+                  </p>
+                  <div className="space-y-2">
+                    {report.compartments.map((c) => (
+                      <div key={c.id} className="rounded-lg border border-border bg-secondary/20 p-3">
+                        <p className="text-xs font-semibold text-foreground">{c.label}</p>
+                        <div className="mt-1.5 flex flex-col gap-1">
+                          {c.balances.map((b) => (
+                            <div key={b.currency} className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">{b.currency}</span>
+                              <span className="flex items-center gap-2">
+                                <span className={cn("font-medium", b.available < 0 ? "text-destructive" : "text-foreground")}>
+                                  {fmtMoney(b.available, b.currency)}
+                                </span>
+                                {b.onHold > 0 ? (
+                                  <span className="flex items-center gap-0.5 text-muted-foreground">
+                                    <Lock className="h-3 w-3" />
+                                    {fmtMoney(b.onHold, b.currency)}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -577,6 +613,12 @@ function TimelineRow({ event }: { event: TimelineItem }) {
             <Badge variant="secondary" className="text-[10px]">
               {event.category}
             </Badge>
+            {event.compartmentId && event.compartmentId !== "main" ? (
+              <Badge variant="outline" className="gap-1 border-amber-500/40 text-[10px] text-amber-600 dark:text-amber-400">
+                <Layers className="h-3 w-3" />
+                {event.compartment}
+              </Badge>
+            ) : null}
             <span className="text-xs font-medium text-foreground">{event.type}</span>
           </div>
           {event.description ? (

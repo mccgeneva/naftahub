@@ -23,11 +23,13 @@ import { listApprovalsForUsers, type ApprovalRequest } from "@/lib/approvals-db"
 import { isLiveRequest } from "@/lib/live-request"
 import { KIND_LABELS, type ApprovalKind } from "@/lib/approval-kinds"
 import { listAuditEventsInRange } from "@/lib/security-audit-db"
+import { listSubAccountsForUser } from "@/lib/sub-account-db"
 import {
   classifyEvent,
   type CustomerInvestigation,
   type InvestigationBalance,
   type InvestigationCategory,
+  type InvestigationCompartment,
   type InvestigationFacility,
   type TimelineItem,
 } from "@/lib/investigation-types"
@@ -110,13 +112,23 @@ export async function buildCustomerInvestigation(
     resolveAccountProfileById(userId),
   ])
 
-  const [ledgerAll, approvals, auditEvents] = await Promise.all([
+  const [ledgerAll, approvals, auditEvents, subAccounts] = await Promise.all([
     readLedgerEntries(ownerId).catch(() => []),
     listApprovalsForUsers(memberIds).catch(() => [] as ApprovalRequest[]),
     listAuditEventsInRange({ userIds: memberIds, from: from ?? undefined, to: to ?? undefined, limit: TIMELINE_CAP }).catch(
       () => [],
     ),
+    listSubAccountsForUser(ownerId).catch(() => []),
   ])
+
+  // Sub-account compartment labels (the shared ledger tags each row with an
+  // optional sub_account_id; NULL ⇒ the master "Main account" pocket).
+  const MAIN = "main"
+  const compartmentLabel = (subId: string | undefined | null): { id: string; label: string } => {
+    if (!subId) return { id: MAIN, label: "Main account" }
+    const s = subAccounts.find((x) => x.id === subId)
+    return { id: subId, label: s?.label ? `Sub · ${s.label}` : `Sub-account ${subId.slice(-6)}` }
+  }
 
   // --- Current positions (as of now — independent of the range) -------------
   const byCurrency = new Map<string, InvestigationBalance>()
@@ -139,6 +151,39 @@ export async function buildCustomerInvestigation(
       equitySaving: round2(b.equitySaving),
     }))
     .sort((a, b) => Math.abs(b.available) - Math.abs(a.available))
+
+  // Same positions math, but split per pocket (Main account + each sub-account
+  // compartment) so the admin sees which pocket holds what.
+  const compartmentMap = new Map<string, { id: string; label: string; byCcy: Map<string, InvestigationBalance> }>()
+  for (const e of ledgerAll) {
+    const { id, label } = compartmentLabel(e.subAccountId)
+    const comp = compartmentMap.get(id) ?? { id, label, byCcy: new Map<string, InvestigationBalance>() }
+    const cur = e.currency || "USD"
+    const line = comp.byCcy.get(cur) ?? { currency: cur, available: 0, onHold: 0, equitySaving: 0 }
+    if (e.status === "hold") {
+      line.onHold += e.amount
+      if (e.id.startsWith("EQSAV-")) line.equitySaving += e.amount
+    } else {
+      line.available += e.direction === "credit" ? e.amount : -e.amount
+    }
+    comp.byCcy.set(cur, line)
+    compartmentMap.set(id, comp)
+  }
+  const compartments: InvestigationCompartment[] = Array.from(compartmentMap.values())
+    .map((c) => ({
+      id: c.id,
+      label: c.label,
+      balances: Array.from(c.byCcy.values())
+        .map((b) => ({
+          currency: b.currency,
+          available: round2(b.available),
+          onHold: round2(b.onHold),
+          equitySaving: round2(b.equitySaving),
+        }))
+        .sort((a, b) => Math.abs(b.available) - Math.abs(a.available)),
+    }))
+    // Main pocket first, then sub-accounts alphabetically.
+    .sort((a, b) => (a.id === MAIN ? -1 : b.id === MAIN ? 1 : a.label.localeCompare(b.label)))
 
   // Live facilities / exposures grouped by kind.
   const facilityMap = new Map<string, InvestigationFacility>()
@@ -164,17 +209,21 @@ export async function buildCustomerInvestigation(
   const facilities = Array.from(facilityMap.values()).sort((a, b) => b.liveCount - a.liveCount)
 
   // --- Chronological timeline (merged ledger + audit trail) -----------------
-  // Ledger: run a per-currency cumulative SETTLED balance over the FULL ledger
-  // (ascending) so each in-range money movement carries its resulting balance,
-  // then keep only the rows inside the range.
+  // Ledger: run a cumulative SETTLED balance PER POCKET+currency over the FULL
+  // ledger (ascending) so each in-range money movement carries the resulting
+  // balance of its own pocket (master vs a sub-account), then keep the rows in
+  // range. Keying per pocket is what makes a sub-account's balance independent
+  // of the master's.
   const ledgerAsc = [...ledgerAll].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
   const running: Record<string, number> = {}
   const ledgerItems: TimelineItem[] = []
   for (const e of ledgerAsc) {
     const cur = e.currency || "USD"
-    if (running[cur] === undefined) running[cur] = 0
+    const pocket = compartmentLabel(e.subAccountId)
+    const key = `${pocket.id}\u0000${cur}`
+    if (running[key] === undefined) running[key] = 0
     const signed = e.direction === "credit" ? e.amount : -e.amount
-    if (e.status !== "hold") running[cur] += signed
+    if (e.status !== "hold") running[key] += signed
     const inRange = (!from || e.date >= from) && (!to || e.date <= to)
     if (!inRange) continue
     const held = e.status === "hold"
@@ -198,11 +247,13 @@ export async function buildCustomerInvestigation(
       amount,
       currency: cur,
       status: e.status,
-      balanceAfter: held ? null : round2(running[cur]),
+      balanceAfter: held ? null : round2(running[key]),
       ref: e.reference || e.id,
       ip: null,
       device: null,
       actor: null,
+      compartmentId: pocket.id,
+      compartment: pocket.label,
     })
   }
 
@@ -230,6 +281,8 @@ export async function buildCustomerInvestigation(
       ip: e.ipAddress,
       device,
       actor: e.account || (e.userId && memberLabel.get(e.userId)) || e.userId || null,
+      compartmentId: "",
+      compartment: "",
     }
   })
 
@@ -260,6 +313,7 @@ export async function buildCustomerInvestigation(
     memberIds,
     range: { from: from ?? null, to: to ?? null },
     balances,
+    compartments,
     facilities,
     timeline,
     counts: { total: timeline.length, ledger: ledgerItems.length, activity: activityItems.length },
