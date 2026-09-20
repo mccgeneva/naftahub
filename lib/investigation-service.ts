@@ -260,15 +260,20 @@ export async function buildCustomerInvestigation(
   // Audit events: already range-filtered + ascending from the DB.
   const memberLabel = new Map<string, string>()
   memberLabel.set(userId, profile.fullName || profile.company || profile.email || userId)
-  // Drop admin "signed in as … for maintenance" impersonation-session rows —
-  // they are operator maintenance noise, not customer activity, and flood the
-  // log (one per admin re-entry). The real customer actions taken during a
-  // maintenance session are still captured as their own audit/ledger events.
-  const isMaintenanceNoise = (e: (typeof auditEvents)[number]): boolean => {
+  // Drop pure noise rows that flood the log without investigative value:
+  //  - admin "signed in as … for maintenance" impersonation-session rows
+  //    (operator maintenance, not customer activity)
+  //  - routine authentication events (Login successful/failed, Logout) — the
+  //    session context (device/IP/last access) already lives in the dossier.
+  // Real customer actions during any session are still captured as their own
+  // audit/ledger/approval events.
+  const isNoiseEvent = (e: (typeof auditEvents)[number]): boolean => {
+    const action = (e.action ?? "").trim().toLowerCase()
+    if (/^login\b|^logout$|^log ?out\b|^signed out|^sign-out|^face id/.test(action)) return true
     const hay = `${e.action ?? ""} ${describeDetails(e.details, e.action)}`.toLowerCase()
     return /signed in as .+ for maintenance|impersonation session|maintenance session/.test(hay)
   }
-  const activityItems: TimelineItem[] = auditEvents.filter((e) => !isMaintenanceNoise(e)).map((e) => {
+  const activityItems: TimelineItem[] = auditEvents.filter((e) => !isNoiseEvent(e)).map((e) => {
     const { amount, currency } = amountFromDetails(e.details)
     const device = [e.deviceType, e.os, e.browser].filter(Boolean).join(" / ") || null
     const section = e.category || "Activity"
