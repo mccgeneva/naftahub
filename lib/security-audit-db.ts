@@ -191,6 +191,40 @@ export async function listAuditEvents(opts?: {
   return rows.map(rowToEvent)
 }
 
+/**
+ * Events for one or more accounts within an (optional) date range, sorted
+ * strictly ASCENDING by time — the ordering the Customer Investigation timeline
+ * needs so events read in exact sequence. Passing several ids covers a shared
+ * financial pool (a master plus its sub/joint members).
+ */
+export async function listAuditEventsInRange(opts: {
+  userIds: string[]
+  from?: string
+  to?: string
+  limit?: number
+}): Promise<AuditEvent[]> {
+  await ensureTable()
+  const ids = (opts.userIds ?? []).filter(Boolean)
+  if (!ids.length) return []
+  const params: unknown[] = [ids]
+  const clauses = [`user_id = ANY($1)`]
+  if (opts.from) {
+    params.push(opts.from)
+    clauses.push(`created_at >= $${params.length}`)
+  }
+  if (opts.to) {
+    params.push(opts.to)
+    clauses.push(`created_at <= $${params.length}`)
+  }
+  const limit = Math.min(Math.max(opts.limit ?? 5000, 1), 20000)
+  params.push(limit)
+  const { rows } = await query(
+    `SELECT * FROM security_audit_events WHERE ${clauses.join(" AND ")} ORDER BY created_at ASC LIMIT $${params.length}`,
+    params,
+  )
+  return rows.map(rowToEvent)
+}
+
 /** Accounts that have any recorded activity, most-recently-active first. */
 export async function listAuditActors(limit = 200): Promise<AuditActor[]> {
   await ensureTable()

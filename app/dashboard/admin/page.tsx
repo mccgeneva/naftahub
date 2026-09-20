@@ -209,6 +209,7 @@ import { Messenger } from "@/components/bankeka/messenger"
  import { SpotDealManager } from "@/components/admin/spot-deal-manager"
 import { DocumentTraceability } from "@/components/admin/document-traceability"
 import { SecurityAudit } from "@/components/admin/security-audit"
+import { CustomerInvestigation } from "@/components/admin/customer-investigation"
 import { ProjectFinanceAdmin } from "@/components/admin/project-finance-admin"
 import { toast } from "sonner"
 
@@ -2474,6 +2475,7 @@ export default function AdminPage() {
         { id: "apikeys", label: "API Keys (NQAi)", description: "Issue keys so external apps like NQAi.cloud can read a customer and charge subscriptions.", icon: KeyRound, count: 0 },
         { id: "traceability", label: "Document Traceability", description: "Trace any generated document back to the account, IP and biometric on file.", icon: Fingerprint, count: 0 },
         { id: "audit", label: "Security, Logs & Debug", description: "Trace any client's logins, devices, location, identity and activity; watch the global event stream; and review auto-captured errors and anomalies.", icon: ShieldCheck, count: 0 },
+    { id: "investigation", label: "Customer Investigation", description: "Inspect any customer's current positions and download a complete, exact-time-order activity log (every transaction, debit and related event) for a chosen date range.", icon: ScrollText, count: 0 },
         { id: "danger", label: "Danger Zone", description: "Reset account data to a brand-new state.", icon: AlertTriangle, count: 0 },
       ],
     },
@@ -5582,9 +5584,16 @@ export default function AdminPage() {
 
       {/* Security Audit: trace a client's logins, devices, location and activity */}
       {activeView === "audit" && (
-      <div className="space-y-6">
-        <SecurityAudit />
-      </div>
+        <div className="space-y-6">
+          <SecurityAudit />
+        </div>
+      )}
+
+      {/* Customer Investigation: current positions + downloadable step-by-step activity log */}
+      {activeView === "investigation" && (
+        <div className="space-y-6">
+          <CustomerInvestigation />
+        </div>
       )}
 
       {/* Danger zone: reset account data */}
