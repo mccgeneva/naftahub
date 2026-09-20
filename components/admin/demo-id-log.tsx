@@ -14,7 +14,10 @@ import {
   Monitor,
   UserSearch,
   FileWarning,
+  FileText,
+  Download,
 } from "lucide-react"
+import { downloadFile } from "@/lib/download-file"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -26,11 +29,13 @@ function imageUrl(pathname: string, passcode: string): string {
 }
 
 /**
- * Resilient ID-document image. A retained document may be missing, its proxy
- * may transiently 404, or the file may not be a renderable image (e.g. a PDF) —
- * in all of those cases a bare <img> shows a broken-image glyph. This retries
- * once with a cache-bust, then falls back to a graceful "preview unavailable"
- * placeholder instead of the broken icon.
+ * Resilient ID-document preview. A retained document may be missing, its proxy
+ * may transiently 404, or the file may be a PDF rather than an image (some
+ * visitors upload a PDF ID document). A bare <img> renders a broken-image glyph
+ * for a PDF and offers no way to actually read it. This component therefore:
+ *   - renders images with a retry-once-then-graceful-fallback <img>, and
+ *   - renders PDFs in an <iframe> (full view) with a reliable Download action,
+ *     or a "PDF document" affordance in the thumbnail.
  */
 function IdDocImage({
   pathname,
@@ -38,14 +43,18 @@ function IdDocImage({
   alt,
   className,
   variant,
+  contentType,
 }: {
   pathname: string
   passcode: string
   alt: string
   className: string
   variant: "thumb" | "full"
+  contentType?: string
 }) {
   const hasPath = Boolean(pathname && pathname.trim())
+  const isPdf =
+    hasPath && ((contentType ?? "").toLowerCase().includes("pdf") || pathname.toLowerCase().endsWith(".pdf"))
   const [failed, setFailed] = useState(!hasPath)
   const [bust, setBust] = useState(0)
   const retriesRef = useRef(0)
@@ -70,6 +79,39 @@ function IdDocImage({
   }
 
   const base = imageUrl(pathname, passcode)
+
+  if (isPdf) {
+    if (variant === "thumb") {
+      return (
+        <div
+          className={`flex flex-col items-center justify-center gap-1 bg-muted/40 text-center text-muted-foreground ${className}`}
+        >
+          <FileText className="h-6 w-6" />
+          <span className="text-[10px] font-medium leading-tight">PDF document</span>
+        </div>
+      )
+    }
+    return (
+      <div className="flex h-full w-full flex-col gap-2">
+        <iframe
+          src={base}
+          title={alt}
+          className="min-h-0 w-full flex-1 rounded-lg border border-border bg-white"
+        />
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => void downloadFile(base, `${alt}.pdf`)}
+          className="shrink-0 gap-2 self-center"
+        >
+          <Download className="h-4 w-4" />
+          Download document
+        </Button>
+      </div>
+    )
+  }
+
   const src = bust > 0 ? `${base}&v=${bust}` : base
   return (
     // eslint-disable-next-line @next/next/no-img-element
@@ -209,6 +251,7 @@ export function DemoIdLog({ passcode }: { passcode: string }) {
                   <IdDocImage
                     pathname={s.docPathname}
                     passcode={passcode}
+                    contentType={s.docContentType}
                     alt={`ID document for ${s.fullName || "demo visitor"}`}
                     className="h-full w-full object-cover transition group-hover:opacity-90"
                     variant="thumb"
@@ -306,6 +349,7 @@ export function DemoIdLog({ passcode }: { passcode: string }) {
               <IdDocImage
                 pathname={viewer.docPathname}
                 passcode={passcode}
+                contentType={viewer.docContentType}
                 alt={`ID document for ${viewer.fullName || "demo visitor"}`}
                 className="max-h-full max-w-full rounded-lg object-contain"
                 variant="full"
