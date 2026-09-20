@@ -1,8 +1,20 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import { IdCard, Loader2, MapPin, Globe2, RefreshCw, X, Clock, Fingerprint, Monitor, UserSearch } from "lucide-react"
+import {
+  IdCard,
+  Loader2,
+  MapPin,
+  Globe2,
+  RefreshCw,
+  X,
+  Clock,
+  Fingerprint,
+  Monitor,
+  UserSearch,
+  FileWarning,
+} from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -11,6 +23,72 @@ import type { DemoIdSubmission } from "@/lib/demo-id-types"
 /** Admin-gated image URL for a retained demo ID document (passport-image proxy). */
 function imageUrl(pathname: string, passcode: string): string {
   return `/api/passport-image?pathname=${encodeURIComponent(pathname)}&p=${encodeURIComponent(passcode)}`
+}
+
+/**
+ * Resilient ID-document image. A retained document may be missing, its proxy
+ * may transiently 404, or the file may not be a renderable image (e.g. a PDF) —
+ * in all of those cases a bare <img> shows a broken-image glyph. This retries
+ * once with a cache-bust, then falls back to a graceful "preview unavailable"
+ * placeholder instead of the broken icon.
+ */
+function IdDocImage({
+  pathname,
+  passcode,
+  alt,
+  className,
+  variant,
+}: {
+  pathname: string
+  passcode: string
+  alt: string
+  className: string
+  variant: "thumb" | "full"
+}) {
+  const hasPath = Boolean(pathname && pathname.trim())
+  const [failed, setFailed] = useState(!hasPath)
+  const [bust, setBust] = useState(0)
+  const retriesRef = useRef(0)
+
+  useEffect(() => {
+    setFailed(!hasPath)
+    setBust(0)
+    retriesRef.current = 0
+  }, [pathname, hasPath])
+
+  if (failed) {
+    return (
+      <div
+        className={`flex flex-col items-center justify-center gap-1 bg-muted/40 text-center text-muted-foreground ${className}`}
+      >
+        <FileWarning className={variant === "full" ? "h-8 w-8" : "h-5 w-5"} />
+        <span className={variant === "full" ? "text-sm" : "text-[10px] leading-tight"}>
+          {variant === "full" ? "Document preview unavailable" : "No preview"}
+        </span>
+      </div>
+    )
+  }
+
+  const base = imageUrl(pathname, passcode)
+  const src = bust > 0 ? `${base}&v=${bust}` : base
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      key={bust}
+      src={src || "/placeholder.svg"}
+      alt={alt}
+      className={className}
+      loading={variant === "thumb" ? "lazy" : undefined}
+      onError={() => {
+        if (retriesRef.current < 1) {
+          retriesRef.current += 1
+          setBust((b) => b + 1)
+        } else {
+          setFailed(true)
+        }
+      }}
+    />
+  )
 }
 
 function fmtDate(iso: string): string {
@@ -128,12 +206,12 @@ export function DemoIdLog({ passcode }: { passcode: string }) {
                   className="group relative h-28 w-full shrink-0 overflow-hidden rounded-lg border border-border bg-background sm:h-24 sm:w-36"
                   aria-label="View ID document"
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={imageUrl(s.docPathname, passcode) || "/placeholder.svg"}
+                  <IdDocImage
+                    pathname={s.docPathname}
+                    passcode={passcode}
                     alt={`ID document for ${s.fullName || "demo visitor"}`}
                     className="h-full w-full object-cover transition group-hover:opacity-90"
-                    loading="lazy"
+                    variant="thumb"
                   />
                 </button>
 
@@ -225,11 +303,12 @@ export function DemoIdLog({ passcode }: { passcode: string }) {
               </Button>
             </div>
             <div className="flex flex-1 items-center justify-center overflow-auto">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={imageUrl(viewer.docPathname, passcode) || "/placeholder.svg"}
+              <IdDocImage
+                pathname={viewer.docPathname}
+                passcode={passcode}
                 alt={`ID document for ${viewer.fullName || "demo visitor"}`}
                 className="max-h-full max-w-full rounded-lg object-contain"
+                variant="full"
               />
             </div>
           </div>,
