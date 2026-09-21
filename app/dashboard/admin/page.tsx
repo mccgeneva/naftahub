@@ -1063,7 +1063,15 @@ export default function AdminPage() {
       return
     }
     const score = Math.min(10, Math.max(0, Number(approveFundingScore) || 0))
-    const commitment = calculateCashCommitment(request.facility, request.totalEquity, score)
+    // If the Administrator already bound the equity split via the Investment
+    // Agreement (upfront cash equity + equity asset), that upfront cash
+    // commitment is authoritative — approval must NOT overwrite it with the
+    // generic risk-score range. Only derive from the score when no agreed
+    // value exists.
+    const commitment =
+      typeof request.cashCommitment === "number"
+        ? { min: request.cashCommitmentMin, max: request.cashCommitmentMax, applicable: request.cashCommitment }
+        : calculateCashCommitment(request.facility, request.totalEquity, score)
     // Persist the due-diligence risk score + fixed cash commitment onto the
     // client's record so they follow the application across devices and show in
     // the client's funding history. Best-effort; the decision is what matters.
@@ -3430,8 +3438,11 @@ export default function AdminPage() {
                       <div className="mt-1 flex items-center justify-between">
                         <span className="text-muted-foreground">Cash commitment</span>
                         <span className="text-xs text-foreground">
-                          {r.currency} {Math.round(r.cashCommitmentMin).toLocaleString()} –{" "}
-                          {Math.round(r.cashCommitmentMax).toLocaleString()}
+                          {typeof r.cashCommitment === "number"
+                            ? `${r.currency} ${Math.round(r.cashCommitment).toLocaleString()}`
+                            : `${r.currency} ${Math.round(r.cashCommitmentMin).toLocaleString()} – ${Math.round(
+                                r.cashCommitmentMax,
+                              ).toLocaleString()}`}
                         </span>
                       </div>
                     </div>
@@ -5890,11 +5901,19 @@ export default function AdminPage() {
                     </span>
                   </div>
                   <div className="mt-1 flex items-center justify-between">
-                    <span className="text-muted-foreground">Cash commitment range</span>
+                    <span className="text-muted-foreground">
+                      {typeof approveFundingTarget.cashCommitment === "number"
+                        ? "Cash commitment (agreed)"
+                        : "Cash commitment range"}
+                    </span>
                     <span className="text-foreground">
-                      {approveFundingTarget.currency}{" "}
-                      {Math.round(approveFundingTarget.cashCommitmentMin).toLocaleString()} –{" "}
-                      {Math.round(approveFundingTarget.cashCommitmentMax).toLocaleString()}
+                      {typeof approveFundingTarget.cashCommitment === "number"
+                        ? `${approveFundingTarget.currency} ${Math.round(
+                            approveFundingTarget.cashCommitment,
+                          ).toLocaleString()}`
+                        : `${approveFundingTarget.currency} ${Math.round(
+                            approveFundingTarget.cashCommitmentMin,
+                          ).toLocaleString()} – ${Math.round(approveFundingTarget.cashCommitmentMax).toLocaleString()}`}
                     </span>
                   </div>
                 </div>

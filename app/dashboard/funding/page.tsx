@@ -1550,13 +1550,15 @@ export default function ProjectFundingPage() {
                       <div className="rounded-lg border border-border bg-muted/20 p-3">
                         <p className="text-xs text-muted-foreground">Upfront Cash Commitment</p>
                         <p className="text-sm font-semibold text-foreground">
-                          {r.status === "approved" && typeof r.cashCommitment === "number"
+                          {typeof r.cashCommitment === "number"
                             ? formatMoney(r.cashCommitment, r.currency)
                             : `${formatMoney(r.cashCommitmentMin, r.currency)} – ${formatMoney(r.cashCommitmentMax, r.currency)}`}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {r.status === "approved" && typeof r.riskScore === "number"
-                            ? `Risk score ${r.riskScore}/10`
+                          {typeof r.cashCommitment === "number"
+                            ? r.status === "approved" && typeof r.riskScore === "number"
+                              ? `Risk score ${r.riskScore}/10`
+                              : "Agreed cash equity"
                             : "Range, pre-approval"}
                         </p>
                       </div>
