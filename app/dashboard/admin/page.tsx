@@ -432,7 +432,11 @@ export default function AdminPage() {
   // Count of beneficiaries awaiting a KYC decision (across every client). The
   // BeneficiaryManager owns the full review UI; here we only need the count so
   // KYC can appear in the Pending Decisions command center. Refetched whenever
-  // the panel unlocks so the figure is current.
+  // the panel unlocks AND on every view change, so after the admin approves a
+  // beneficiary inside the KYC view and returns to the command center the tile
+  // reflects the new count instead of staying stuck at its old value. (The KYC
+  // count only counts beneficiaries with status = 'pending'; approving flips
+  // them to 'active', so it must be re-read to drop.)
   const [pendingKycCount, setPendingKycCount] = useState(0)
   useEffect(() => {
     if (!unlocked) return
@@ -448,7 +452,7 @@ export default function AdminPage() {
     return () => {
       cancelled = true
     }
-  }, [unlocked])
+  }, [unlocked, activeView])
 
   // Count of Payment Gateway account requests awaiting an administrator decision
   // (across EVERY client). Gateway requests live in their own DB table, separate
