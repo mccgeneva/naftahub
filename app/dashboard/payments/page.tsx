@@ -59,6 +59,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { useBeneficiaries } from "@/lib/beneficiaries-store"
@@ -171,12 +172,15 @@ export default function PaymentsPage() {
   const [payReference, setPayReference] = useState("")
   const [payNotes, setPayNotes] = useState("")
   const [selectedPayeeId, setSelectedPayeeId] = useState("manual")
+  // When entering a payee manually, optionally save it to the Beneficiaries
+  // book on submit so it appears in the "Saved Payee" dropdown next time.
+  const [savePayee, setSavePayee] = useState(false)
   // Which compartment the payment is remitted FROM: "main" (default) or a
   // sub-account id. Drives the "Available balance" shown and the compartment the
   // debit posts against on approval.
   const [payFrom, setPayFrom] = useState("main")
   const [formError, setFormError] = useState<string | null>(null)
-  const { beneficiaries } = useBeneficiaries()
+  const { beneficiaries, addBeneficiary } = useBeneficiaries()
   const logActivity = useActivityLog()
   const { show } = usePdfViewer()
   const holder = useHolderIdentity()
@@ -601,6 +605,7 @@ export default function PaymentsPage() {
     setPayReference("")
     setPayNotes("")
     setSelectedPayeeId("manual")
+    setSavePayee(false)
     setPayFrom("main")
     setFormError(null)
   }
@@ -626,6 +631,9 @@ export default function PaymentsPage() {
       setPayCurrency("EUR")
       return
     }
+    // Selecting an already-saved payee: the "save for future use" option is
+    // irrelevant, so clear it.
+    setSavePayee(false)
     const payee = beneficiaries.find((b) => b.id === value)
     if (payee) {
       setPayBeneficiary(payee.name)
@@ -792,6 +800,45 @@ export default function PaymentsPage() {
       subAccountLabel: activeSubAccount?.label,
     })
 
+    // Optionally save this manually-entered payee to the Beneficiaries book so
+    // it appears in the "Saved Payee" dropdown for future payments. Guard
+    // against saving a duplicate of an existing beneficiary (match by IBAN /
+    // account number, case-insensitive, ignoring spaces).
+    let payeeSaved = false
+    if (savePayee && selectedPayeeId === "manual") {
+      const acct = payIban.trim().toUpperCase()
+      const normalized = acct.replace(/[\s-]/g, "")
+      const alreadyExists = beneficiaries.some(
+        (b) => (b.iban || b.accountNumber || "").toUpperCase().replace(/[\s-]/g, "") === normalized,
+      )
+      if (!alreadyExists && beneficiary && acct) {
+        const isIban = /^[A-Za-z]{2}[0-9]{2}/.test(normalized)
+        addBeneficiary({
+          id: `BEN-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`.toUpperCase(),
+          type: "corporate",
+          name: beneficiary,
+          accountNumber: acct,
+          iban: isIban ? acct : undefined,
+          swiftBic: paySwift.trim().toUpperCase(),
+          bankName: "",
+          bankAddress: "",
+          bankCountry: payCountry.trim(),
+          beneficiaryAddress: "",
+          beneficiaryCity: "",
+          beneficiaryCountry: payCountry.trim(),
+          currency: payCurrency,
+          status: "pending",
+          isFavorite: false,
+          createdAt: new Date().toISOString().split("T")[0],
+          totalTransactions: 0,
+          totalVolume: 0,
+          kycVerified: false,
+          riskLevel: "low",
+        })
+        payeeSaved = true
+      }
+    }
+
     logActivity({
       action: `Submitted outgoing payment of ${formattedAmount} to ${beneficiary} for Administrator approval`,
       category: "Payments",
@@ -822,7 +869,7 @@ export default function PaymentsPage() {
     })
 
     toast.success("Payment submitted for approval", {
-      description: `Your payment of ${formattedAmount} to ${beneficiary} is pending Administrator approval. Funds will only be debited once it is approved.`,
+      description: `Your payment of ${formattedAmount} to ${beneficiary} is pending Administrator approval. Funds will only be debited once it is approved.${payeeSaved ? " This payee was saved for future payments." : ""}`,
     })
     resetForm()
     setIsNewPaymentOpen(false)
@@ -1166,6 +1213,26 @@ export default function PaymentsPage() {
                     onChange={(e) => setPayNotes(e.target.value)}
                   />
                 </div>
+                {selectedPayeeId === "manual" && (
+                  <label
+                    htmlFor="save-payee"
+                    className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3"
+                  >
+                    <Checkbox
+                      id="save-payee"
+                      checked={savePayee}
+                      onCheckedChange={(v) => setSavePayee(v === true)}
+                      className="mt-0.5"
+                    />
+                    <span className="text-sm">
+                      <span className="font-medium text-foreground">Save this payee for future use</span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground text-pretty">
+                        Adds the beneficiary to your Beneficiaries book so you can pick it from the Saved Payee list next
+                        time.
+                      </span>
+                    </span>
+                  </label>
+                )}
                 {(() => {
                   const amt = Number.parseFloat(payAmount)
                   if (!payAmount || Number.isNaN(amt) || amt <= 0) return null
