@@ -98,13 +98,32 @@ export default function DebitsPage() {
     if (soleSettleId) setTerminateTarget(soleSettleId)
   }, [soleSettleId])
 
-  // Plain-language "do I owe anything right now" answer.
+  // Plain-language "do I owe anything right now" answer. Amounts are grouped
+  // per currency and each shown on its OWN line — never strung together with a
+  // separator, which made two different currencies read like one figure and
+  // wrapped mid-word ("EU\nR …") on mobile.
   const hasActive = schedule.totals.activeCount > 0
-  const outstandingLabel = useMemo(() => {
-    const entriesOut = Object.entries(schedule.totals.outstandingByCurrency).filter(([, v]) => v > 0)
-    if (entriesOut.length === 0) return null
-    return entriesOut.map(([ccy, amt]) => formatMoney(amt, ccy)).join("  ·  ")
-  }, [schedule.totals.outstandingByCurrency])
+  const outstandingEntries = useMemo(
+    () =>
+      Object.entries(schedule.totals.outstandingByCurrency)
+        .filter(([, v]) => v > 0)
+        .sort((a, b) => b[1] - a[1]),
+    [schedule.totals.outstandingByCurrency],
+  )
+  // Monthly interest grouped per currency, computed from the active facilities.
+  // schedule.totals.monthlyRunRate ADDS every currency's monthly amount into a
+  // single number, so showing it under one currency label mixed EUR into a USD
+  // figure. Grouping keeps each currency honest.
+  const monthlyEntries = useMemo(() => {
+    const by: Record<string, number> = {}
+    for (const f of activeFacilities) {
+      by[f.currency] = (by[f.currency] ?? 0) + f.monthlyAmount
+    }
+    return Object.entries(by)
+      .map(([ccy, amt]) => [ccy, Math.round(amt * 100) / 100] as [string, number])
+      .filter(([, v]) => v > 0)
+      .sort((a, b) => b[1] - a[1])
+  }, [activeFacilities])
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -175,12 +194,26 @@ export default function DebitsPage() {
                       You currently owe money on {schedule.totals.activeCount}{" "}
                       {schedule.totals.activeCount === 1 ? "facility" : "facilities"}
                     </p>
-                    <p className="mt-1 text-2xl font-bold text-foreground tabular-nums break-all">
-                      {outstandingLabel ?? "—"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Outstanding financed principal — what you borrowed and still owe. Each facility is listed
-                      below with its rate and settlement options.
+                    <div className="mt-1 space-y-0.5">
+                      {outstandingEntries.length > 0 ? (
+                        outstandingEntries.map(([ccy, amt]) => (
+                          <p
+                            key={ccy}
+                            className="text-2xl font-bold leading-tight text-foreground tabular-nums break-words"
+                          >
+                            {formatMoney(amt, ccy)}
+                          </p>
+                        ))
+                      ) : (
+                        <p className="text-2xl font-bold text-foreground">—</p>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Outstanding financed principal — what you borrowed and still owe.
+                      {outstandingEntries.length > 1
+                        ? " Each currency is shown separately (they are not added together). "
+                        : " "}
+                      Each facility is listed below with its rate and settlement options.
                     </p>
 
                     <p className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-amber-500">
@@ -196,9 +229,20 @@ export default function DebitsPage() {
                           <TrendingDown className="h-3.5 w-3.5" />
                           <span className="text-[11px] font-medium">Interest cost per month</span>
                         </div>
-                        <p className="mt-0.5 text-base font-semibold text-foreground tabular-nums break-all">
-                          {formatMoney(schedule.totals.monthlyRunRate, primaryCurrency)}
-                        </p>
+                        <div className="mt-0.5 space-y-0.5">
+                          {monthlyEntries.length > 0 ? (
+                            monthlyEntries.map(([ccy, amt]) => (
+                              <p
+                                key={ccy}
+                                className="text-base font-semibold leading-tight text-foreground tabular-nums break-words"
+                              >
+                                {formatMoney(amt, ccy)}
+                              </p>
+                            ))
+                          ) : (
+                            <p className="text-base font-semibold text-foreground">—</p>
+                          )}
+                        </div>
                       </div>
                       <div className="rounded-lg border border-border bg-secondary/20 p-3">
                         <div className="flex items-center gap-1.5 text-muted-foreground">
