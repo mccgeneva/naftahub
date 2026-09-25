@@ -1479,6 +1479,34 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     mutate()
   }
 
+  // Re-generate the MT103 return-of-funds printout for an already-returned payment,
+  // so the administrator can download it again at any time from the stored payload.
+  const downloadReturnMt103 = (req: ApprovalRequest) => {
+    try {
+      const payload = (req.payload ?? {}) as Record<string, unknown>
+      const rec = (payload.record ?? {}) as Record<string, unknown>
+      const reasonCode =
+        (payload.returnReasonCode as string) ?? (rec.returnReasonCode as string) ?? "OTHER"
+      const note = (payload.returnNote as string) ?? (rec.returnNote as string) ?? undefined
+      const data = buildPaymentReturnMt103({
+        id: req.id,
+        beneficiaryName: (rec.beneficiary as string) ?? req.title,
+        beneficiaryIban: (rec.iban as string) ?? (payload.iban as string) ?? "",
+        beneficiaryBankBic: (rec.swiftCode as string) ?? (rec.swift as string) ?? "",
+        beneficiaryCountry: (rec.beneficiaryCountry as string) ?? undefined,
+        amount: Number(req.amount ?? rec.total ?? 0),
+        currency: req.currency ?? "EUR",
+        reference: (rec.reference as string) ?? req.id,
+        reasonCode,
+        note,
+      })
+      showPdf(generateSwiftMessagePdf(data))
+    } catch (err) {
+      console.log("[v0] MT103 re-download failed:", (err as Error).message)
+      toast.error("Could not generate the MT103 printout.")
+    }
+  }
+
   const confirmRevoke = async () => {
     if (!revokeTarget) return
     setActing(true)
@@ -2477,12 +2505,23 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                   {isPayment && req.status === "approved" && (
                     <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                       {isReturned ? (
-                        <Badge
-                          variant="outline"
-                          className="gap-1 border-orange-500/30 bg-orange-500/10 text-orange-600"
-                        >
-                          <Undo2 className="h-3.5 w-3.5" /> Returned by beneficiary bank
-                        </Badge>
+                        <>
+                          <Badge
+                            variant="outline"
+                            className="gap-1 border-orange-500/30 bg-orange-500/10 text-orange-600"
+                          >
+                            <Undo2 className="h-3.5 w-3.5" /> Returned by beneficiary bank
+                          </Badge>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 gap-1"
+                            onClick={() => downloadReturnMt103(req)}
+                            title="Re-generate the SWIFT MT103 return-of-funds printout for this returned payment."
+                          >
+                            <Download className="h-3.5 w-3.5" /> MT103 printout
+                          </Button>
+                        </>
                       ) : (
                         <>
                           {canMarkPaymentDelivered ? (
