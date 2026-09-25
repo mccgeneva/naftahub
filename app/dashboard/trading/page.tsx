@@ -243,14 +243,14 @@ function deriveSignal(change: number, symbol: string): { signal: Signal; confide
 
 // Treuhand AG Limited Hedge Fund — parameters from the NAFTAhub Investor Prospectus 2026.
 const TOKEN_VALUE = 10000
-const MIN_TOKENS = 3
+  const MIN_TOKENS = 2
 const MONTHLY_ROI = 0.25
 
 const FUND_HIGHLIGHTS = [
   { label: "Fixed Monthly ROI", value: "25%", note: "Secured, per active token" },
   { label: "Capital Guaranteed", value: "100%", note: "Swiss fiduciary law" },
   { label: "Token Unit Value", value: "€10,000", note: "Fixed denomination" },
-  { label: "Minimum Entry", value: "3 Tokens", note: "€30,000 position" },
+    { label: "Minimum Entry", value: "2 Tokens", note: "€20,000 position" },
   { label: "Entry & Mgmt Fees", value: "0%", note: "Zero cost of entry" },
   { label: "Max Trading Days", value: "20 / mo", note: "Market dependent" },
 ]
@@ -2336,7 +2336,7 @@ export default function TradingPage() {
                 Token & ROI Calculator
               </CardTitle>
               <p className="text-xs text-muted-foreground">
-                Each token is a fixed €10,000 unit · minimum entry 3 tokens (€30,000) · no upper limit.
+                  Each token is a fixed €10,000 unit · minimum entry 2 tokens (€20,000) · no upper limit.
               </p>
             </CardHeader>
             <CardContent className="space-y-5">
@@ -2391,7 +2391,7 @@ export default function TradingPage() {
               </div>
 
               <div className="flex flex-wrap gap-2">
-                {[3, 5, 10, 20, 50, 100].map((q) => (
+                  {[2, 5, 10, 20, 50, 100].map((q) => (
                   <Button
                     key={q}
                     type="button"
