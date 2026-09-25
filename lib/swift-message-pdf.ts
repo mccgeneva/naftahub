@@ -28,6 +28,7 @@ export interface SwiftMessagePdfData {
   valueDate?: string
   date?: string
   uetr?: string
+  returnReason?: string
   raw?: string
 }
 
@@ -47,13 +48,28 @@ function mtNumber(type: string): string {
   return (type || "").replace(/^MT/i, "").trim()
 }
 
+/**
+ * Human-readable amount for the labelled field table. Parses a clean SWIFT-style
+ * figure (no thousands separators, comma or dot decimal — e.g. "1522200,00") and
+ * regroups it as "USD 1,522,200.00". Any other format is passed through untouched.
+ * The raw FIN block keeps the true SWIFT formatting.
+ */
+function humanAmount(a: string | undefined, ccy: string | undefined): string {
+  if (!a) return "—"
+  const m = a.trim().match(/^(\d+)(?:[.,](\d{1,2}))?$/)
+  if (!m) return `${ccy ?? ""} ${a}`.trim()
+  const whole = Number(m[1]).toLocaleString("en-US")
+  const dec = (m[2] ?? "00").padEnd(2, "0")
+  return `${ccy ?? ""} ${whole}.${dec}`.trim()
+}
+
 export function generateSwiftMessagePdf(data: SwiftMessagePdfData): GeneratedPdf {
   const doc = new jsPDF({ unit: "pt", format: "a4" })
   const pageWidth = doc.internal.pageSize.getWidth()
   const margin = 48
   const contentWidth = pageWidth - margin * 2
   const mt = mtNumber(data.type)
-  const amount = data.amount ? `${data.currency ?? ""} ${data.amount}`.trim() : "—"
+  const amount = humanAmount(data.amount, data.currency)
 
   // ---- Header band -------------------------------------------------------
   doc.setFillColor(...BRAND.navy)
@@ -78,11 +94,12 @@ export function generateSwiftMessagePdf(data: SwiftMessagePdfData): GeneratedPdf
   doc.text(`MT${mt}${data.id ? `  ·  ${data.id}` : ""}`, pageWidth - margin, 64, { align: "right" })
 
   // ---- Field table -------------------------------------------------------
-  let y = 132
+  let y = 128
   const rows: [string, string][] = [
     ["Message Type", `MT${mt}`],
     ["Direction", (data.direction || "").toUpperCase() || "—"],
     ["Status", (data.status || "").toUpperCase() || "—"],
+    ...(data.returnReason ? [["Return Reason", data.returnReason] as [string, string]] : []),
     ["Sender (BIC / SWIFT)", data.sender || "—"],
     ["Receiver (BIC / SWIFT)", data.receiver || "—"],
     ["Transaction Ref (:20:)", data.reference || "—"],
@@ -94,24 +111,32 @@ export function generateSwiftMessagePdf(data: SwiftMessagePdfData): GeneratedPdf
     ["UETR (:121:)", data.uetr || "—"],
   ]
 
+  // Two-column layout with variable row heights so wrapped values (long
+  // beneficiary lines, return reasons) never overlap the next row.
+  const labelX = margin + 12
+  const valueX = margin + 188
+  const valueW = contentWidth - (valueX - margin) - 12
+  const lineH = 12
   rows.forEach((row, i) => {
-    const rowH = 24
-    const rowY = y + i * rowH
+    doc.setFont("courier", "bold")
+    doc.setFontSize(9.5)
+    const valueLines = doc.splitTextToSize(row[1] || "—", valueW)
+    const rowH = Math.max(24, valueLines.length * lineH + 12)
     if (i % 2 === 0) {
       doc.setFillColor(...BRAND.panel)
-      doc.rect(margin, rowY - 4, contentWidth, rowH, "F")
+      doc.rect(margin, y, contentWidth, rowH, "F")
     }
     doc.setFont("helvetica", "normal")
     doc.setFontSize(9.5)
     doc.setTextColor(...BRAND.slate)
-    doc.text(row[0], margin + 12, rowY + 12)
+    doc.text(row[0], labelX, y + 15)
     doc.setFont("courier", "bold")
     doc.setFontSize(9.5)
     doc.setTextColor(...BRAND.ink)
-    const wrapped = doc.splitTextToSize(row[1], contentWidth / 2 - 12)
-    doc.text(wrapped, pageWidth - margin - 12, rowY + 12, { align: "right" })
+    doc.text(valueLines, valueX, y + 15)
+    y += rowH
   })
-  y += rows.length * 24 + 18
+  y += 18
 
   // ---- Raw FIN block -----------------------------------------------------
   if (data.raw) {

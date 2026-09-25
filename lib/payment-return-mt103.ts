@@ -84,8 +84,8 @@ export function buildPaymentReturnMt103(input: PaymentReturnMt103Input): SwiftMe
     `:70:RETURN OF FUNDS /REF ${input.reference || input.id}`,
     ":71A:OUR",
     `:72:/RETN/${input.reasonCode}`,
-    `//${reasonLabel.toUpperCase().slice(0, 33)}`,
-    ...(input.note ? doubleSlashWrap(input.note) : []),
+    ...wrapWords(reasonLabel.toUpperCase(), 33).slice(0, 2).map((l) => `//${l}`),
+    ...(input.note ? wrapWords(input.note.toUpperCase(), 33).slice(0, 3).map((l) => `//${l}`) : []),
     "-}",
   ]
 
@@ -104,16 +104,41 @@ export function buildPaymentReturnMt103(input: PaymentReturnMt103Input): SwiftMe
     reference: returnRef,
     valueDate: now.toLocaleDateString("en-GB"),
     uetr: input.uetr,
+    returnReason: `${reasonLabel}${input.note ? ` — ${input.note}` : ""}`,
     raw: rawLines.join("\n"),
   }
 }
 
-/** Wrap a free-text note into SWIFT :72: continuation lines (`//` prefixed, ≤33 chars). */
-function doubleSlashWrap(note: string): string[] {
-  const clean = note.replace(/\s+/g, " ").trim().toUpperCase()
-  const out: string[] = []
-  for (let i = 0; i < clean.length && out.length < 4; i += 33) {
-    out.push(`//${clean.slice(i, i + 33)}`)
+/**
+ * Word-boundary wrap for SWIFT continuation lines: breaks on spaces so words are
+ * never cut mid-way (the old fixed-slice produced "MISMAT" from "MISMATCH").
+ * Only a single word longer than `width` is hard-broken.
+ */
+function wrapWords(text: string, width: number): string[] {
+  const words = text.replace(/\s+/g, " ").trim().split(" ").filter(Boolean)
+  const lines: string[] = []
+  let cur = ""
+  const pushLong = (w: string) => {
+    let rest = w
+    while (rest.length > width) {
+      lines.push(rest.slice(0, width))
+      rest = rest.slice(width)
+    }
+    cur = rest
   }
-  return out
+  for (const w of words) {
+    if (!cur) {
+      if (w.length <= width) cur = w
+      else pushLong(w)
+    } else if (cur.length + 1 + w.length <= width) {
+      cur += ` ${w}`
+    } else {
+      lines.push(cur)
+      cur = ""
+      if (w.length <= width) cur = w
+      else pushLong(w)
+    }
+  }
+  if (cur) lines.push(cur)
+  return lines
 }
