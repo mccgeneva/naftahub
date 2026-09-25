@@ -24,7 +24,7 @@
  * components and server actions.
  */
 
-export type PaymentStage = "review" | "initiated" | "delivered" | "rejected" | "cancelled"
+export type PaymentStage = "review" | "initiated" | "delivered" | "returned" | "rejected" | "cancelled"
 
 /**
  * Minimal shape needed to derive a payment's stage. Any record that carries an
@@ -39,6 +39,10 @@ export interface PaymentStageInput {
   deliveryStatus?: string | null
   /** Alternative delivery flag mirrored from `payload.delivered`. */
   delivered?: boolean | null
+  /** Set when the beneficiary bank rejected the credit and returned the funds. */
+  returnStatus?: string | null
+  /** Alternative return flag mirrored from `payload.returnedByBank`. */
+  returnedByBank?: boolean | null
 }
 
 /** Full, human-facing stage label used for badges and detail rows. */
@@ -46,6 +50,7 @@ export const PAYMENT_STAGE_LABEL: Record<PaymentStage, string> = {
   review: "Payment in Review — Awaiting Approval",
   initiated: "Payment Approved & Initiated",
   delivered: "Payment Completed — Funds Delivered",
+  returned: "Payment Returned — Beneficiary Bank",
   rejected: "Payment Rejected",
   cancelled: "Payment Cancelled",
 }
@@ -55,6 +60,7 @@ export const PAYMENT_STAGE_SHORT: Record<PaymentStage, string> = {
   review: "In Review",
   initiated: "Approved & Initiated",
   delivered: "Completed",
+  returned: "Returned",
   rejected: "Rejected",
   cancelled: "Cancelled",
 }
@@ -67,6 +73,8 @@ export const PAYMENT_STAGE_DESCRIPTION: Record<PaymentStage, string> = {
     "Approved and initiated with the banking partner. Funds have been debited and are on their way to the beneficiary.",
   delivered:
     "Confirmed delivered — the funds have reached the beneficiary account. This payment is complete.",
+  returned:
+    "The beneficiary bank rejected the credit and returned the funds. The amount has been credited back to the sender's account.",
   rejected: "This payment request was declined. No funds were moved.",
   cancelled: "This payment request was withdrawn before a decision was made.",
 }
@@ -80,6 +88,7 @@ export const PAYMENT_STAGE_BADGE_CLASS: Record<PaymentStage, string> = {
   review: "bg-amber-500/10 text-amber-500 border-amber-500/20",
   initiated: "bg-blue-500/10 text-blue-500 border-blue-500/20",
   delivered: "bg-green-500/10 text-green-500 border-green-500/20",
+  returned: "bg-orange-500/10 text-orange-500 border-orange-500/20",
   rejected: "bg-red-500/10 text-red-500 border-red-500/20",
   cancelled: "bg-muted text-muted-foreground border-border",
 }
@@ -105,6 +114,8 @@ export function getPaymentStage(input: PaymentStageInput | null | undefined): Pa
   if (status === "rejected") return "rejected"
   if (status === "cancelled") return "cancelled"
   if (status === "approved") {
+    if (input?.returnedByBank === true || input?.returnStatus === "returned" || input?.deliveryStatus === "returned")
+      return "returned"
     return isDelivered(input) ? "delivered" : "initiated"
   }
   // pending, awaiting_master, or anything unrecognized ⇒ still in review.
@@ -133,6 +144,7 @@ export function paymentStageToGpiStatus(
       return "completed"
     case "initiated":
       return "processing"
+    case "returned":
     case "rejected":
     case "cancelled":
       return "failed"

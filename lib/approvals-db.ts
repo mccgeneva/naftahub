@@ -378,7 +378,8 @@ export async function countPaymentsAwaitingDelivery(): Promise<number> {
     `SELECT COUNT(*)::int AS n FROM approval_requests
       WHERE kind = 'payment' AND status = 'approved'
         AND payload->>'deliveryInitiatedAt' IS NOT NULL
-        AND COALESCE(payload->>'delivered', 'false') <> 'true'`,
+        AND COALESCE(payload->>'delivered', 'false') <> 'true'
+        AND COALESCE(payload->>'returnedByBank', 'false') <> 'true'`,
   )
   return Number(rows[0]?.n ?? 0)
 }

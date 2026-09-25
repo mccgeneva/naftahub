@@ -46,6 +46,7 @@ import {
   Coins,
   PackageCheck,
   PackageX,
+  Undo2,
   Ban,
   ArrowRight,
   Handshake,
@@ -76,6 +77,7 @@ import {
   adminMarkCommodityDelivered,
   adminMarkPaymentDelivered,
   adminMarkPaymentNotDelivered,
+  adminReturnPaymentFromReceiver,
   adminRevokeCommodityDeal,
   adminShareCommodityDeal,
   adminSetCommodityDealHold,
@@ -119,6 +121,8 @@ import {
 import { Messenger } from "@/components/bankeka/messenger"
 import type { ProjectFundingRequest, UploadedFundingDoc } from "@/lib/project-funding-store"
 import { usePdfViewer } from "@/lib/pdf-viewer"
+import { PAYMENT_RETURN_REASONS } from "@/lib/payment-return-reasons"
+import { buildPaymentReturnMt103 } from "@/lib/payment-return-mt103"
 import { generateInvestmentAgreementPdf } from "@/lib/investment-agreement-pdf"
 import {
   FACILITY_TYPE_LABELS,
@@ -633,6 +637,11 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
   // Revoke-approved-deal dialog state (commodity). Releases the reserved funds.
   const [revokeTarget, setRevokeTarget] = useState<{ id: string; label: string } | null>(null)
   const [revokeReason, setRevokeReason] = useState("")
+  // Beneficiary-bank RETURN of an outgoing payment.
+  const [returnTarget, setReturnTarget] = useState<{ id: string; title: string } | null>(null)
+  const [returnReasonCode, setReturnReasonCode] = useState("")
+  const [returnNote, setReturnNote] = useState("")
+  const [returnClientName, setReturnClientName] = useState("")
 
   // Share-deal dialog state (commodity). Sends a read-only visibility copy to
   // one or more other clients — no funds move.
@@ -1420,6 +1429,56 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     mutate()
   }
 
+  // Beneficiary bank rejected the credit and RETURNED the funds. Credits the
+  // amount back to the sender's Master Account and lets the admin generate the
+  // MT103 return-of-funds printout.
+  const confirmReturnPayment = async () => {
+    if (!returnTarget) return
+    const reason = PAYMENT_RETURN_REASONS.find((r) => r.code === returnReasonCode)
+    if (!reason) {
+      toast.error("Select a return reason.")
+      return
+    }
+    setActing(true)
+    const res = await adminReturnPaymentFromReceiver(
+      ADMIN_PASSCODE,
+      returnTarget.id,
+      reason.code,
+      reason.label,
+      returnNote.trim() || undefined,
+    )
+    setActing(false)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    // Generate the MT103 return printout for the admin to keep/forward.
+    try {
+      const rec = (res.request?.payload?.record ?? {}) as Record<string, unknown>
+      const doc = buildPaymentReturnMt103({
+        approvalId: returnTarget.id,
+        beneficiaryName: (rec.beneficiary as string) ?? returnTarget.title,
+        beneficiaryIban: (rec.iban as string) ?? (res.request?.payload as { iban?: string } | undefined)?.iban ?? "",
+        beneficiarySwift: (rec.swiftCode as string) ?? (rec.swift as string) ?? "",
+        amount: Number(res.request?.amount ?? rec.total ?? 0),
+        currency: res.request?.currency ?? "EUR",
+        reference: (rec.reference as string) ?? returnTarget.id,
+        reasonCode: reason.code,
+        reasonLabel: reason.label,
+        reasonNote: returnNote.trim() || undefined,
+        senderName: returnClientName || "Client",
+      })
+      showPdf(doc)
+    } catch (err) {
+      console.log("[v0] MT103 return printout failed:", (err as Error).message)
+    }
+    toast.success("Payment returned. Funds credited back to the client's Master Account.")
+    setReturnTarget(null)
+    setReturnReasonCode("")
+    setReturnNote("")
+    mutate()
+  }
+
   const confirmRevoke = async () => {
     if (!revokeTarget) return
     setActing(true)
@@ -1734,6 +1793,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
             {filtered.map((req) => {
               const isPending = req.status === "pending"
               const isDelivered = req.payload?.delivered === true
+              const isReturned = (req.payload as { returnedByBank?: boolean } | undefined)?.returnedByBank === true
               // AES project funding: negotiate + review documents before
               // activation. Approve is gated until a discussion is opened.
               const funding = fundingRecord(req)
@@ -2416,37 +2476,70 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                       "Completed — Funds Delivered". No funds move here. */}
                   {isPayment && req.status === "approved" && (
                     <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                      {canMarkPaymentDelivered ? (
-                        <Button
-                          size="sm"
+                      {isReturned ? (
+                        <Badge
                           variant="outline"
-                          className="h-8 gap-1 text-emerald-600"
-                          disabled={acting}
-                          onClick={() => markPaymentDelivered(req.id)}
-                          title="Confirm the funds have reached the beneficiary account. Marks this payment complete for the client."
+                          className="gap-1 border-orange-500/30 bg-orange-500/10 text-orange-600"
                         >
-                          <PackageCheck className="h-3.5 w-3.5" /> Mark funds delivered
-                        </Button>
-                      ) : isDelivered ? (
+                          <Undo2 className="h-3.5 w-3.5" /> Returned by beneficiary bank
+                        </Badge>
+                      ) : (
                         <>
-                          <Badge
-                            variant="outline"
-                            className="gap-1 border-green-500/30 bg-green-500/10 text-green-600"
-                          >
-                            <PackageCheck className="h-3.5 w-3.5" /> Funds delivered
-                          </Badge>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 gap-1 text-amber-600"
-                            disabled={acting}
-                            onClick={() => markPaymentNotDelivered(req.id)}
-                            title="The funds were NOT received. Revert this payment to Approved & Initiated so you can intervene, re-confirm, or recall it."
-                          >
-                            <PackageX className="h-3.5 w-3.5" /> Mark funds not received
-                          </Button>
+                          {canMarkPaymentDelivered ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 gap-1 text-emerald-600"
+                              disabled={acting}
+                              onClick={() => markPaymentDelivered(req.id)}
+                              title="Confirm the funds have reached the beneficiary account. Marks this payment complete for the client."
+                            >
+                              <PackageCheck className="h-3.5 w-3.5" /> Mark funds delivered
+                            </Button>
+                          ) : isDelivered ? (
+                            <>
+                              <Badge
+                                variant="outline"
+                                className="gap-1 border-green-500/30 bg-green-500/10 text-green-600"
+                              >
+                                <PackageCheck className="h-3.5 w-3.5" /> Funds delivered
+                              </Badge>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1 text-amber-600"
+                                disabled={acting}
+                                onClick={() => markPaymentNotDelivered(req.id)}
+                                title="The funds were NOT received. Revert this payment to Approved & Initiated so you can intervene, re-confirm, or recall it."
+                              >
+                                <PackageX className="h-3.5 w-3.5" /> Mark funds not received
+                              </Button>
+                            </>
+                          ) : null}
+                          {/* Beneficiary bank rejected the credit and returned the funds. */}
+                          {!isDelivered && paymentInitiated && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 gap-1 text-orange-600"
+                              disabled={acting}
+                              onClick={() => {
+                                setReturnTarget({ id: req.id, title: req.title })
+                                setReturnClientName(
+                                  ((req.payload?.record as { accountHolder?: string } | undefined)?.accountHolder ??
+                                    req.title ??
+                                    "Client") as string,
+                                )
+                                setReturnReasonCode("")
+                                setReturnNote("")
+                              }}
+                              title="The beneficiary bank rejected the credit and returned the funds. Credit them back to the client's Master Account and generate an MT103 return printout."
+                            >
+                              <Undo2 className="h-3.5 w-3.5" /> Returned by bank
+                            </Button>
+                          )}
                         </>
-                      ) : null}
+                      )}
                     </div>
                   )}
 
@@ -3404,6 +3497,66 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
       </Dialog>
 
       {/* Revoke approved commodity deal dialog */}
+      <Dialog open={returnTarget !== null} onOpenChange={(o) => !o && !acting && setReturnTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Undo2 className="h-4 w-4 text-orange-600" /> Returned by beneficiary bank
+            </DialogTitle>
+            <DialogDescription>
+              {returnTarget ? (
+                <>
+                  The beneficiary bank rejected{" "}
+                  <span className="font-medium text-foreground">{returnTarget.title}</span> and returned the funds.
+                  Select the reason — the amount is credited back to{" "}
+                  <span className="font-medium text-foreground">{returnClientName}</span>&apos;s Master Account and an
+                  MT103 return printout is generated (funds return to the platform UBS Geneva master account).
+                </>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Return reason</label>
+              <Select value={returnReasonCode} onValueChange={setReturnReasonCode}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a rejection reason" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAYMENT_RETURN_REASONS.map((r) => (
+                    <SelectItem key={r.code} value={r.code}>
+                      {r.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Additional note (optional)</label>
+              <Textarea
+                value={returnNote}
+                onChange={(e) => setReturnNote(e.target.value)}
+                placeholder="Any extra detail from the beneficiary bank's return advice…"
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" disabled={acting} onClick={() => setReturnTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              className="gap-1 bg-orange-600 text-white hover:bg-orange-700"
+              disabled={acting || !returnReasonCode}
+              onClick={confirmReturnPayment}
+            >
+              {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Undo2 className="h-4 w-4" />}
+              Return funds &amp; generate MT103
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={revokeTarget !== null} onOpenChange={(o) => !o && !acting && setRevokeTarget(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>

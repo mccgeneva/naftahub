@@ -97,6 +97,7 @@ import {
   type LedgerEffect,
 } from "@/lib/approvals-db"
 import { KIND_LABELS, KIND_HREF, type ApprovalKind } from "@/lib/approval-kinds"
+import { ISSUER_BANK } from "@/lib/issuer-bank"
 import { parseQuantityString } from "@/lib/petroleum-products"
 import { getDynamicUserByEmail } from "@/lib/admin-users-db"
 import { notifyAllAdminsOfSubmission } from "@/lib/notify-admins"
@@ -5272,6 +5273,143 @@ export async function adminMarkPaymentNotDelivered(
   } catch (err) {
     console.log("[v0] adminMarkPaymentNotDelivered failed:", (err as Error).message)
     return { ok: false, error: "The payment could not be reverted. Please try again." }
+  }
+}
+
+/**
+ * Administrator records that the BENEFICIARY BANK rejected the credit and
+ * RETURNED the funds. Distinct from "not delivered" (a transient chase) and from
+ * a client-initiated recall: this is a terminal return of an already-sent
+ * payment. It (a) credits the full debited amount back to the sender's Master
+ * Account (the debit posted at approval), (b) records the SWIFT-style return
+ * reason on the payload so the client and the MT103 return printout can show it,
+ * and (c) takes the payment out of the awaiting-delivery queue. The MT103
+ * printout itself is generated client-side from the returned reason.
+ *
+ * Money direction: every client's outgoing funds leave via the single platform
+ * UBS Geneva master account, so the return comes back TO that master — modelled
+ * here as a refund credit to the sender's data-owner ledger.
+ */
+export async function adminReturnPaymentFromReceiver(
+  passcode: string,
+  id: string,
+  reasonCode: string,
+  reasonLabel: string,
+  reasonNote?: string,
+): Promise<DecideResult> {
+  if (!(await adminOk(passcode))) return { ok: false, error: "Administrator authorization failed." }
+  try {
+    const existing = await getApprovalById(id)
+    if (!existing) return { ok: false, error: "Payment not found." }
+    if (existing.kind !== "payment") {
+      return { ok: false, error: "Only outgoing payments can be returned." }
+    }
+    if (existing.status !== "approved") {
+      return { ok: false, error: "Only an approved & initiated payment can be returned by the beneficiary bank." }
+    }
+    const payload0 = (existing.payload ?? {}) as Record<string, unknown>
+    if (payload0.returnedByBank === true) {
+      return { ok: true, request: existing }
+    }
+    if (!reasonCode) return { ok: false, error: "Select a return reason." }
+
+    const record0 = (payload0.record ?? {}) as { total?: number }
+    // The sender was debited the TOTAL (amount + tiered fee) at approval; a full
+    // return makes them whole by crediting exactly that back.
+    const refundAmount = Number(existing.amount ?? record0.total ?? 0)
+    const refundCurrency = existing.currency ?? "EUR"
+    if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+      return { ok: false, error: "This payment's amount could not be determined." }
+    }
+
+    const returnedAt = new Date().toISOString()
+
+    // 1) Credit the funds back to the sender's Master Account. Deterministic id
+    //    so a retry can never double-credit.
+    try {
+      const ownerId = await resolveDataOwnerIdFor(existing.userId)
+      await upsertLedgerEntry(ownerId, {
+        id: `PAYRET-${existing.id}`,
+        direction: "credit",
+        amount: refundAmount,
+        currency: refundCurrency,
+        status: "completed",
+        date: returnedAt,
+        counterparty: existing.title,
+        bank: ISSUER_BANK.name,
+        reference: existing.id,
+        comment: `Funds returned by the beneficiary bank (${reasonCode} — ${reasonLabel})${reasonNote ? `: ${reasonNote}` : ""}. Credited back to your Master Account (${ISSUER_BANK.name}, Geneva).`,
+        category: "Payment Return — Beneficiary Bank",
+      })
+    } catch (creditErr) {
+      console.log("[v0] payment return credit failed:", (creditErr as Error).message)
+      return { ok: false, error: "The return credit could not be posted. Please try again." }
+    }
+
+    // 2) Stamp the payment as returned (top-level flags + payload.record mirror so
+    //    the client store surfaces the returned stage). updateApprovalPayload
+    //    replaces the whole payload, so re-spread everything.
+    const record = { ...((payload0.record ?? {}) as Record<string, unknown>) }
+    record.deliveryStatus = "returned"
+    record.returnStatus = "returned"
+    record.returnReasonCode = reasonCode
+    record.returnReason = reasonLabel
+    if (reasonNote) record.returnReasonNote = reasonNote
+    record.returnedAt = returnedAt
+    // Clear any stale delivery flags — a returned payment is not delivered.
+    delete record.deliveredAt
+    delete record.deliveredBy
+    const { delivered: _d, deliveredAt: _da, deliveredBy: _db, ...restPayload } = payload0
+    const updated = await updateApprovalPayload(id, {
+      ...restPayload,
+      returnedByBank: true,
+      returnStatus: "returned",
+      returnReasonCode: reasonCode,
+      returnReason: reasonLabel,
+      returnReasonNote: reasonNote ?? null,
+      returnedAt,
+      returnRefundEntryId: `PAYRET-${existing.id}`,
+      record,
+    })
+    if (!updated) return { ok: false, error: "This payment could not be updated." }
+
+    try {
+      await insertNotification({
+        userId: updated.userId,
+        tone: "warning",
+        title: "Payment returned by beneficiary bank",
+        body: `Your payment "${updated.title}" was returned by the beneficiary bank (${reasonLabel}). ${formatMoney(refundAmount, refundCurrency)} has been credited back to your Master Account.`,
+        href: KIND_HREF.payment ?? "/dashboard/payments",
+      })
+    } catch (err) {
+      console.log("[v0] payment return notification failed:", (err as Error).message)
+    }
+
+    try {
+      const target = await resolveAccountProfileById(updated.userId)
+      await logActivity({
+        action: `Administrator recorded a beneficiary-bank RETURN on payment "${updated.title}" for ${target.fullName}`,
+        category: "Administration / Approvals",
+        user: "Administrator",
+        details: {
+          referenceId: updated.id,
+          targetAccount: `${target.fullName} — ${target.email}`,
+          summary: updated.summary || updated.title,
+          amount: formatMoney(refundAmount, refundCurrency),
+          decision: `Returned by beneficiary bank — ${reasonCode} (${reasonLabel})`,
+          note: reasonNote ?? "(none)",
+          refundEntryId: `PAYRET-${updated.id}`,
+          returnedAt,
+        },
+      })
+    } catch (err) {
+      console.log("[v0] payment return activity log failed:", (err as Error).message)
+    }
+
+    return { ok: true, request: updated }
+  } catch (err) {
+    console.log("[v0] adminReturnPaymentFromReceiver failed:", (err as Error).message)
+    return { ok: false, error: "The payment return could not be recorded. Please try again." }
   }
 }
 
