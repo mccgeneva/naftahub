@@ -407,7 +407,7 @@ function bankAccountFromGateway(gw: GatewayAccount): BankAccount | null {
     countryCode,
     rating: "NR",
     accountName: gw.company || gw.accountHolder || "—",
-    accountNumber: c?.accountNumber || c?.routingNumber || c?.reference || "—",
+    accountNumber: c?.accountNumber || accountNumberFromIban(iban, c?.routingNumber || c?.reference || "—"),
     iban: iban || "—",
     swift: c?.bic || "—",
     currency: gw.currency,
@@ -672,7 +672,7 @@ export function useBankAccounts(): BankAccount[] {
         rating: "A",
         // Beneficiary is the account holder's own entity, not "MCC Capital".
         accountName: beneficiaryName || "MCC Capital",
-        accountNumber: `${cur}-2908 19`,
+        accountNumber: accountNumberFromIban(iban, `${cur}-2908 19`),
         iban,
         swift,
         currency: cur,
