@@ -287,7 +287,7 @@ export default function PaymentsPage() {
         const inp = data?.ok ? data.score?.inputs : null
         if (!cancelled && inp) {
           const availableEur = Math.max(0, Number(inp.availableBalance) || 0)
-          const exposureEur = Math.max(0, Number(inp.totalExposure) || 0)
+          const exposureEur = Math.max(0, Number(inp.leverageCashExposure) || 0)
           setRingfence({ freeEur: Math.max(0, availableEur - exposureEur), exposureEur })
         }
       })
@@ -748,7 +748,7 @@ export default function PaymentsPage() {
         const inp = data?.ok ? data.score?.inputs : null
         if (inp) {
           const availableEur = Math.max(0, Number(inp.availableBalance) || 0)
-          const exposureEur = Math.max(0, Number(inp.totalExposure) || 0)
+          const exposureEur = Math.max(0, Number(inp.leverageCashExposure) || 0)
           rf = { freeEur: Math.max(0, availableEur - exposureEur), exposureEur }
           setRingfence(rf)
         }

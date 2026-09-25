@@ -98,7 +98,7 @@ async function computeFreeToCommit(
     const config = await getGuaranteeConfig()
     const profile = await gatherGuaranteeProfile(userId, config)
     const availableEur = round2(profile.score.inputs.availableBalance || 0)
-    const borrowedEur = round2(profile.score.inputs.totalExposure || 0)
+    const borrowedEur = round2(profile.score.inputs.leverageCashExposure || 0)
     return { freeEur: round2(availableEur - borrowedEur), borrowedEur, availableEur }
   } catch {
     return null

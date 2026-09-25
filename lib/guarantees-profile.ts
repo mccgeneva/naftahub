@@ -131,6 +131,12 @@ export async function gatherGuaranteeProfile(
   // --- Outstanding financing exposure -----------------------------------
   let totalExposure = 0
   let leverageLoad = 0
+  // Ring-fence (outbound-payment) reservation: ONLY cash-funded leverage proceeds
+  // that were actually credited to the master balance. Per policy, the customer
+  // can wire out any money they see in their master account — the LEVERAGES
+  // service is the sole exception, and only its cash proceeds (not instrument-
+  // backed notional buying power) are reserved.
+  let leverageCashExposure = 0
   const financingKinds = ["leverage", "monetization", "project_funding", "treasury_lending", "internal_loan"] as const
   for (const kind of financingKinds) {
     try {
@@ -156,7 +162,17 @@ export async function gatherGuaranteeProfile(
         }
         if (exposureEur <= 0) continue
         totalExposure += exposureEur
-        if (kind === "leverage") leverageLoad += exposureEur
+        if (kind === "leverage") {
+          leverageLoad += exposureEur
+          // Only CASH-funded leverage (treasury/master/naftahub) credits real
+          // cash into the master balance and is ring-fenced from outbound
+          // payments. An instrument-backed line is notional buying power held
+          // for trading — it never sat in the master balance, so it must not
+          // reduce the customer's spendable/payable cash.
+          const acct = String(rec.account ?? "").toLowerCase()
+          const instrumentBacked = acct === "instruments" || Boolean(rec.pledgedInstrumentId)
+          if (!instrumentBacked) leverageCashExposure += exposureEur
+        }
       }
     } catch {
       // ignore this kind
@@ -372,6 +388,7 @@ export async function gatherGuaranteeProfile(
     equitySavings,
     leverageLoad,
     totalExposure,
+    leverageCashExposure,
     availableBalance,
     incomingInflow,
     overdueCharges,
@@ -433,8 +450,9 @@ export async function gatherGuaranteeProfile(
 export interface FinancingRingfence {
   /** Aggregate spendable balance across currencies, EUR-normalised. */
   availableEur: number
-  /** Outstanding borrowed/financed principal (leverage, loans, monetization,
-   *  funding, financed treasury deposit), EUR-normalised. */
+  /** Reserved cash-funded leverage proceeds only (EUR-normalised). Loans,
+   *  project funding, monetization and instrument-backed leverage are NOT
+   *  reserved — the customer can wire those out. */
   exposureEur: number
   /** The client's OWN transferable funds = max(0, available − exposure). */
   freeEur: number
@@ -456,7 +474,12 @@ export async function getFinancingRingfence(userId: string): Promise<FinancingRi
   const config = await getGuaranteeConfig()
   const { score } = await gatherGuaranteeProfile(userId, config)
   const availableEur = Math.max(0, score.inputs.availableBalance || 0)
-  const exposureEur = Math.max(0, score.inputs.totalExposure || 0)
+  // Reserve ONLY cash-funded leverage proceeds. All other money the customer
+  // sees in their master account — own deposits, loan/project-funding/
+  // monetization proceeds, and instrument-backed leverage (notional buying
+  // power, never balance cash) — is freely payable. Only the leverages service
+  // is excepted, per policy.
+  const exposureEur = Math.max(0, score.inputs.leverageCashExposure || 0)
   const freeEur = Math.max(0, availableEur - exposureEur)
   return { availableEur, exposureEur, freeEur, hasBorrowed: exposureEur > 0.01 }
 }

@@ -173,6 +173,13 @@ export interface GuaranteeInputs {
   leverageLoad: number
   /** ALL outstanding financing (leverage + monetization + funding + treasury). */
   totalExposure: number
+  /**
+   * CASH-funded leverage proceeds only (EUR) — borrowed cash actually credited
+   * to the master balance. Used by the outbound-payment ring-fence: only "the
+   * leverages service" reserves spendable cash; instrument-backed leverage is
+   * notional buying power (never balance cash) and does not reserve. Optional.
+   */
+  leverageCashExposure?: number
   /** Spendable balance available to service financing. */
   availableBalance: number
   /**
@@ -361,6 +368,7 @@ export function computeGuaranteeScore(inputs: GuaranteeInputs, config: Guarantee
       equitySavings: round2(equitySavings),
       leverageLoad: round2(leverageLoad),
       totalExposure: round2(totalExposure),
+      leverageCashExposure: round2(inputs.leverageCashExposure ?? 0),
       availableBalance: round2(available),
       incomingInflow: round2(incomingInflow),
       overdueCharges: overdue,
