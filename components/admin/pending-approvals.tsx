@@ -123,6 +123,7 @@ import type { ProjectFundingRequest, UploadedFundingDoc } from "@/lib/project-fu
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { PAYMENT_RETURN_REASONS } from "@/lib/payment-return-reasons"
 import { buildPaymentReturnMt103 } from "@/lib/payment-return-mt103"
+import { generateSwiftMessagePdf } from "@/lib/swift-message-pdf"
 import { generateInvestmentAgreementPdf } from "@/lib/investment-agreement-pdf"
 import {
   FACILITY_TYPE_LABELS,
@@ -1455,20 +1456,19 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     // Generate the MT103 return printout for the admin to keep/forward.
     try {
       const rec = (res.request?.payload?.record ?? {}) as Record<string, unknown>
-      const doc = buildPaymentReturnMt103({
-        approvalId: returnTarget.id,
+      const data = buildPaymentReturnMt103({
+        id: returnTarget.id,
         beneficiaryName: (rec.beneficiary as string) ?? returnTarget.title,
         beneficiaryIban: (rec.iban as string) ?? (res.request?.payload as { iban?: string } | undefined)?.iban ?? "",
-        beneficiarySwift: (rec.swiftCode as string) ?? (rec.swift as string) ?? "",
+        beneficiaryBankBic: (rec.swiftCode as string) ?? (rec.swift as string) ?? "",
+        beneficiaryCountry: (rec.beneficiaryCountry as string) ?? undefined,
         amount: Number(res.request?.amount ?? rec.total ?? 0),
         currency: res.request?.currency ?? "EUR",
         reference: (rec.reference as string) ?? returnTarget.id,
         reasonCode: reason.code,
-        reasonLabel: reason.label,
-        reasonNote: returnNote.trim() || undefined,
-        senderName: returnClientName || "Client",
+        note: returnNote.trim() || undefined,
       })
-      showPdf(doc)
+      showPdf(generateSwiftMessagePdf(data))
     } catch (err) {
       console.log("[v0] MT103 return printout failed:", (err as Error).message)
     }

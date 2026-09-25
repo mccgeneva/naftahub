@@ -133,6 +133,7 @@ const STAGE_ICON: Record<PaymentStage, typeof Clock> = {
   initiated: AlertCircle,
   delivered: CheckCircle2,
   rejected: XCircle,
+  returned: Undo2,
   cancelled: XCircle,
 }
 
