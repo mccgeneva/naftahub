@@ -3661,8 +3661,8 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
 
       {/* Discuss a pending payment with the co-account member who must approve it */}
       <Dialog open={discussTarget !== null} onOpenChange={(o) => !o && !discussSending && setDiscussTarget(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[88dvh] max-w-md flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <MessagesSquare className="h-4 w-4 text-sky-600" /> Discuss before approving
             </DialogTitle>
@@ -3677,44 +3677,47 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
               ) : null}
             </DialogDescription>
           </DialogHeader>
-          {discussLoading ? (
-            <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading shared-account members…
-            </div>
-          ) : discussMembers.length === 0 ? (
-            <p className="py-4 text-sm text-muted-foreground">
-              No other members are linked to this shared account, so there is no one to route the approval to. You can
-              approve or reject the payment directly.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-foreground">Discuss with</label>
-                <Select value={discussRecipient} onValueChange={setDiscussRecipient}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select the account that must approve" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {discussMembers.map((m) => (
-                      <SelectItem key={m.id} value={m.id}>
-                        {m.name} · {m.email} ({m.relationship})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            {discussLoading ? (
+              <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading shared-account members…
               </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-foreground">Note (optional)</label>
-                <Textarea
-                  value={discussNote}
-                  onChange={(e) => setDiscussNote(e.target.value)}
-                  placeholder="Any context for the approver…"
-                  rows={3}
-                />
+            ) : discussMembers.length === 0 ? (
+              <p className="py-4 text-sm text-muted-foreground">
+                No other members are linked to this shared account, so there is no one to route the approval to. You can
+                approve or reject the payment directly.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-foreground">Discuss with</label>
+                  <Select value={discussRecipient} onValueChange={setDiscussRecipient}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select the account that must approve" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {discussMembers.map((m) => (
+                        <SelectItem key={m.id} value={m.id}>
+                          {m.name} · {m.email} ({m.relationship})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-foreground">Note (optional)</label>
+                  <Textarea
+                    value={discussNote}
+                    onChange={(e) => setDiscussNote(e.target.value)}
+                    placeholder="Any context for the approver…"
+                    rows={4}
+                    className="max-h-[40dvh] resize-none break-words"
+                  />
+                </div>
               </div>
-            </div>
-          )}
-          <DialogFooter>
+            )}
+          </div>
+          <DialogFooter className="shrink-0">
             <Button variant="ghost" disabled={discussSending} onClick={() => setDiscussTarget(null)}>
               {discussMembers.length === 0 ? "Close" : "Cancel"}
             </Button>
