@@ -117,6 +117,9 @@ import {
   adminGetThread,
   adminReply,
   adminDeleteMessage,
+  listPaymentApproversAdmin,
+  discussPaymentWithMemberAdmin,
+  type PaymentApprover,
 } from "@/app/actions/bankeka"
 import { Messenger } from "@/components/bankeka/messenger"
 import type { ProjectFundingRequest, UploadedFundingDoc } from "@/lib/project-funding-store"
@@ -643,6 +646,13 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
   const [returnReasonCode, setReturnReasonCode] = useState("")
   const [returnNote, setReturnNote] = useState("")
   const [returnClientName, setReturnClientName] = useState("")
+  // Discuss a pending payment with the co-account member who must approve it.
+  const [discussTarget, setDiscussTarget] = useState<{ id: string; title: string; initiator: string } | null>(null)
+  const [discussMembers, setDiscussMembers] = useState<PaymentApprover[]>([])
+  const [discussLoading, setDiscussLoading] = useState(false)
+  const [discussRecipient, setDiscussRecipient] = useState("")
+  const [discussNote, setDiscussNote] = useState("")
+  const [discussSending, setDiscussSending] = useState(false)
 
   // Share-deal dialog state (commodity). Sends a read-only visibility copy to
   // one or more other clients — no funds move.
@@ -1433,6 +1443,47 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
   // Beneficiary bank rejected the credit and RETURNED the funds. Credits the
   // amount back to the sender's Master Account and lets the admin generate the
   // MT103 return-of-funds printout.
+  const openDiscussPayment = async (req: ApprovalRequest) => {
+    const rec = (req.payload?.record ?? {}) as Record<string, unknown>
+    const initiator = (rec.clientName as string) || (rec.accountHolder as string) || "the client"
+    setDiscussTarget({ id: req.id, title: req.title, initiator })
+    setDiscussMembers([])
+    setDiscussRecipient("")
+    setDiscussNote("")
+    setDiscussLoading(true)
+    const res = await listPaymentApproversAdmin(ADMIN_PASSCODE, req.id)
+    setDiscussLoading(false)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    setDiscussTarget({ id: req.id, title: req.title, initiator: res.initiatorName })
+    setDiscussMembers(res.members)
+    if (res.members.length === 1) setDiscussRecipient(res.members[0].id)
+  }
+
+  const confirmDiscussPayment = async () => {
+    if (!discussTarget || !discussRecipient) return
+    setDiscussSending(true)
+    const res = await discussPaymentWithMemberAdmin(
+      ADMIN_PASSCODE,
+      discussTarget.id,
+      discussRecipient,
+      discussNote.trim() || undefined,
+    )
+    setDiscussSending(false)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    toast.success("Payment sent to the co-account holder for approval via Bankeka.")
+    setDiscussTarget(null)
+    setDiscussMembers([])
+    setDiscussRecipient("")
+    setDiscussNote("")
+    mutate()
+  }
+
   const confirmReturnPayment = async () => {
     if (!returnTarget) return
     const reason = PAYMENT_RETURN_REASONS.find((r) => r.code === returnReasonCode)
@@ -2335,6 +2386,18 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                             <Coins className="h-3.5 w-3.5" />
                           )}
                           Charge fees
+                        </Button>
+                      )}
+                      {isPayment && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 gap-1 text-sky-600"
+                          disabled={acting}
+                          onClick={() => openDiscussPayment(req)}
+                          title="Discuss this payment with the co-account holder who must approve it, before you execute it."
+                        >
+                          <MessagesSquare className="h-3.5 w-3.5" /> Discuss
                         </Button>
                       )}
                       <Button
@@ -3592,6 +3655,79 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
               {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Undo2 className="h-4 w-4" />}
               Return funds &amp; generate MT103
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Discuss a pending payment with the co-account member who must approve it */}
+      <Dialog open={discussTarget !== null} onOpenChange={(o) => !o && !discussSending && setDiscussTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MessagesSquare className="h-4 w-4 text-sky-600" /> Discuss before approving
+            </DialogTitle>
+            <DialogDescription>
+              {discussTarget ? (
+                <>
+                  This payment was initiated by{" "}
+                  <span className="font-medium text-foreground">{discussTarget.initiator}</span>. Send it directly to the
+                  co-account holder who must authorise it — they&apos;ll receive it in Bankeka and can confirm before you
+                  execute the transfer.
+                </>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          {discussLoading ? (
+            <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading shared-account members…
+            </div>
+          ) : discussMembers.length === 0 ? (
+            <p className="py-4 text-sm text-muted-foreground">
+              No other members are linked to this shared account, so there is no one to route the approval to. You can
+              approve or reject the payment directly.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Discuss with</label>
+                <Select value={discussRecipient} onValueChange={setDiscussRecipient}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select the account that must approve" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {discussMembers.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        {m.name} · {m.email} ({m.relationship})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Note (optional)</label>
+                <Textarea
+                  value={discussNote}
+                  onChange={(e) => setDiscussNote(e.target.value)}
+                  placeholder="Any context for the approver…"
+                  rows={3}
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" disabled={discussSending} onClick={() => setDiscussTarget(null)}>
+              {discussMembers.length === 0 ? "Close" : "Cancel"}
+            </Button>
+            {discussMembers.length > 0 && (
+              <Button
+                className="gap-1 bg-sky-600 text-white hover:bg-sky-700"
+                disabled={discussSending || !discussRecipient}
+                onClick={confirmDiscussPayment}
+              >
+                {discussSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessagesSquare className="h-4 w-4" />}
+                Send for approval
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

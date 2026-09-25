@@ -16,9 +16,11 @@
 // conversation they are not in.
 // ---------------------------------------------------------------------------
 
-import { resolveCurrentSession } from "@/lib/session-user"
+import { resolveCurrentSession, resolveFinancialMemberIds } from "@/lib/session-user"
 import { getDynamicUserById, getDynamicUserByEmail, listDynamicUsers } from "@/lib/admin-users-db"
 import { adminActionAuthorized, resolveActingUserId, isAdminEmail } from "@/lib/admin-auth"
+import { effectiveRelationship } from "@/lib/account-hierarchy"
+import { getApprovalById, updateApprovalPayload } from "@/lib/approvals-db"
 import { logActivity } from "@/app/actions/log-activity"
 import { insertNotification } from "@/lib/notifications-db"
 import {
@@ -573,6 +575,153 @@ export async function adminBroadcast(
     return { ok: true, delivered: recipients.length }
   } catch {
     return { ok: false, error: "Broadcast failed. Please try again." }
+  }
+}
+
+// --- Admin: route a client payment to a co-account member for approval -------
+//
+// On a SHARED account (a Master PRO plan with linked Sub/Joint members), one
+// member can INITIATE an outgoing transfer but another member is the one who
+// must AUTHORISE it (e.g. Atiqur/Khalil initiate, Michael must approve). Before
+// the administrator executes such a payment, they use the "Discuss" action to
+// copy the initiated payment into Bankeka DIRECTLY to the co-account member who
+// must approve it, so that member can confirm — then the admin commits it.
+
+export type PaymentApprover = { id: string; name: string; email: string; relationship: string }
+export type PaymentApproversResult =
+  | { ok: true; initiatorName: string; members: PaymentApprover[] }
+  | { ok: false; error: string }
+
+/** List the OTHER members of the payment initiator's shared financial pool
+ *  (Master + Subs + Joints, minus the initiator and any admin), so the
+ *  administrator can pick exactly whom the transfer must be discussed with. */
+export async function listPaymentApproversAdmin(
+  passcode: string,
+  approvalId: string,
+): Promise<PaymentApproversResult> {
+  if (!(await adminActionAuthorized(passcode))) return { ok: false, error: "Administrator authorization failed." }
+  try {
+    const approval = await getApprovalById(approvalId)
+    if (!approval || approval.kind !== "payment") return { ok: false, error: "Payment not found." }
+    const initiatorId = approval.userId
+    const memberIds = (await resolveFinancialMemberIds(initiatorId)).filter((id) => id && id !== initiatorId)
+    const members: PaymentApprover[] = []
+    for (const id of memberIds) {
+      const rec = await getDynamicUserById(id)
+      if (!rec || rec.status !== "active") continue
+      if (isAdminEmail(rec.email)) continue
+      members.push({
+        id,
+        name: rec.profile.fullName || rec.profile.shortName || rec.email,
+        email: rec.email,
+        relationship: effectiveRelationship(rec.profile.relationship),
+      })
+    }
+    const initiator = await resolveParticipant(initiatorId)
+    return { ok: true, initiatorName: initiator.name, members }
+  } catch {
+    return { ok: false, error: "Could not load the shared-account members." }
+  }
+}
+
+export type DiscussPaymentResult = { ok: true } | { ok: false; error: string }
+
+/** Copy the initiated payment into Bankeka as a message FROM the administration
+ *  operator TO the chosen co-account member who must approve the transfer, and
+ *  stamp the approval so the admin card shows it is under discussion. */
+export async function discussPaymentWithMemberAdmin(
+  passcode: string,
+  approvalId: string,
+  recipientId: string,
+  note?: string,
+): Promise<DiscussPaymentResult> {
+  if (!(await adminActionAuthorized(passcode))) return { ok: false, error: "Administrator authorization failed." }
+  if (!recipientId) return { ok: false, error: "Choose the account that must approve this payment." }
+  try {
+    const approval = await getApprovalById(approvalId)
+    if (!approval || approval.kind !== "payment") return { ok: false, error: "Payment not found." }
+    const initiatorId = approval.userId
+
+    // The recipient MUST be a member of the initiator's shared pool.
+    const memberIds = await resolveFinancialMemberIds(initiatorId)
+    if (recipientId === initiatorId || !memberIds.includes(recipientId)) {
+      return { ok: false, error: "That account is not part of this shared account." }
+    }
+    const recipientRec = await getDynamicUserById(recipientId)
+    if (!recipientRec || recipientRec.status !== "active") {
+      return { ok: false, error: "The selected account is not available." }
+    }
+
+    const anchor = await resolveAdminAnchorId()
+    if (!anchor) return { ok: false, error: "Could not resolve the administrator account." }
+
+    const rec = (approval.payload?.record as Record<string, unknown>) ?? {}
+    const beneficiary = (rec.beneficiary as string) || approval.title || "the beneficiary"
+    const reference = (rec.reference as string) || approval.id
+    const amountLabel = `${approval.currency} ${Math.round(Number(approval.amount) || 0).toLocaleString("en-US")}`
+    const initiator = await resolveParticipant(initiatorId)
+
+    const trimmedNote = (note ?? "").trim().slice(0, MAX_BODY)
+    const body =
+      `Payment approval needed — an outgoing transfer was initiated by ${initiator.name} on your shared account.\n\n` +
+      `• Beneficiary: ${beneficiary}\n` +
+      `• Amount: ${amountLabel}\n` +
+      `• Reference: ${reference}\n\n` +
+      `Please confirm whether this transfer is authorised so the administrator can execute it.` +
+      (trimmedNote ? `\n\nNote from the administrator: ${trimmedNote}` : "")
+
+    const operator = await resolveParticipant(anchor)
+    const operatorLabel = `${operator.name}${operator.company ? ` (${operator.company})` : ""}`
+    const recipientLabel = (await resolveParticipant(recipientId)).name
+
+    const row = await insertMessage({ senderId: anchor, recipientId, body })
+    await recordAudit({
+      actorId: anchor,
+      actorLabel: operatorLabel,
+      action: "reply",
+      recipientId,
+      recipientLabel,
+      messageId: row.id,
+      charCount: body.length,
+    })
+
+    try {
+      await insertNotification({
+        userId: recipientId,
+        tone: "warning",
+        title: "Payment approval needed",
+        body: `${initiator.name} initiated a ${amountLabel} transfer to ${beneficiary} on your shared account. Review it in Bankeka.`,
+        href: "/dashboard/bankeka",
+      })
+    } catch (err) {
+      console.log("[v0] discuss payment notification failed:", (err as Error).message)
+    }
+
+    // Stamp the approval payload so the admin card reflects the discussion.
+    try {
+      const prev = approval.payload ?? {}
+      await updateApprovalPayload(approvalId, {
+        ...prev,
+        discussion: { openedAt: new Date().toISOString(), recipientId, recipientName: recipientLabel },
+      })
+    } catch (err) {
+      console.log("[v0] discuss payment payload stamp failed:", (err as Error).message)
+    }
+
+    await logActivity({
+      action: "Administrator routed a client payment for co-account approval",
+      category: "Administration",
+      details: {
+        summary: `Administrator sent payment ${reference} (${amountLabel} to ${beneficiary}, initiated by ${initiator.name}) to ${recipientLabel} for approval via Bankeka.`,
+        referenceId: reference,
+        recipient: recipientLabel,
+      },
+    })
+
+    return { ok: true }
+  } catch (err) {
+    console.log("[v0] discussPaymentWithMemberAdmin failed:", (err as Error).message)
+    return { ok: false, error: "Could not send the payment for discussion. Please try again." }
   }
 }
 
