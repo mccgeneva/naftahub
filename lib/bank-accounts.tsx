@@ -178,6 +178,27 @@ export const currencySymbols: Record<string, string> = {
   AED: "AED",
 }
 
+/**
+ * Derive the displayed domestic account number FROM an IBAN so the "Account
+ * Number" on the Account Details tab always matches the IBAN shown on the
+ * Banking Info tab. Without this, an admin who changes only the master IBAN
+ * leaves a stale hardcoded account number behind (e.g. IBAN DE69…4985200 while
+ * the number still reads 0029 2908 19).
+ *
+ * Takes the BBAN (everything after the 4-char country+check prefix), then the
+ * trailing 10 digits grouped in fours — e.g.
+ * "DE69 2022 0800 0044 9852 00" -> "0044 9852 00". Falls back to the provided
+ * value when the IBAN is empty or a placeholder.
+ */
+export function accountNumberFromIban(iban: string | undefined | null, fallback: string): string {
+  const compact = (iban || "").replace(/\s+/g, "").toUpperCase()
+  if (compact.length < 8 || compact === "—") return fallback
+  const bban = compact.slice(4).replace(/[^0-9A-Z]/g, "")
+  if (!bban) return fallback
+  const tail = bban.slice(-10)
+  return tail.replace(/(.{4})/g, "$1 ").trim()
+}
+
 export function formatCurrency(amount: number, currency: string): string {
   const symbol = currencySymbols[currency] || currency
   if (currency === "JPY") {
@@ -598,6 +619,9 @@ export function useBankAccounts(): BankAccount[] {
     return {
       ...account,
       iban,
+      // Keep the Account Number consistent with the (possibly admin-changed)
+      // IBAN — derive it from the IBAN rather than the stale ACC-001 default.
+      accountNumber: accountNumberFromIban(iban, account.accountNumber),
       swift,
       bankName,
       bankLogo: bankName ? bankMonogram(bankName) : account.bankLogo,
