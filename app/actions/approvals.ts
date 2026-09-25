@@ -5313,7 +5313,7 @@ export async function adminReturnPaymentFromReceiver(
     }
     if (!reasonCode) return { ok: false, error: "Select a return reason." }
 
-    const record0 = (payload0.record ?? {}) as { total?: number }
+    const record0 = (payload0.record ?? {}) as { total?: number; amount?: number }
     // The sender was debited the TOTAL (amount + tiered fee) at approval; a full
     // return makes them whole by crediting exactly that back.
     const refundAmount = Number(existing.amount ?? record0.total ?? 0)
@@ -5323,6 +5323,18 @@ export async function adminReturnPaymentFromReceiver(
     }
 
     const returnedAt = new Date().toISOString()
+
+    // Return charges billed to the customer: the 2% transaction fee (not taken on
+    // the original send) plus a 0.50% return fine. Both based on the payment
+    // principal (falling back to the returned amount if the principal is not
+    // stored). The full amount is credited back first (below), so these fees are
+    // always covered.
+    const PAYMENT_RETURN_TXN_FEE_RATE = 0.02
+    const PAYMENT_RETURN_FINE_RATE = 0.005
+    const principal = Number(record0.amount)
+    const feeBase = Number.isFinite(principal) && principal > 0 ? principal : refundAmount
+    const txnFee = Math.round(feeBase * PAYMENT_RETURN_TXN_FEE_RATE * 100) / 100
+    const returnFine = Math.round(feeBase * PAYMENT_RETURN_FINE_RATE * 100) / 100
 
     // 1) Credit the funds back to the sender's Master Account. Deterministic id
     //    so a retry can never double-credit.
@@ -5344,6 +5356,45 @@ export async function adminReturnPaymentFromReceiver(
     } catch (creditErr) {
       console.log("[v0] payment return credit failed:", (creditErr as Error).message)
       return { ok: false, error: "The return credit could not be posted. Please try again." }
+    }
+
+    // 1b) Charge the return fees to the customer's Master Account: the 2%
+    //     transaction fee plus the 0.50% return fine. Deterministic ids keep a
+    //     retry idempotent.
+    try {
+      const ownerId = await resolveDataOwnerIdFor(existing.userId)
+      if (txnFee > 0) {
+        await upsertLedgerEntry(ownerId, {
+          id: `PAYRET-TXNFEE-${existing.id}`,
+          direction: "debit",
+          amount: txnFee,
+          currency: refundCurrency,
+          status: "completed",
+          date: returnedAt,
+          counterparty: existing.title,
+          bank: ISSUER_BANK.name,
+          reference: existing.id,
+          comment: `2% transaction fee on returned payment "${existing.title}".`,
+          category: "Payment Return — Transaction Fee (2%)",
+        })
+      }
+      if (returnFine > 0) {
+        await upsertLedgerEntry(ownerId, {
+          id: `PAYRET-FINE-${existing.id}`,
+          direction: "debit",
+          amount: returnFine,
+          currency: refundCurrency,
+          status: "completed",
+          date: returnedAt,
+          counterparty: existing.title,
+          bank: ISSUER_BANK.name,
+          reference: existing.id,
+          comment: `0.50% return fine on returned payment "${existing.title}" (${reasonCode} — ${reasonLabel}).`,
+          category: "Payment Return — Return Fine (0.50%)",
+        })
+      }
+    } catch (feeErr) {
+      console.log("[v0] payment return fee charge failed:", (feeErr as Error).message)
     }
 
     // 2) Stamp the payment as returned (top-level flags + payload.record mirror so
@@ -5369,6 +5420,10 @@ export async function adminReturnPaymentFromReceiver(
       returnReasonNote: reasonNote ?? null,
       returnedAt,
       returnRefundEntryId: `PAYRET-${existing.id}`,
+      returnTxnFee: txnFee,
+      returnFine: returnFine,
+      returnTxnFeeEntryId: txnFee > 0 ? `PAYRET-TXNFEE-${existing.id}` : null,
+      returnFineEntryId: returnFine > 0 ? `PAYRET-FINE-${existing.id}` : null,
       record,
     })
     if (!updated) return { ok: false, error: "This payment could not be updated." }
@@ -5378,7 +5433,7 @@ export async function adminReturnPaymentFromReceiver(
         userId: updated.userId,
         tone: "warning",
         title: "Payment returned by beneficiary bank",
-        body: `Your payment "${updated.title}" was returned by the beneficiary bank (${reasonLabel}). ${formatMoney(refundAmount, refundCurrency)} has been credited back to your Master Account.`,
+        body: `Your payment "${updated.title}" was returned by the beneficiary bank (${reasonLabel}). ${formatMoney(refundAmount, refundCurrency)} was credited back to your Master Account, less a 2% transaction fee (${formatMoney(txnFee, refundCurrency)}) and a 0.50% return fine (${formatMoney(returnFine, refundCurrency)}).`,
         href: KIND_HREF.payment ?? "/dashboard/payments",
       })
     } catch (err) {
@@ -5399,6 +5454,8 @@ export async function adminReturnPaymentFromReceiver(
           decision: `Returned by beneficiary bank — ${reasonCode} (${reasonLabel})`,
           note: reasonNote ?? "(none)",
           refundEntryId: `PAYRET-${updated.id}`,
+          transactionFee: formatMoney(txnFee, refundCurrency),
+          returnFine: formatMoney(returnFine, refundCurrency),
           returnedAt,
         },
       })
