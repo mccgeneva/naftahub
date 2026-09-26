@@ -28,6 +28,7 @@ import {
   AlertCircle,
   ShieldCheck,
   Undo2,
+  FileText,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -83,6 +84,8 @@ import { usePdfViewer } from "@/lib/pdf-viewer"
 import { VerifiedBankField } from "@/components/verified-bank-field"
 import { validateIban, validateBic } from "@/lib/iban-swift"
 import { generateReceiptPdf } from "@/lib/receipt-pdf"
+import { generateSwiftMessagePdf } from "@/lib/swift-message-pdf"
+import { buildOutgoingPaymentMt103 } from "@/lib/payment-mt103-printout"
 import { SwiftGpiTracker } from "@/components/swift-gpi-tracker"
 import { deriveUetr } from "@/lib/swift-gpi"
 import { toast } from "sonner"
@@ -537,6 +540,45 @@ export default function PaymentsPage() {
         counterparty: payment.beneficiary,
         amount: payment.amount,
         format: "PDF",
+      },
+    })
+  }
+
+  // Generates a professional, full-compliance SWIFT MT103 printout copy for a
+  // delivering/delivered outgoing payment. Reuses the guardrailed FIN-copy
+  // renderer so it reads as a bank transmission copy without fabricating SWIFT
+  // network authentication.
+  const downloadMt103Printout = (payment: Payment) => {
+    const numericAmount = Number.parseFloat((payment.amount || "").replace(/[^0-9.]/g, "")) || 0
+    const data = buildOutgoingPaymentMt103({
+      id: payment.id,
+      amount: numericAmount,
+      currency: payment.currency,
+      beneficiaryName: payment.beneficiary,
+      beneficiaryIban: payment.iban && payment.iban !== "—" ? payment.iban : undefined,
+      beneficiaryBankBic: payment.swiftCode && payment.swiftCode !== "—" ? payment.swiftCode : undefined,
+      beneficiaryCountry: payment.beneficiaryCountry,
+      orderingCustomer: holder.holderName || "MCC Capital Client",
+      orderingAddress: holder.holderAddress || undefined,
+      routedBankName: payment.routedBankName,
+      routedBankBic: payment.routedBankBic,
+      reference: payment.reference,
+      uetr: payment.uetr,
+      valueDate: payment.time ? `${payment.date} ${payment.time}` : payment.date,
+      baseDate: payment.baseDate,
+      delivered: payment.stage === "delivered",
+    })
+    show(generateSwiftMessagePdf(data))
+    logActivity({
+      action: `Downloaded SWIFT MT103 printout for payment ${payment.id}`,
+      category: "Payments",
+      details: {
+        summary: `Client downloaded the SWIFT MT103 printout receipt for payment ${payment.id} (outgoing to ${payment.beneficiary}) for ${payment.amount}.`,
+        referenceId: payment.id,
+        counterparty: payment.beneficiary,
+        amount: payment.amount,
+        uetr: payment.uetr,
+        format: "PDF (MT103)",
       },
     })
   }
@@ -1763,11 +1805,31 @@ export default function PaymentsPage() {
                   direction: viewPaymentTarget.type === "incoming" ? "incoming" : "outgoing",
                 }}
               />
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setViewPaymentTarget(null)}>
+              <DialogFooter className="flex-col gap-2 sm:flex-row">
+                <Button
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  onClick={() => setViewPaymentTarget(null)}
+                >
                   Close
                 </Button>
+                {viewPaymentTarget.type !== "incoming" &&
+                  (viewPaymentTarget.stage === "delivered" || viewPaymentTarget.stage === "initiated") && (
+                    <Button
+                      variant="secondary"
+                      className="w-full sm:w-auto"
+                      onClick={() => {
+                        const target = viewPaymentTarget
+                        setViewPaymentTarget(null)
+                        downloadMt103Printout(target)
+                      }}
+                    >
+                      <FileText className="mr-2 h-4 w-4" />
+                      SWIFT printout receipt
+                    </Button>
+                  )}
                 <Button
+                  className="w-full sm:w-auto"
                   onClick={() => {
                     const target = viewPaymentTarget
                     setViewPaymentTarget(null)
