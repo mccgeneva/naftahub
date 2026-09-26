@@ -78,6 +78,7 @@ import {
   adminMarkPaymentDelivered,
   adminMarkPaymentNotDelivered,
   adminReturnPaymentFromReceiver,
+  adminUndoPaymentReturn,
   adminRevokeCommodityDeal,
   adminShareCommodityDeal,
   adminSetCommodityDealHold,
@@ -1440,6 +1441,21 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     mutate()
   }
 
+  // Reverse a recorded beneficiary-bank return: rolls back the refund credit and
+  // the return charges, putting the payment back to Approved & Initiated so it
+  // can be re-sent / delivered / returned again.
+  const undoPaymentReturn = async (id: string) => {
+    setActing(true)
+    const res = await adminUndoPaymentReturn(ADMIN_PASSCODE, id)
+    setActing(false)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    toast.success("Return reversed. The payment is back to Approved & Initiated.")
+    mutate()
+  }
+
   // Beneficiary bank rejected the credit and RETURNED the funds. Credits the
   // amount back to the sender's Master Account and lets the admin generate the
   // MT103 return-of-funds printout.
@@ -2583,6 +2599,16 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                             title="Re-generate the SWIFT MT103 return-of-funds printout for this returned payment."
                           >
                             <Download className="h-3.5 w-3.5" /> MT103 printout
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 gap-1 text-primary"
+                            disabled={acting}
+                            onClick={() => undoPaymentReturn(req.id)}
+                            title="Reverse this return: roll back the refund credit and return charges, putting the payment back to Approved & Initiated so it can be re-sent, delivered, or returned again."
+                          >
+                            <Undo2 className="h-3.5 w-3.5" /> Undo return
                           </Button>
                         </>
                       ) : (

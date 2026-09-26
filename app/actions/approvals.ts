@@ -5471,6 +5471,106 @@ export async function adminReturnPaymentFromReceiver(
 }
 
 /**
+ * Administrator UNDOES a beneficiary-bank return, putting the payment back to
+ * "Approved & Initiated". A bank return is not always final — the funds can be
+ * re-sent, or the return was recorded in error — so this reverses the three
+ * ledger legs posted by `adminReturnPaymentFromReceiver` (the refund credit and
+ * the 2% + 0.50% return charges) and clears the return markers so the admin can
+ * manage the payment (deliver / return again) once more. Deterministic entry ids
+ * make the deletes idempotent.
+ */
+export async function adminUndoPaymentReturn(passcode: string, id: string): Promise<DecideResult> {
+  if (!(await adminOk(passcode))) return { ok: false, error: "Administrator authorization failed." }
+  try {
+    const existing = await getApprovalById(id)
+    if (!existing) return { ok: false, error: "Payment not found." }
+    if (existing.kind !== "payment") {
+      return { ok: false, error: "Only outgoing payments can be updated." }
+    }
+    const payload = (existing.payload ?? {}) as Record<string, unknown>
+    if (payload.returnedByBank !== true) {
+      // Not currently returned — nothing to undo.
+      return { ok: true, request: existing }
+    }
+
+    // Reverse the three ledger legs posted by the return (credit-back + the two
+    // fees). Deleting by deterministic id is idempotent and safe if a leg is
+    // absent (e.g. a zero fee was never posted).
+    try {
+      const ownerId = await resolveDataOwnerIdFor(existing.userId)
+      await deleteLedgerEntry(ownerId, `PAYRET-${existing.id}`).catch(() => {})
+      await deleteLedgerEntry(ownerId, `PAYRET-TXNFEE-${existing.id}`).catch(() => {})
+      await deleteLedgerEntry(ownerId, `PAYRET-FINE-${existing.id}`).catch(() => {})
+    } catch (ledgerErr) {
+      console.log("[v0] payment return reversal ledger cleanup failed:", (ledgerErr as Error).message)
+    }
+
+    // Clear the return markers. `updateApprovalPayload` replaces the whole
+    // payload, so omit every return-related key and reset the record stage back
+    // to "initiated" (the payment is approved & initiated again).
+    const {
+      returnedByBank: _rb,
+      returnStatus: _rs,
+      returnReasonCode: _rrc,
+      returnReason: _rr,
+      returnReasonNote: _rrn,
+      returnedAt: _rat,
+      returnRefundEntryId: _rref,
+      returnTxnFee: _rtf,
+      returnFine: _rfine,
+      returnTxnFeeEntryId: _rtfe,
+      returnFineEntryId: _rfe,
+      ...rest
+    } = payload
+    const record = { ...((payload.record ?? {}) as Record<string, unknown>) }
+    record.deliveryStatus = "initiated"
+    delete record.returnStatus
+    delete record.returnReasonCode
+    delete record.returnReason
+    delete record.returnReasonNote
+    delete record.returnedAt
+
+    const updated = await updateApprovalPayload(id, { ...rest, record })
+    if (!updated) return { ok: false, error: "This payment could not be reverted." }
+
+    try {
+      await insertNotification({
+        userId: updated.userId,
+        tone: "info",
+        title: "Payment return reversed",
+        body: `The beneficiary-bank return on your payment "${updated.title}" was reversed. It is back to "Approved & Initiated" and the returned funds and return charges have been rolled back.`,
+        href: KIND_HREF.payment ?? "/dashboard/payments",
+      })
+    } catch (err) {
+      console.log("[v0] payment return-undo notification failed:", (err as Error).message)
+    }
+
+    try {
+      const target = await resolveAccountProfileById(updated.userId)
+      await logActivity({
+        action: `Administrator reversed the beneficiary-bank return on payment "${updated.title}" for ${target.fullName}`,
+        category: "Administration / Approvals",
+        user: "Administrator",
+        details: {
+          referenceId: updated.id,
+          targetAccount: `${target.fullName} — ${target.email}`,
+          summary: updated.summary || updated.title,
+          amount: updated.amount != null ? formatMoney(updated.amount, updated.currency ?? "") : "(n/a)",
+          decision: "Return reversed — back to Approved & Initiated",
+        },
+      })
+    } catch (err) {
+      console.log("[v0] payment return-undo activity log failed:", (err as Error).message)
+    }
+
+    return { ok: true, request: updated }
+  } catch (err) {
+    console.log("[v0] adminUndoPaymentReturn failed:", (err as Error).message)
+    return { ok: false, error: "The payment return could not be reverted. Please try again." }
+  }
+}
+
+/**
  * Administrator REVOKES an approved commodity deal (before delivery) and REFUNDS
  * the reserved funds. Refuses a delivered deal (it is finalized). Releases only
  * the reservation hold (`APPR-<id>`), unfreezing the blocked money back to the
