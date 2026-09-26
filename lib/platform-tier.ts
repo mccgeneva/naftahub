@@ -44,7 +44,7 @@ export function resolvePlatformTier(accountBadge: string | undefined | null): Pl
     return {
       id: "visitor",
       label: "Visitor",
-      tagline: "Read-only trial — upgrade to PRO or Avant-Garde anytime",
+      tagline: "Entry Level — upgrade to PRO or Avant-Garde anytime",
       icon: Eye,
       premium: false,
     }

@@ -65,7 +65,7 @@ export function PlatformTierBanner() {
               ) : isVisitor ? (
                 <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-amber-500">
                   <Eye className="h-3 w-3" />
-                  Read-only trial
+                  Entry Level
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-success">
