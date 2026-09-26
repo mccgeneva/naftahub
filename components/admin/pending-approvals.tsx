@@ -630,6 +630,8 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
   // email so the admin can filter the related payments/transactions by customer
   // without scrolling the (potentially long) client dropdown.
   const [clientSearch, setClientSearch] = useState("")
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
+  const [showSuggestions, setShowSuggestions] = useState(false)
   const [fromDate, setFromDate] = useState("")
   const [toDate, setToDate] = useState("")
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -906,6 +908,44 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     { refreshInterval: 20000 },
   )
 
+  // Distinct customers derived from the loaded requests AND the active roster, so
+  // the typeahead can resolve a customer by name/company/email even when they are
+  // outside the active roster (staff/compliance, non-active, or a sub/joint whose
+  // approval is filed under another id).
+  const customerOptions = useMemo(() => {
+    const map = new Map<string, { userId: string; name: string; company: string; email: string }>()
+    const put = (userId: string, name?: string | null, company?: string | null, email?: string | null) => {
+      if (!userId) return
+      const existing = map.get(userId)
+      map.set(userId, {
+        userId,
+        name: (name || existing?.name || "").trim(),
+        company: (company || existing?.company || "").trim(),
+        email: (email || existing?.email || "").trim(),
+      })
+    }
+    for (const c of clients) put(c.id, c.fullName, c.company, c.email)
+    for (const r of requests) {
+      const rec = (r.payload?.record ?? {}) as { ownerName?: string; ownerCompany?: string; ownerEmail?: string }
+      put(r.userId, rec.ownerName, rec.ownerCompany, rec.ownerEmail)
+    }
+    return Array.from(map.values())
+  }, [clients, requests])
+
+  // Live typeahead matches: every whitespace token must appear in the customer's
+  // name/company/email/id, so "michael trade" or "kane global" resolve as you type.
+  const customerSuggestions = useMemo(() => {
+    const q = clientSearch.trim().toLowerCase()
+    if (!q || selectedCustomerId) return []
+    const tokens = q.split(/\s+/).filter(Boolean)
+    return customerOptions
+      .filter((o) => {
+        const hay = `${o.name} ${o.company} ${o.email} ${o.userId}`.toLowerCase()
+        return tokens.every((tok) => hay.includes(tok))
+      })
+      .slice(0, 8)
+  }, [clientSearch, customerOptions, selectedCustomerId])
+
   // Client-side date + customer-search filtering keeps the query path simple
   // while still meeting the "filter by date" and "search by customer" requirements.
   const filtered = useMemo(() => {
@@ -921,7 +961,10 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         const to = new Date(toDate).getTime() + 24 * 60 * 60 * 1000
         if (t >= to) return false
       }
-      if (q) {
+      if (selectedCustomerId) {
+        // A customer was picked from the typeahead — lock to that exact account.
+        if (r.userId !== selectedCustomerId) return false
+      } else if (q) {
         // Resolve the customer from EVERY identity source, not just the active
         // client roster: the request's own embedded owner fields (name, company,
         // email), the beneficiary, the resolved label, and the raw userId. This
@@ -941,7 +984,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
       }
       return true
     })
-  }, [requests, fromDate, toDate, clientSearch, clientSearchText, clientLabel])
+  }, [requests, fromDate, toDate, clientSearch, clientSearchText, clientLabel, selectedCustomerId])
 
   const pendingInView = filtered.filter((r) => r.status === "pending")
   const allPendingSelected = pendingInView.length > 0 && pendingInView.every((r) => selected.has(r.id))
@@ -1763,8 +1806,14 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={clientSearch}
-              onChange={(e) => setClientSearch(e.target.value)}
-              placeholder="Filter by customer name, company or email…"
+              onChange={(e) => {
+                setClientSearch(e.target.value)
+                setSelectedCustomerId(null)
+                setShowSuggestions(true)
+              }}
+              onFocus={() => setShowSuggestions(true)}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+              placeholder="Type a name, company or email…"
               className="h-10 pl-9"
               aria-label="Search related payments and transactions by customer"
               autoCapitalize="none"
@@ -1776,14 +1825,45 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
             {clientSearch && (
               <button
                 type="button"
-                onClick={() => setClientSearch("")}
+                onClick={() => {
+                  setClientSearch("")
+                  setSelectedCustomerId(null)
+                  setShowSuggestions(false)
+                }}
                 aria-label="Clear customer search"
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
                 <X className="h-4 w-4" />
               </button>
             )}
+            {showSuggestions && customerSuggestions.length > 0 && (
+              <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-auto rounded-md border border-border bg-popover shadow-lg">
+                {customerSuggestions.map((o) => (
+                  <button
+                    key={o.userId}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setSelectedCustomerId(o.userId)
+                      setClientSearch(o.name || o.company || o.email || o.userId)
+                      setShowSuggestions(false)
+                    }}
+                    className="flex w-full flex-col items-start gap-0.5 border-b border-border/50 px-3 py-2 text-left last:border-0 hover:bg-accent focus:bg-accent focus:outline-none"
+                  >
+                    <span className="text-sm font-medium text-foreground">
+                      {o.name || o.company || o.email || o.userId}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {[o.company, o.email].filter(Boolean).join(" · ") || o.userId}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+          {selectedCustomerId && (
+            <p className="text-xs text-primary">Filtering by selected customer — clear to search again.</p>
+          )}
         </div>
 
         {/* Filters */}
