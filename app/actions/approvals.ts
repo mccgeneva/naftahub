@@ -5336,11 +5336,29 @@ export async function adminReturnPaymentFromReceiver(
     const txnFee = Math.round(feeBase * PAYMENT_RETURN_TXN_FEE_RATE * 100) / 100
     const returnFine = Math.round(feeBase * PAYMENT_RETURN_FINE_RATE * 100) / 100
 
+    // Resolve the SOURCE-account grouping the original outgoing debit used, so the
+    // return entries (credit + fees) land under the SAME bank account statement the
+    // payment left from. The per-account statement page groups by
+    // received_account/account, so without this the refund appears only in the
+    // aggregate view, not "under the original sender bank account".
+    const returnOwnerId = await resolveDataOwnerIdFor(existing.userId)
+    let sourceAccount: string | undefined
+    let sourceReceivedAccount: string | undefined
+    try {
+      const ownerRows = await readLedgerEntries(returnOwnerId)
+      const originalDebit = ownerRows.find((e) => e.id === `APPR-${existing.id}`)
+      if (originalDebit) {
+        sourceAccount = originalDebit.account ?? undefined
+        sourceReceivedAccount = originalDebit.receivedAccount ?? undefined
+      }
+    } catch (lookupErr) {
+      console.log("[v0] payment return source-account lookup failed:", (lookupErr as Error).message)
+    }
+
     // 1) Credit the funds back to the sender's Master Account. Deterministic id
     //    so a retry can never double-credit.
     try {
-      const ownerId = await resolveDataOwnerIdFor(existing.userId)
-      await upsertLedgerEntry(ownerId, {
+      await upsertLedgerEntry(returnOwnerId, {
         id: `PAYRET-${existing.id}`,
         direction: "credit",
         amount: refundAmount,
@@ -5349,6 +5367,8 @@ export async function adminReturnPaymentFromReceiver(
         date: returnedAt,
         counterparty: existing.title,
         bank: ISSUER_BANK.name,
+        account: sourceAccount,
+        receivedAccount: sourceReceivedAccount,
         reference: existing.id,
         comment: `Funds returned by the beneficiary bank (${reasonCode} — ${reasonLabel})${reasonNote ? `: ${reasonNote}` : ""}. Credited back to your Master Account (${ISSUER_BANK.name}, Geneva).`,
         category: "Payment Return — Beneficiary Bank",
@@ -5362,9 +5382,8 @@ export async function adminReturnPaymentFromReceiver(
     //     transaction fee plus the 0.50% return fine. Deterministic ids keep a
     //     retry idempotent.
     try {
-      const ownerId = await resolveDataOwnerIdFor(existing.userId)
       if (txnFee > 0) {
-        await upsertLedgerEntry(ownerId, {
+        await upsertLedgerEntry(returnOwnerId, {
           id: `PAYRET-TXNFEE-${existing.id}`,
           direction: "debit",
           amount: txnFee,
@@ -5373,13 +5392,15 @@ export async function adminReturnPaymentFromReceiver(
           date: returnedAt,
           counterparty: existing.title,
           bank: ISSUER_BANK.name,
+          account: sourceAccount,
+          receivedAccount: sourceReceivedAccount,
           reference: existing.id,
           comment: `2% transaction fee on returned payment "${existing.title}".`,
           category: "Payment Return — Transaction Fee (2%)",
         })
       }
       if (returnFine > 0) {
-        await upsertLedgerEntry(ownerId, {
+        await upsertLedgerEntry(returnOwnerId, {
           id: `PAYRET-FINE-${existing.id}`,
           direction: "debit",
           amount: returnFine,
@@ -5388,6 +5409,8 @@ export async function adminReturnPaymentFromReceiver(
           date: returnedAt,
           counterparty: existing.title,
           bank: ISSUER_BANK.name,
+          account: sourceAccount,
+          receivedAccount: sourceReceivedAccount,
           reference: existing.id,
           comment: `0.50% return fine on returned payment "${existing.title}" (${reasonCode} — ${reasonLabel}).`,
           category: "Payment Return — Return Fine (0.50%)",
