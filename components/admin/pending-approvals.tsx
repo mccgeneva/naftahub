@@ -2618,8 +2618,11 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                               </Button>
                             </>
                           ) : null}
-                          {/* Beneficiary bank rejected the credit and returned the funds. */}
-                          {!isDelivered && paymentInitiated && (
+                          {/* Beneficiary bank rejected the credit and returned the funds.
+                              Always available while the payment is live (even after it
+                              was marked delivered) — a beneficiary bank can reject and
+                              return funds at any later time. */}
+                          {paymentInitiated && (
                             <Button
                               size="sm"
                               variant="outline"
