@@ -922,10 +922,22 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         if (t >= to) return false
       }
       if (q) {
-        // Match against the client's indexed text, falling back to the resolved
-        // label and raw userId so a search still works before the client list loads.
-        const hay = clientSearchText.get(r.userId) ?? `${clientLabel(r.userId)} ${r.userId}`.toLowerCase()
-        if (!hay.includes(q)) return false
+        // Resolve the customer from EVERY identity source, not just the active
+        // client roster: the request's own embedded owner fields (name, company,
+        // email), the beneficiary, the resolved label, and the raw userId. This
+        // lets a search resolve a customer even when they aren't in the active
+        // roster (staff/compliance accounts, non-active status, or a sub/joint
+        // whose approval is filed under another id) or before the roster loads.
+        const rec = (r.payload?.record ?? {}) as {
+          ownerName?: string
+          ownerCompany?: string
+          ownerEmail?: string
+          beneficiary?: string
+        }
+        const hay = `${clientSearchText.get(r.userId) ?? ""} ${clientLabel(r.userId)} ${r.userId} ${rec.ownerName ?? ""} ${rec.ownerCompany ?? ""} ${rec.ownerEmail ?? ""} ${rec.beneficiary ?? ""} ${r.title ?? ""}`.toLowerCase()
+        // Every whitespace-separated token must match, so partial multi-word
+        // queries ("michael trade", "kane global") still resolve the customer.
+        if (!q.split(/\s+/).filter(Boolean).every((tok) => hay.includes(tok))) return false
       }
       return true
     })
@@ -1755,6 +1767,11 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
               placeholder="Filter by customer name, company or email…"
               className="h-10 pl-9"
               aria-label="Search related payments and transactions by customer"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              autoComplete="off"
+              inputMode="search"
             />
             {clientSearch && (
               <button
