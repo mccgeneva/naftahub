@@ -126,7 +126,7 @@ function BroadcastComposer() {
         </div>
 
         {target === "selected" && (
-          <ScrollArea className="max-h-56 rounded-lg border border-border p-1">
+          <div className="max-h-56 overflow-y-auto rounded-lg border border-border bg-card p-1">
             {clients.length === 0 ? (
               <p className="px-2 py-6 text-center text-sm text-muted-foreground">No active clients.</p>
             ) : (
@@ -154,7 +154,7 @@ function BroadcastComposer() {
                 ))}
               </ul>
             )}
-          </ScrollArea>
+          </div>
         )}
 
         <div className="space-y-1.5">
