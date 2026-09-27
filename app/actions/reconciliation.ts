@@ -26,6 +26,7 @@ import { cashbackNote } from "@/lib/fee-cashback"
 import { getFeeTiers } from "@/lib/tiered-fees-db"
 import { listDynamicUsers } from "@/lib/admin-users-db"
 import { extractCurrencyBankingCoordinates, currenciesWithBankingRows } from "@/lib/banking-coordinates"
+import { listAllSubAccounts } from "@/lib/sub-account-db"
 
 /**
  * FX conversion fee applied when an inbound payment is auto-converted into the
@@ -1152,6 +1153,249 @@ export async function reverseMasterBankingDepositForApproval(
   } catch (err) {
     console.log("[v0] reverseMasterBankingDepositForApproval failed:", (err as Error).message)
     return { reversed: false }
+  }
+}
+
+/**
+ * When an APPROVED outgoing payment's beneficiary IBAN matches an ACTIVE
+ * sub-account (compartment) IBAN, credit that COMPARTMENT — i.e. the
+ * sub-account owner's MASTER ledger tagged with `sub_account_id = <sub.id>`, so
+ * the compartment balance reflects the funds while the shared pool stays on the
+ * Master. Distinct from the gateway / registered-account / master-banking
+ * matchers, which never scan the admin-assigned alias IBAN of a sub-account.
+ *
+ * Unlike the master-banking matcher it does NOT skip a same-owner payer: a
+ * Master funding its OWN sub-account via an external payment must still land in
+ * the compartment (debit on main, credit tagged to the compartment). Credits in
+ * the COMPARTMENT currency (FX-converts a mismatched payment so a single-currency
+ * compartment never mixes currencies). Idempotent on `SAD-<approvalId>`;
+ * requires a single unambiguous active compartment before moving money.
+ */
+export async function recordSubAccountDepositForApproval(
+  approvalId: string,
+): Promise<{ matched: boolean }> {
+  try {
+    const approval = await getApprovalById(approvalId)
+    if (!approval || approval.kind !== "payment" || approval.status !== "approved") {
+      return { matched: false }
+    }
+    const payload = (approval.payload ?? {}) as {
+      iban?: string
+      recalled?: boolean
+      recallStatus?: string
+      record?: { iban?: string; amount?: number; beneficiary?: string; reference?: string }
+    }
+    if (payload.recalled === true || payload.recallStatus === "recalled") return { matched: false }
+    const record = payload.record ?? {}
+    const beneficiaryIban = normalizeIban(payload.iban ?? record.iban)
+    if (!beneficiaryIban) return { matched: false }
+
+    const sentAmount = Number(record.amount ?? approval.amount ?? 0)
+    if (!Number.isFinite(sentAmount) || sentAmount <= 0) return { matched: false }
+    const sentCurrency = (approval.currency ?? "").toUpperCase()
+    if (!sentCurrency) return { matched: false }
+
+    const subs = await listAllSubAccounts("active")
+    const matches = subs.filter((s) => normalizeIban(s.iban) === beneficiaryIban)
+    // Require ONE unambiguous compartment before crediting.
+    if (matches.length !== 1) return { matched: false }
+    const sub = matches[0]
+    const compartmentCurrency = (sub.currency ?? sentCurrency).toUpperCase()
+    const label = sub.label || sub.beneficiaryName || "sub-account"
+
+    // The compartment lives on the sub-account owner's MASTER ledger; the
+    // `sub_account_id` tag is what isolates the balance to this compartment.
+    const ownerId = await resolveDataOwnerIdFor(sub.userId)
+    const ledgerEntryId = `SAD-${approval.id}`
+
+    // FX-convert into the compartment currency (single-currency compartment).
+    const isFx = sentCurrency !== compartmentCurrency
+    const grossConverted = isFx ? convertCurrency(sentAmount, sentCurrency, compartmentCurrency) : sentAmount
+    const fxRate = isFx ? grossConverted / sentAmount : 1
+    const fxFee = isFx ? round2(grossConverted * GATEWAY_FX_FEE_RATE) : 0
+    const standardIncomingFee = incomingTransactionFee(grossConverted, await getFeeTiers())
+    const incomingCashback = await applyCashbackForOwner(ownerId, "transaction", standardIncomingFee)
+    const incomingFee = incomingCashback.netFee
+    const feeTotal = round2(fxFee + incomingFee)
+    const amount = round2(grossConverted)
+    if (!Number.isFinite(amount) || amount <= 0) return { matched: false }
+
+    const sender = await resolveAccountProfileById(approval.userId)
+    const reference = record.reference?.trim() || approval.id
+    const fxNote = isFx
+      ? ` Received ${sentCurrency} ${sentAmount.toLocaleString("en-US")}, converted to ${compartmentCurrency} at ${fxRate.toFixed(6)} (FX fee ${compartmentCurrency} ${fxFee.toLocaleString("en-US")}).`
+      : ""
+    const feeNote =
+      incomingCashback.originalFee > 0
+        ? ` An incoming-transaction fee of ${compartmentCurrency} ${incomingFee.toLocaleString("en-US")} (${((incomingFee / grossConverted) * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}% effective, tiered) was charged as a separate transaction.${cashbackNote(incomingCashback, compartmentCurrency)}`
+        : ""
+
+    const existing = await query(`SELECT 1 FROM ledger_entries WHERE user_id = $1 AND entry_id = $2`, [
+      ownerId,
+      ledgerEntryId,
+    ])
+    const alreadyPosted = existing.rows.length > 0
+
+    await query(
+      `INSERT INTO ledger_entries
+         (user_id, entry_id, direction, amount, currency, status, entry_date,
+          counterparty, account, bank, reference, comment, category, received_account, sub_account_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       ON CONFLICT (user_id, entry_id) DO NOTHING`,
+      [
+        ownerId,
+        ledgerEntryId,
+        "credit",
+        amount,
+        compartmentCurrency,
+        "completed",
+        new Date().toISOString(),
+        sender.fullName,
+        beneficiaryIban,
+        issuerBankDisplay(),
+        reference,
+        `Inbound transfer from ${sender.fullName} (approved payment ${approval.id}, reference ${reference}) auto-matched by IBAN to your sub-account "${label}" (${beneficiaryIban}) and credited to that compartment.${fxNote}${feeNote}`,
+        isFx ? "Reconciled Collection (FX)" : "Reconciled Collection",
+        beneficiaryIban,
+        sub.id,
+      ],
+    )
+
+    if (!alreadyPosted) {
+      // Post the incoming fee as its OWN compartment-tagged debit (dated 1s
+      // earlier so it sorts just below the credit) — the compartment nets to
+      // gross − fee, matching the platform's other inbound-credit surfaces.
+      const fee = round2(feeTotal)
+      if (Number.isFinite(fee) && fee > 0) {
+        await query(
+          `INSERT INTO ledger_entries
+             (user_id, entry_id, direction, amount, currency, status, entry_date,
+              counterparty, account, bank, reference, comment, category, received_account, sub_account_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+           ON CONFLICT (user_id, entry_id) DO NOTHING`,
+          [
+            ownerId,
+            `${ledgerEntryId}-FEE`,
+            "debit",
+            fee,
+            compartmentCurrency,
+            "completed",
+            new Date(Date.now() - 1000).toISOString(),
+            sender.fullName,
+            beneficiaryIban,
+            null,
+            approval.id,
+            `Incoming-transaction fee on payment ${approval.id} (${compartmentCurrency} ${amount.toLocaleString("en-US")}) credited to sub-account "${label}".`,
+            "Incoming Transaction Fee",
+            beneficiaryIban,
+            sub.id,
+          ],
+        )
+      }
+      await logActivity({
+        action: `Approved payment ${approval.id} auto-matched by IBAN and credited ${compartmentCurrency} ${amount.toLocaleString("en-US")} to sub-account "${label}"`,
+        category: "Administration",
+        details: {
+          summary: `Outgoing payment ${approval.id} from ${sender.fullName} was matched by beneficiary IBAN to the active sub-account "${label}" (${beneficiaryIban}) and credited to that compartment under ledger reference ${ledgerEntryId}.${fxNote}${feeNote}`,
+          referenceId: approval.id,
+          amount: `${compartmentCurrency} ${amount.toLocaleString("en-US")}`,
+          ledgerReference: ledgerEntryId,
+          decision: "Auto-matched by IBAN to sub-account compartment",
+        },
+      })
+      try {
+        const creditedLabel = `${compartmentCurrency} ${amount.toLocaleString("en-US")}`
+        await insertNotification({
+          userId: sub.userId,
+          tone: "success",
+          title: `Sub-account funded — ${creditedLabel}`,
+          body: `Your sub-account "${label}" (${beneficiaryIban}) received ${creditedLabel} from ${sender.fullName}. The funds were credited to that compartment.`,
+          href: "/dashboard/sub-accounts",
+        })
+      } catch (err) {
+        console.log("[v0] sub-account deposit notification failed:", (err as Error).message)
+      }
+    }
+
+    return { matched: true }
+  } catch (err) {
+    console.log("[v0] recordSubAccountDepositForApproval failed:", (err as Error).message)
+    return { matched: false }
+  }
+}
+
+/**
+ * REVERSE a sub-account compartment deposit when its source payment is recalled.
+ * Deletes the `SAD-<approvalId>` credit (and its `-FEE` line) from the
+ * compartment. Idempotent; a no-op when the payment never matched a compartment.
+ */
+export async function reverseSubAccountDepositForApproval(
+  originalApprovalId: string,
+): Promise<{ reversed: boolean }> {
+  try {
+    const approval = await getApprovalById(originalApprovalId)
+    if (!approval) return { reversed: false }
+    const payload = (approval.payload ?? {}) as { iban?: string; record?: { iban?: string } }
+    const beneficiaryIban = normalizeIban(payload.iban ?? payload.record?.iban)
+    if (!beneficiaryIban) return { reversed: false }
+
+    // Scan ALL sub-accounts (not just active) so a since-closed compartment is
+    // still reversible.
+    const subs = await listAllSubAccounts()
+    const matches = subs.filter((s) => normalizeIban(s.iban) === beneficiaryIban)
+    if (matches.length !== 1) return { reversed: false }
+
+    const ownerId = await resolveDataOwnerIdFor(matches[0].userId)
+    const ledgerEntryId = `SAD-${originalApprovalId}`
+    try {
+      await deleteLedgerEntry(ownerId, ledgerEntryId)
+    } catch (err) {
+      console.log("[v0] reverse sub-account credit delete failed:", (err as Error).message)
+    }
+    try {
+      await deleteLedgerEntry(ownerId, `${ledgerEntryId}-FEE`)
+    } catch (err) {
+      console.log("[v0] reverse sub-account fee delete failed:", (err as Error).message)
+    }
+    return { reversed: true }
+  } catch (err) {
+    console.log("[v0] reverseSubAccountDepositForApproval failed:", (err as Error).message)
+    return { reversed: false }
+  }
+}
+
+/**
+ * Back-fill sweep for a sub-account OWNER: ensure every APPROVED payment
+ * addressed to one of this owner's ACTIVE sub-account IBANs — sent by ANY user
+ * — has credited the compartment. Idempotent (`SAD-<approvalId>`), safe on every
+ * dashboard/ledger load. Self-heals payments approved before the sub-account
+ * matcher existed (which is exactly why a live compartment can read €0.00).
+ */
+export async function backfillSubAccountDepositsForUser(ownerUserId: string): Promise<void> {
+  try {
+    const ownerIbans = new Set(
+      (await listAllSubAccounts("active"))
+        .filter((s) => s.userId === ownerUserId)
+        .map((s) => normalizeIban(s.iban))
+        .filter(Boolean),
+    )
+    if (ownerIbans.size === 0) return
+
+    const { rows } = await query<{ id: string; iban: string | null; rec_iban: string | null }>(
+      `SELECT id,
+              payload->>'iban' AS iban,
+              payload->'record'->>'iban' AS rec_iban
+         FROM approval_requests
+        WHERE kind = 'payment' AND status = 'approved'`,
+    )
+    for (const row of rows) {
+      const dest = normalizeIban(row.iban ?? row.rec_iban)
+      if (dest && ownerIbans.has(dest)) {
+        await recordSubAccountDepositForApproval(row.id)
+      }
+    }
+  } catch (err) {
+    console.log("[v0] backfillSubAccountDepositsForUser failed:", (err as Error).message)
   }
 }
 

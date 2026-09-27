@@ -113,6 +113,9 @@ import {
   reverseRegisteredAccountDepositForApproval,
   recordMasterBankingDepositForApproval,
   reverseMasterBankingDepositForApproval,
+  recordSubAccountDepositForApproval,
+  reverseSubAccountDepositForApproval,
+  backfillSubAccountDepositsForUser,
 } from "@/app/actions/reconciliation"
 import { MASTER_CONSENT_KINDS, requiresMasterConsent } from "@/lib/account-hierarchy"
 
@@ -3134,6 +3137,12 @@ export async function reconcileMyApprovedCredits(): Promise<{ ok: boolean; appli
   // their Master Account (and per-bank sub-balance). Idempotent (RAD-<id>).
   await backfillRegisteredAccountDepositsForUser(session.id).catch(() => {})
 
+  // Same sweep for the user's ACTIVE sub-accounts: any approved payment
+  // addressed to one of their sub-account alias IBANs is credited to that
+  // compartment. Idempotent (SAD-<id>); self-heals payments approved before the
+  // sub-account matcher existed (a live compartment reading €0.00).
+  await backfillSubAccountDepositsForUser(session.id).catch(() => {})
+
   const mine = await listApprovalsForUser(session.id)
   const approved = mine.filter((r) => r.status === "approved")
     let applied = 0
@@ -4656,19 +4665,32 @@ export async function adminDecideApproval(
       // gateway IBAN, record it as a received deposit on that account and credit
       // the gateway owner's Master Account. Idempotent and self-validating.
       if (updated.kind === "payment") {
-        let matchedGateway = false
+        // First, if the beneficiary IBAN is an ACTIVE sub-account (compartment)
+        // alias IBAN, credit that compartment (the owner's Master ledger tagged
+        // with the sub-account id). Most specific match, so it runs first and
+        // gates every other tier. Idempotent on `SAD-<id>`.
+        let matchedSub = false
         try {
-          const res = await recordGatewayDepositForApproval(updated.id)
-          matchedGateway = res.matched
+          const res = await recordSubAccountDepositForApproval(updated.id)
+          matchedSub = res.matched
         } catch (err) {
-          console.log("[v0] gateway IBAN auto-match failed:", (err as Error).message)
+          console.log("[v0] sub-account IBAN auto-match failed:", (err as Error).message)
+        }
+        let matchedGateway = false
+        if (!matchedSub) {
+          try {
+            const res = await recordGatewayDepositForApproval(updated.id)
+            matchedGateway = res.matched
+          } catch (err) {
+            console.log("[v0] gateway IBAN auto-match failed:", (err as Error).message)
+          }
         }
         // Otherwise, if the beneficiary IBAN matches a client's registered
         // external bank account, auto-credit that owner's Master Account (and
-        // the per-bank sub-balance). Only when no gateway matched, so a given
-        // IBAN can never be credited twice. Idempotent on `RAD-<id>`.
+        // the per-bank sub-balance). Only when no sub-account/gateway matched, so
+        // a given IBAN can never be credited twice. Idempotent on `RAD-<id>`.
         let matchedRegistered = false
-        if (!matchedGateway) {
+        if (!matchedSub && !matchedGateway) {
           try {
             const res = await recordRegisteredAccountDepositForApproval(updated.id)
             matchedRegistered = res.matched
@@ -4679,9 +4701,9 @@ export async function adminDecideApproval(
         // Finally, if the beneficiary IBAN is a platform customer's OWN master-
         // account banking (primary or any per-currency IBAN), credit that
         // customer's Master Account in the payment currency. Runs only when no
-        // gateway or registered-account match, so an IBAN is never credited
-        // twice. Idempotent on `MBD-<id>`.
-        if (!matchedGateway && !matchedRegistered) {
+        // earlier tier matched, so an IBAN is never credited twice. Idempotent
+        // on `MBD-<id>`.
+        if (!matchedSub && !matchedGateway && !matchedRegistered) {
           try {
             await recordMasterBankingDepositForApproval(updated.id)
           } catch (err) {
