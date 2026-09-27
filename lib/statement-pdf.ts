@@ -32,6 +32,13 @@ export interface StatementInput {
   iban?: string
   bic?: string
   accountEmail?: string
+  /** When the statement is scoped to a sub-account compartment, its friendly
+   *  label / beneficiary / verification. The holder identity above stays the
+   *  MASTER account owner (legally responsible); these only identify which
+   *  compartment the statement covers. */
+  subAccountLabel?: string
+  subAccountBeneficiary?: string
+  subAccountVerification?: "declared" | "alias"
   /** Optional statement period. When omitted the statement covers all entries. */
   periodFrom?: Date
   periodTo?: Date
@@ -196,6 +203,10 @@ export function generateStatementPdf(input: StatementInput): GeneratedPdf {
   ;[
     input.holderCompany,
     input.holderAddress,
+    input.subAccountLabel
+      ? `Sub-Account: ${input.subAccountLabel}${input.subAccountVerification === "alias" ? " (alias — under the account holder's responsibility)" : ""}`
+      : "",
+    input.subAccountBeneficiary ? `Sub-Account Beneficiary: ${input.subAccountBeneficiary}` : "",
     input.bankName ? `Bank: ${input.bankName}` : "",
     input.iban ? `IBAN: ${input.iban}` : "",
     input.bic ? `BIC/SWIFT: ${input.bic}` : "",

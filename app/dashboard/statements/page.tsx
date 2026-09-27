@@ -139,6 +139,16 @@ export default function StatementsPage() {
 
   const accountLabel = accountOptions.find((o) => o.id === account)?.label ?? "Master Account"
 
+  // When the statement is scoped to a sub-account, the account HOLDER stays the
+  // master user (their name + information — they are legally responsible), but
+  // the coordinates shown are the sub-account's OWN IBAN/BIC and it is clearly
+  // identified as that compartment.
+  const selectedSub = account.startsWith("sub:")
+    ? subAccounts.find((s) => s.id === account.slice(4))
+    : undefined
+  const stmtIban = selectedSub?.iban || iban
+  const stmtBic = selectedSub?.bic || bic
+
   // Resolve the active statement period into concrete from/to bounds.
   const { periodFrom, periodTo } = useMemo(() => {
     const now = new Date()
@@ -256,9 +266,12 @@ export default function StatementsPage() {
         holderRepresentative,
         holderAddress,
         bankName,
-        iban,
-        bic,
+        iban: stmtIban,
+        bic: stmtBic,
         accountEmail: user.accountEmail,
+        subAccountLabel: selectedSub?.label,
+        subAccountBeneficiary: selectedSub?.beneficiaryName,
+        subAccountVerification: selectedSub?.verification,
         periodFrom,
         periodTo: periodTo ? new Date(periodTo) : undefined,
         entries: scopedEntries.map((e) => ({
@@ -552,8 +565,8 @@ export default function StatementsPage() {
         holderAddress={holderAddress}
         bankName={bankName}
         bankAddress={bankAddress}
-        iban={iban}
-        bic={bic}
+        iban={stmtIban}
+        bic={stmtBic}
         accountEmail={user.accountEmail}
         accountLabel={accountLabel}
         periodFrom={periodFrom}
