@@ -139,15 +139,20 @@ export default function StatementsPage() {
 
   const accountLabel = accountOptions.find((o) => o.id === account)?.label ?? "Master Account"
 
-  // When the statement is scoped to a sub-account, the account HOLDER stays the
-  // master user (their name + information — they are legally responsible), but
-  // the coordinates shown are the sub-account's OWN IBAN/BIC and it is clearly
-  // identified as that compartment.
+  // When the statement is scoped to a sub-account, it stands as the SUB-ACCOUNT's
+  // OWN document — the holder is the sub-account (its beneficiary / label), NOT the
+  // master user. The coordinates are the sub-account's own IBAN/BIC. For main /
+  // settlement / instrument scopes the holder stays the master user.
   const selectedSub = account.startsWith("sub:")
     ? subAccounts.find((s) => s.id === account.slice(4))
     : undefined
   const stmtIban = selectedSub?.iban || iban
   const stmtBic = selectedSub?.bic || bic
+  const stmtHolderName = selectedSub ? selectedSub.beneficiaryName?.trim() || selectedSub.label : holderName
+  const stmtHolderCompany = selectedSub ? undefined : user.company
+  const stmtHolderRepresentative = selectedSub ? undefined : holderRepresentative
+  const stmtHolderAddress = selectedSub ? selectedSub.beneficiaryDetails?.trim() || undefined : holderAddress
+  const stmtAccountEmail = selectedSub ? undefined : user.accountEmail
 
   // Resolve the active statement period into concrete from/to bounds.
   const { periodFrom, periodTo } = useMemo(() => {
@@ -261,14 +266,14 @@ export default function StatementsPage() {
     }
     show(
       generateStatementPdf({
-        holderName,
-        holderCompany: user.company,
-        holderRepresentative,
-        holderAddress,
+        holderName: stmtHolderName,
+        holderCompany: stmtHolderCompany,
+        holderRepresentative: stmtHolderRepresentative,
+        holderAddress: stmtHolderAddress,
         bankName,
         iban: stmtIban,
         bic: stmtBic,
-        accountEmail: user.accountEmail,
+        accountEmail: stmtAccountEmail,
         subAccountLabel: selectedSub?.label,
         subAccountBeneficiary: selectedSub?.beneficiaryName,
         subAccountVerification: selectedSub?.verification,
@@ -559,15 +564,15 @@ export default function StatementsPage() {
 
       {/* Live statement preview */}
       <StatementDocument
-        holderName={holderName}
-        holderCompany={user.company}
-        holderRepresentative={holderRepresentative}
-        holderAddress={holderAddress}
+        holderName={stmtHolderName}
+        holderCompany={stmtHolderCompany}
+        holderRepresentative={stmtHolderRepresentative}
+        holderAddress={stmtHolderAddress}
         bankName={bankName}
         bankAddress={bankAddress}
         iban={stmtIban}
         bic={stmtBic}
-        accountEmail={user.accountEmail}
+        accountEmail={stmtAccountEmail}
         accountLabel={accountLabel}
         periodFrom={periodFrom}
         periodTo={periodTo ? new Date(periodTo) : undefined}
