@@ -95,7 +95,20 @@ function buildSections(props: StatementDocProps): CurrencySection[] {
       .filter((e) => e.currency === currency)
       .map((e) => ({ ...e, _d: new Date(e.date) }))
       .filter((e) => !Number.isNaN(e._d.getTime()))
-      .sort((a, b) => a._d.getTime() - b._d.getTime())
+    // A separately-posted incoming fee ("<id>-FEE") is intentionally dated ~1s
+    // BEFORE its parent credit (so it sits just below it in the newest-first
+    // history). In a chronological statement that would place the fee row (and
+    // a transient negative running balance) BEFORE the credit that funds it, so
+    // sort a fee immediately AFTER its parent instead.
+    const _timeById = new Map(all.map((e) => [e.id, e._d.getTime()]))
+    const _sortKey = (e: (typeof all)[number]) => {
+      if (e.id.endsWith("-FEE")) {
+        const parent = _timeById.get(e.id.slice(0, -4))
+        if (parent != null) return parent + 1
+      }
+      return e._d.getTime()
+    }
+    all.sort((a, b) => _sortKey(a) - _sortKey(b))
 
     const opening = all
       .filter((e) => e.status === "completed" && from && e._d < from)
