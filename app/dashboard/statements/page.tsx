@@ -35,6 +35,8 @@ import { findAddress } from "@/lib/holder-identity"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { exportToCsv } from "@/lib/export-utils"
 import { StatementDocument } from "@/components/dashboard/statement-document"
+import { listMySubAccounts } from "@/app/actions/sub-accounts"
+import type { SubAccount } from "@/lib/sub-account-types"
 
 // Categorises a ledger entry as belonging to a "bank instrument" account
 // (yield/PPP, leverage, SBLC/BG/MTN, treasury deposits, accrued interest, SKR).
@@ -79,12 +81,21 @@ export default function StatementsPage() {
   const { show } = usePdfViewer()
 
   const [account, setAccount] = useState("master")
+  const [subAccounts, setSubAccounts] = useState<SubAccount[]>([])
 
   // Honor an `?account=` deep link (e.g. from the Bank Accounts page) after mount
   // so SSR and the first client render stay identical (no hydration mismatch).
   useEffect(() => {
     const fromUrl = new URLSearchParams(window.location.search).get("account")
     if (fromUrl) setAccount(fromUrl)
+  }, [])
+
+  // Load the user's active sub-accounts so each compartment can have its own
+  // statement (their ledger rows are tagged with the sub-account id).
+  useEffect(() => {
+    listMySubAccounts()
+      .then((rows) => setSubAccounts(rows.filter((s) => s.status === "active")))
+      .catch(() => setSubAccounts([]))
   }, [])
   const [currencyFilter, setCurrencyFilter] = useState("all")
   const [typeFilter, setTypeFilter] = useState("all")
@@ -120,8 +131,11 @@ export default function StatementsPage() {
     if (entries.some(isInstrumentEntry)) {
       opts.push({ id: "instruments", label: "Bank Instruments & Structured Products" })
     }
+    for (const sub of subAccounts) {
+      opts.push({ id: `sub:${sub.id}`, label: `${sub.label} — ${sub.currency} Sub-Account` })
+    }
     return opts
-  }, [currencies, entries])
+  }, [currencies, entries, subAccounts])
 
   const accountLabel = accountOptions.find((o) => o.id === account)?.label ?? "Master Account"
 
@@ -157,11 +171,19 @@ export default function StatementsPage() {
   // downstream (from/to) so opening balances are computed from prior activity.
   const scopedEntries = useMemo(() => {
     let list = entries
-    if (account.startsWith("cur:")) {
+    if (account.startsWith("sub:")) {
+      const subId = account.slice(4)
+      list = list.filter((e) => e.subAccountId === subId)
+    } else if (account.startsWith("cur:")) {
       const cur = account.slice(4)
-      list = list.filter((e) => e.currency === cur)
+      // Settlement accounts and the master view are MAIN-only — a sub-account
+      // compartment's tagged rows never belong to a main-account statement.
+      list = list.filter((e) => e.currency === cur && !e.subAccountId)
     } else if (account === "instruments") {
-      list = list.filter(isInstrumentEntry)
+      list = list.filter((e) => !e.subAccountId && isInstrumentEntry(e))
+    } else {
+      // Master Account — All Currencies: exclude sub-account compartments.
+      list = list.filter((e) => !e.subAccountId)
     }
     if (currencyFilter !== "all") list = list.filter((e) => e.currency === currencyFilter)
     if (typeFilter === "credit") list = list.filter((e) => e.direction === "credit")

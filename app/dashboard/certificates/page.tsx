@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
   Award,
@@ -55,6 +55,8 @@ import {
 import { generateAccountCertificate } from "@/lib/certificate-pdf"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { CertificateDocument } from "@/components/dashboard/certificate-document"
+import { listMySubAccounts } from "@/app/actions/sub-accounts"
+import type { SubAccount } from "@/lib/sub-account-types"
 
 const TYPE_ICONS: Record<CertificateType, typeof Award> = {
   "good-standing": BadgeCheck,
@@ -91,7 +93,8 @@ function formatTimestamp(iso?: string): string {
 
 export default function CertificatesPage() {
   const user = useCurrentUser()
-  const { balanceFor, totalIn, currencies } = useLedger()
+  const { balanceFor, totalIn, currencies, subAccountBalanceFor } = useLedger()
+  const [subAccounts, setSubAccounts] = useState<SubAccount[]>([])
   const { requests, hydrated, addRequest, recordDownload, deleteRequest } = useCertificateRequests()
   const logActivity = useActivityLog()
   const { show } = usePdfViewer()
@@ -119,18 +122,40 @@ export default function CertificatesPage() {
   const [deleteReq, setDeleteReq] = useState<CertificateRequest | null>(null)
   const [deleting, setDeleting] = useState(false)
 
+  // Load the user's active sub-accounts so a certificate can be issued for a
+  // single compartment (its balance is scoped by the sub-account ledger tag).
+  useEffect(() => {
+    listMySubAccounts()
+      .then((rows) => setSubAccounts(rows.filter((s) => s.status === "active")))
+      .catch(() => setSubAccounts([]))
+  }, [])
+
   const accountOptions = useMemo(() => {
     const opts = [{ id: "master", label: "Master Account — All Currencies" }]
     for (const cur of [...currencies].sort()) {
       opts.push({ id: `cur:${cur}`, label: `${cur} Settlement Account` })
     }
+    for (const sub of subAccounts) {
+      opts.push({ id: `sub:${sub.id}`, label: `${sub.label} — ${sub.currency} Sub-Account` })
+    }
     return opts
-  }, [currencies])
+  }, [currencies, subAccounts])
 
   const accountLabel = accountOptions.find((o) => o.id === accountScope)?.label ?? "Master Account"
 
   // Build the verified balance snapshot for the chosen scope.
   const buildSnapshot = (scope: string): { balances: CertificateBalance[]; totalEur: number; displayCurrency: string } => {
+    if (scope.startsWith("sub:")) {
+      const subId = scope.slice(4)
+      const sub = subAccounts.find((s) => s.id === subId)
+      const cur = sub?.currency ?? "EUR"
+      const amount = subAccountBalanceFor(subId, cur)
+      return {
+        balances: [{ currency: cur, amount }],
+        totalEur: convertCurrency(amount, cur, "EUR"),
+        displayCurrency: cur,
+      }
+    }
     if (scope.startsWith("cur:")) {
       const cur = scope.slice(4)
       const amount = balanceFor(cur)
