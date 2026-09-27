@@ -2,7 +2,7 @@ import "server-only"
 import { query } from "@/lib/db"
 import type { SubAccount, SubAccountStatus, SubAccountVerification, SubAccountDoc, SubAccountExtraction } from "@/lib/sub-account-types"
 import { buildSubAccountFeeEntries } from "@/lib/sub-account-fees"
-import { upsertLedgerEntry, readLedgerEntries } from "@/lib/ledger-db"
+import { upsertLedgerEntry, readLedgerEntries, deleteLedgerEntry } from "@/lib/ledger-db"
 import type { LedgerEntry } from "@/lib/ledger-store"
 
 /** Coerce a jsonb column (already parsed by node-postgres, or a JSON string) into
@@ -376,6 +376,35 @@ export async function sweepSubAccountBalanceToMain(
     subAccountId: undefined,
   })
   return positive ? amount : -amount
+}
+
+/**
+ * Administrator: reactivate (revive) a CLOSED sub-account. Flips status back to
+ * `active` and clears the closure anchor so tariff accrual resumes cleanly, and
+ * REFUNDS the €350 closing fee by deleting its deterministic `SUBA-CLOSE-<id>`
+ * ledger row (not a credit) — so a future re-close re-charges cleanly via the
+ * reconciler's stable id, with no double-refund. The activation date is
+ * preserved (annual-fee anchor). The compartment balance is NOT restored: any
+ * balance was already swept to the Main account on close and can be moved back
+ * via "Add / move funds"; the account revives Active with a 0 compartment.
+ */
+export async function reactivateSubAccount(id: string, adminNote?: string): Promise<SubAccount | null> {
+  await ensureTable()
+  const { rows } = await query(
+    `UPDATE sub_accounts
+        SET status = 'active', admin_note = COALESCE($2, admin_note),
+            decided_at = now(), closed_at = NULL
+      WHERE id = $1 AND status = 'closed'
+      RETURNING *`,
+    [id, adminNote ?? null],
+  )
+  const sub = rows[0] ? rowToSubAccount(rows[0]) : null
+  if (sub) {
+    // Refund the closing fee: remove the SUBA-CLOSE-<id> debit from the owner's
+    // Master ledger. Deterministic id → a later re-close re-posts it fresh.
+    await deleteLedgerEntry(sub.userId, `SUBA-CLOSE-${sub.id}`).catch(() => false)
+  }
+  return sub
 }
 
 /** Administrator: close an active sub-account (kept for the audit trail). */

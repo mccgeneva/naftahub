@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
-import { Layers, Check, X, Loader2, RefreshCw, Search, ShieldCheck, ShieldAlert, FileText, ArrowLeft, Download, UserPlus, Trash2, ScanText } from "lucide-react"
+import { Layers, Check, X, Loader2, RefreshCw, Search, ShieldCheck, ShieldAlert, FileText, ArrowLeft, Download, UserPlus, Trash2, ScanText, RotateCcw } from "lucide-react"
 import type { SubAccount, SubAccountDoc, SubAccountExtraction } from "@/lib/sub-account-types"
 import { blobFileUrl } from "@/lib/kyc-types"
 import { serviceFeeFor, formatSubAccountFee, SUB_ACCOUNT_ANNUAL_FEE, SUB_ACCOUNT_CLOSING_FEE } from "@/lib/sub-account-fees"
@@ -821,6 +821,40 @@ export function SubAccountsManager({ passcode }: { passcode: string }) {
     }
   }
 
+  // Reactivate (revive) a closed sub-account and refund the €350 closing fee.
+  const reactivate = async (row: AdminRow) => {
+    if (
+      !window.confirm(
+        `Reactivate the sub-account "${row.label}"? It returns to Active, the ${formatSubAccountFee(
+          SUB_ACCOUNT_CLOSING_FEE,
+        )} closing fee is refunded to the Master Account, and its balance (already moved to Main on closure) can be moved back via "Add / move funds".`,
+      )
+    ) {
+      return
+    }
+    setBusyId(row.id)
+    setError("")
+    try {
+      const res = await fetch("/api/admin/sub-accounts", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ op: "reactivate", pin: passcode, id: row.id }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.ok) {
+        setError(data?.error || "Could not reactivate the sub-account.")
+        return
+      }
+      await load()
+    } catch {
+      setError("Network error while reactivating.")
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   // Remove a handled TERMINAL (closed / rejected) request from the manager.
   const dismiss = async (row: AdminRow) => {
     if (
@@ -1204,6 +1238,19 @@ export function SubAccountsManager({ passcode }: { passcode: string }) {
                             onConvert={() => void convertToStandalone(row, convDraft)}
                           />
                           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void reactivate(row)}
+                              disabled={busy}
+                            >
+                              {busy ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : (
+                                <RotateCcw className="mr-2 h-4 w-4" />
+                              )}
+                              Reactivate (refund {formatSubAccountFee(SUB_ACCOUNT_CLOSING_FEE)} fee)
+                            </Button>
                             <Button
                               variant="ghost"
                               size="sm"

@@ -11,6 +11,7 @@ import {
   activateSubAccount,
   rejectSubAccount,
   closeSubAccount,
+  reactivateSubAccount,
   getSubAccountById,
   dismissSubAccountForAdmin,
   setSubAccountExtraction,
@@ -429,6 +430,29 @@ export async function POST(req: Request) {
         tone: "info",
         title: "Sub-account closed",
         body: `Your sub-account "${updated.label}" has been closed by an administrator.${sweptNote} A €350.00 closing fee has been applied to your Master Account.`,
+        href: "/dashboard/sub-accounts",
+      })
+      return NextResponse.json({ ok: true, subAccount: updated })
+    }
+
+    // Administrator: reactivate (revive) a CLOSED sub-account. Restores it to
+    // Active and refunds the €350 closing fee. The compartment revives with a 0
+    // balance (funds were swept to Main on close; move them back via the app).
+    if (op === "reactivate") {
+      const id = typeof body.id === "string" ? body.id : ""
+      const adminNote = typeof body.adminNote === "string" ? body.adminNote.trim() : ""
+      if (!id) return NextResponse.json({ ok: false, error: "Missing sub-account id." })
+
+      const updated = await reactivateSubAccount(id, adminNote || undefined)
+      if (!updated) {
+        return NextResponse.json({ ok: false, error: "Only a closed sub-account can be reactivated." })
+      }
+
+      await insertNotification({
+        userId: updated.userId,
+        tone: "success",
+        title: "Sub-account reactivated",
+        body: `Your sub-account "${updated.label}" has been reactivated by an administrator and the €350.00 closing fee was refunded to your Master Account. Its ${updated.currency} balance was moved to your Main account on closure — use "Add / move funds" to move it back.`,
         href: "/dashboard/sub-accounts",
       })
       return NextResponse.json({ ok: true, subAccount: updated })
