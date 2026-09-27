@@ -357,7 +357,14 @@ export default function SubAccountsPage() {
       return
     }
     toast.success("Sub-account closed", {
-      description: `A ${formatSubAccountFee(res.data.fee)} closing fee was charged to your Master Account.`,
+      description: `${
+        res.data.swept > 0.01
+          ? `${res.data.sweptCurrency} ${res.data.swept.toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })} was transferred to your Main account. `
+          : ""
+      }A ${formatSubAccountFee(res.data.fee)} closing fee was charged to your Master Account.`,
     })
     setCloseTarget(null)
     refresh()

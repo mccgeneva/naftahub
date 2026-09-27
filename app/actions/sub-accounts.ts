@@ -13,6 +13,7 @@ import {
   dismissDeclinedSubAccounts,
   closeSubAccount,
   reconcileSubAccountFees,
+  sweepSubAccountBalanceToMain,
 } from "@/lib/sub-account-db"
 import {
   readLedgerEntries,
@@ -282,7 +283,9 @@ export async function purgeDeclinedSubAccounts(): Promise<SubAccountResult<{ pur
  * ledger-read reconciler never double-charges it). Owner-scoped; PRO /
  * Avant-Garde only.
  */
-export async function closeMySubAccount(id: string): Promise<SubAccountResult<{ fee: number; currency: string }>> {
+export async function closeMySubAccount(
+  id: string,
+): Promise<SubAccountResult<{ fee: number; currency: string; swept: number; sweptCurrency: string }>> {
   const session = await resolveCurrentSession()
   if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
 
@@ -297,18 +300,9 @@ export async function closeMySubAccount(id: string): Promise<SubAccountResult<{ 
     if (!sub || sub.userId !== ownerId) return { ok: false, error: "Sub-account not found." }
     if (sub.status !== "active") return { ok: false, error: "Only an active sub-account can be closed." }
 
-    // The compartment must be emptied before closing so no funds are stranded.
-    const entries = await readLedgerEntries(ownerId)
-    const balance = compartmentBalance(entries, sub.currency, sub.id)
-    if (Math.abs(balance) > 0.01) {
-      return {
-        ok: false,
-        error: `Move the remaining ${sub.currency} ${balance.toLocaleString("en-US", {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })} back to your Main account before closing this sub-account.`,
-      }
-    }
+    // Sweep any remaining compartment balance back to the same-currency Main
+    // account BEFORE closing, so no funds are stranded (fee-free closure move).
+    const swept = await sweepSubAccountBalanceToMain(ownerId, sub)
 
     const closed = await closeSubAccount(id)
     if (!closed) return { ok: false, error: "This sub-account could not be closed. Please try again." }
@@ -316,18 +310,31 @@ export async function closeMySubAccount(id: string): Promise<SubAccountResult<{ 
     // Charge the €350 closing fee to the Master now (idempotent SUBA-CLOSE-* id).
     await reconcileSubAccountFees(ownerId)
 
+    const sweptFmt =
+      swept > 0.01
+        ? `${sub.currency} ${swept.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : null
+
     await logActivity({
       action: `Closed sub-account "${sub.label}"`,
       category: "Accounts",
       details: {
-        summary: `Client closed sub-account ${sub.id} ("${sub.label}"). A ${formatSubAccountFee(
-          SUB_ACCOUNT_CLOSING_FEE,
-        )} closing fee was charged to the Master Account.`,
+        summary: `Client closed sub-account ${sub.id} ("${sub.label}").${
+          sweptFmt ? ` The remaining ${sweptFmt} balance was transferred to the ${sub.currency} Main account.` : ""
+        } A ${formatSubAccountFee(SUB_ACCOUNT_CLOSING_FEE)} closing fee was charged to the Master Account.`,
         referenceId: sub.id,
       },
     })
 
-    return { ok: true, data: { fee: SUB_ACCOUNT_CLOSING_FEE, currency: SUB_ACCOUNT_FEE_CURRENCY } }
+    return {
+      ok: true,
+      data: {
+        fee: SUB_ACCOUNT_CLOSING_FEE,
+        currency: SUB_ACCOUNT_FEE_CURRENCY,
+        swept: swept > 0.01 ? swept : 0,
+        sweptCurrency: sub.currency,
+      },
+    }
   } catch (err) {
     console.log("[v0] closeMySubAccount failed:", (err as Error).message)
     return { ok: false, error: "Could not close the sub-account. Please try again." }

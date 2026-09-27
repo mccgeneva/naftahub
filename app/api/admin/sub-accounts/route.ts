@@ -14,6 +14,7 @@ import {
   getSubAccountById,
   dismissSubAccountForAdmin,
   setSubAccountExtraction,
+  sweepSubAccountBalanceToMain,
 } from "@/lib/sub-account-db"
 import { insertNotification } from "@/lib/notifications-db"
 import { upsertLedgerEntry } from "@/lib/ledger-db"
@@ -401,17 +402,33 @@ export async function POST(req: Request) {
       const id = typeof body.id === "string" ? body.id : ""
       const adminNote = typeof body.adminNote === "string" ? body.adminNote.trim() : ""
       if (!id) return NextResponse.json({ ok: false, error: "Missing sub-account id." })
+
+      // Sweep any remaining compartment balance to the same-currency Main
+      // account BEFORE closing, so no funds are stranded (fee-free move).
+      const target = await getSubAccountById(id)
+      let swept = 0
+      if (target && target.status === "active") {
+        swept = await sweepSubAccountBalanceToMain(target.userId, target)
+      }
+
       const updated = await closeSubAccount(id, adminNote || undefined)
       if (!updated) return NextResponse.json({ ok: false, error: "That sub-account could not be closed." })
 
       // Apply the €350 closing fee to the Master Account immediately.
       await chargeSubAccountFees(updated)
 
+      const sweptNote =
+        swept > 0.01
+          ? ` The remaining ${updated.currency} ${swept.toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })} balance was transferred to your ${updated.currency} Main account.`
+          : ""
       await insertNotification({
         userId: updated.userId,
         tone: "info",
         title: "Sub-account closed",
-        body: `Your sub-account "${updated.label}" has been closed by an administrator. A €350.00 closing fee has been applied to your Master Account.`,
+        body: `Your sub-account "${updated.label}" has been closed by an administrator.${sweptNote} A €350.00 closing fee has been applied to your Master Account.`,
         href: "/dashboard/sub-accounts",
       })
       return NextResponse.json({ ok: true, subAccount: updated })

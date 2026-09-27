@@ -2,7 +2,8 @@ import "server-only"
 import { query } from "@/lib/db"
 import type { SubAccount, SubAccountStatus, SubAccountVerification, SubAccountDoc, SubAccountExtraction } from "@/lib/sub-account-types"
 import { buildSubAccountFeeEntries } from "@/lib/sub-account-fees"
-import { upsertLedgerEntry } from "@/lib/ledger-db"
+import { upsertLedgerEntry, readLedgerEntries } from "@/lib/ledger-db"
+import type { LedgerEntry } from "@/lib/ledger-store"
 
 /** Coerce a jsonb column (already parsed by node-postgres, or a JSON string) into
  *  the document array shape, tolerating null/legacy values. */
@@ -304,6 +305,77 @@ export async function reconcileSubAccountFees(ownerId: string, now: Date = new D
       existing.add(post.id)
     }
   }
+}
+
+/** Settled + held balance of one compartment in its own currency (mirrors the
+ *  client `compartmentBalance` helper: a debit hold reduces available, a credit
+ *  hold is ignored, completed rows net normally). */
+function compartmentBalanceOf(entries: LedgerEntry[], currency: string, subId: string): number {
+  let total = 0
+  for (const e of entries) {
+    if (e.currency !== currency) continue
+    const tag = e.subAccountId || undefined
+    if (tag !== subId) continue
+    if (e.status === "hold") {
+      if (e.direction === "debit") total -= e.amount
+    } else {
+      total += e.direction === "credit" ? e.amount : -e.amount
+    }
+  }
+  return total
+}
+
+/**
+ * Sweep a sub-account compartment's remaining balance to the owner's Main
+ * (untagged) account in the SAME currency before the compartment is closed, so
+ * no funds are ever stranded. Zero-sum on the owner's ledger and fee-free (this
+ * is a mandatory closure move, not a user-initiated 2% transfer). Deterministic
+ * `SUBA-SWEEP-<subId>` ids make it idempotent — re-running finds a now-empty
+ * compartment and does nothing. Returns the amount moved to Main (signed:
+ * positive = credited to Main, negative = a deficit carried to Main).
+ */
+export async function sweepSubAccountBalanceToMain(
+  ownerId: string,
+  sub: { id: string; currency: string; label: string },
+): Promise<number> {
+  const entries = await readLedgerEntries(ownerId)
+  const balance = compartmentBalanceOf(entries, sub.currency, sub.id)
+  if (Math.abs(balance) <= 0.01) return 0
+
+  const amount = Math.abs(balance)
+  const positive = balance > 0
+  const ref = `SUBA-SWEEP-${sub.id}`
+  const nowIso = new Date().toISOString()
+
+  // Empty the compartment (tagged with the sub-account id).
+  await upsertLedgerEntry(ownerId, {
+    id: `${ref}-OUT`,
+    direction: positive ? "debit" : "credit",
+    amount,
+    currency: sub.currency,
+    status: "completed",
+    date: nowIso,
+    counterparty: "Main account",
+    reference: ref,
+    comment: `Balance swept to your Main account on closing sub-account "${sub.label}".`,
+    category: "Sub-account Closure",
+    subAccountId: sub.id,
+  })
+  // Land it on the Main account (untagged) in the same currency.
+  await upsertLedgerEntry(ownerId, {
+    id: `${ref}-IN`,
+    direction: positive ? "credit" : "debit",
+    amount,
+    currency: sub.currency,
+    status: "completed",
+    date: nowIso,
+    counterparty: sub.label,
+    reference: ref,
+    comment: `Balance transferred in from closed sub-account "${sub.label}".`,
+    category: "Sub-account Closure",
+    subAccountId: undefined,
+  })
+  return positive ? amount : -amount
 }
 
 /** Administrator: close an active sub-account (kept for the audit trail). */
