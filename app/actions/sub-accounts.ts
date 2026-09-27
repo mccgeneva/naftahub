@@ -111,22 +111,28 @@ export async function requestSubAccount(input: {
   if (label.length < 2) return { ok: false, error: "Enter a name for the sub-account (at least 2 characters)." }
   if (!/^[A-Z]{3}$/.test(currency)) return { ok: false, error: "Choose a valid currency." }
 
-  // UBO verification: keep only stored (blob-backed) docs, then require BOTH a
-  // passport AND a KYC document to count as a DECLARED sub-account. Anything
-  // less is an ALIAS, which is allowed only if the holder explicitly accepts
-  // personal legal responsibility for all activity under it.
+  // UBO verification: keep only stored (blob-backed) docs, then require a
+  // passport, a KYC document AND the last bank-account statement to count as a
+  // DECLARED sub-account. Anything less is an ALIAS, which is allowed only if the
+  // holder explicitly accepts personal legal responsibility for all activity
+  // under it.
   const docs = (input.kycDocuments || []).filter(
-    (d) => d && (d.kind === "passport" || d.kind === "kyc") && typeof d.pathname === "string" && d.pathname.length > 0,
+    (d) =>
+      d &&
+      (d.kind === "passport" || d.kind === "kyc" || d.kind === "bank_statement") &&
+      typeof d.pathname === "string" &&
+      d.pathname.length > 0,
   )
   const hasPassport = docs.some((d) => d.kind === "passport")
   const hasKyc = docs.some((d) => d.kind === "kyc")
-  const isDeclared = hasPassport && hasKyc
+  const hasBankStatement = docs.some((d) => d.kind === "bank_statement")
+  const isDeclared = hasPassport && hasKyc && hasBankStatement
   const verification: "declared" | "alias" = isDeclared ? "declared" : "alias"
   if (!isDeclared && input.legalResponsibilityAccepted !== true) {
     return {
       ok: false,
       error:
-        "Upload the beneficiary's passport and a KYC document to declare the UBO, or accept legal responsibility to continue as an alias sub-account.",
+        "Upload the beneficiary's passport, a KYC document and the last bank-account statement to declare the UBO, or accept legal responsibility to continue as an alias sub-account.",
     }
   }
   const legalResponsibilityAcceptedAt = !isDeclared ? new Date().toISOString() : undefined

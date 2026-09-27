@@ -29,11 +29,11 @@ export type SubAccountStatus =
  */
 export type SubAccountVerification = "declared" | "alias"
 
-/** A single identity document uploaded for the sub-account's UBO. The file
- *  lives in Blob so an administrator can download and study it. */
+/** A single identity/compliance document uploaded for the sub-account's UBO.
+ *  The file lives in Blob so an administrator can download and study it. */
 export interface SubAccountDoc {
   /** Which document this is. */
-  kind: "passport" | "kyc"
+  kind: "passport" | "kyc" | "bank_statement"
   fileName: string
   uploadedAt: string
   /** Blob coordinates for the stored file (absent for legacy/metadata-only). */
@@ -41,6 +41,50 @@ export interface SubAccountDoc {
   url?: string
   contentType?: string
   size?: number
+}
+
+/** One extracted field surfaced from a document by the OCR pass. */
+export interface SubAccountExtractedField {
+  label: string
+  value: string
+}
+
+/** Per-document result of the administrator-side automatic data extraction. */
+export interface SubAccountExtractedDoc {
+  kind: SubAccountDoc["kind"]
+  fileName: string
+  /** What the model actually detected the document to be. */
+  detectedType: string
+  personName: string
+  documentNumber: string
+  issuingAuthority: string
+  issueDate: string
+  expiryDate: string
+  fields: SubAccountExtractedField[]
+  redFlags: string[]
+  riskLevel: "low" | "medium" | "high"
+  summary: string
+  /** Set when this single document could not be analysed. */
+  error?: string
+}
+
+/**
+ * Structured data the administrator panel automatically retrieves from the
+ * furnished documents (passport, KYC, last bank statement). The top-level
+ * fields are the consolidated best guesses used to pre-fill the activation form
+ * (name, passport number, nationality, address, and the bank statement's
+ * bank / IBAN / BIC); `documents` holds the per-file detail for review.
+ */
+export interface SubAccountExtraction {
+  analyzedAt: string
+  fullName: string
+  passportNo: string
+  nationality: string
+  address: string
+  bankName: string
+  iban: string
+  bic: string
+  documents: SubAccountExtractedDoc[]
 }
 
 export interface SubAccount {
@@ -81,6 +125,9 @@ export interface SubAccount {
   activatedAt?: string
   /** When an administrator closed the sub-account (stops annual accrual). */
   closedAt?: string
+  /** Data the administrator panel automatically retrieved from the furnished
+   *  documents (OCR), reviewed before approving. Absent until analysed. */
+  extractedData?: SubAccountExtraction
 }
 
 /**

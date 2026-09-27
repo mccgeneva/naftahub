@@ -115,7 +115,8 @@ export default function SubAccountsPage() {
   const [uboMode, setUboMode] = useState<"declared" | "alias">("declared")
   const [passportDoc, setPassportDoc] = useState<SubAccountDoc | null>(null)
   const [kycDoc, setKycDoc] = useState<SubAccountDoc | null>(null)
-  const [uploading, setUploading] = useState<null | "passport" | "kyc">(null)
+  const [bankStatementDoc, setBankStatementDoc] = useState<SubAccountDoc | null>(null)
+  const [uploading, setUploading] = useState<null | SubAccountDoc["kind"]>(null)
   const [aliasAccepted, setAliasAccepted] = useState(false)
 
   // Edit-beneficiary dialog
@@ -207,16 +208,17 @@ export default function SubAccountsPage() {
     setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500)
   }
 
-  // Declared only in declared mode with BOTH documents present (no alias liability).
-  const isDeclared = uboMode === "declared" && !!passportDoc && !!kycDoc
-  // Declared mode needs both docs; alias mode needs the legal-responsibility tick.
+  // Declared only in declared mode with ALL THREE documents present (passport,
+  // KYC and the last bank statement) — no alias liability.
+  const isDeclared = uboMode === "declared" && !!passportDoc && !!kycDoc && !!bankStatementDoc
+  // Declared mode needs the three docs; alias mode needs the legal-responsibility tick.
   const createBlocked =
     label.trim().length < 2 ||
     creating ||
     uploading !== null ||
     (uboMode === "declared" ? !isDeclared : !aliasAccepted)
 
-  const handleUpload = async (kind: "passport" | "kyc", file: File | undefined) => {
+  const handleUpload = async (kind: SubAccountDoc["kind"], file: File | undefined) => {
     if (!file) return
     setUploading(kind)
     try {
@@ -235,7 +237,8 @@ export default function SubAccountsPage() {
         size: file.size,
       }
       if (kind === "passport") setPassportDoc(doc)
-      else setKycDoc(doc)
+      else if (kind === "kyc") setKycDoc(doc)
+      else setBankStatementDoc(doc)
     } catch {
       toast.error("Upload failed", { description: `Could not upload "${file.name}". Please try again.` })
     } finally {
@@ -251,6 +254,7 @@ export default function SubAccountsPage() {
     setBeneficiaryDetails("")
     setPassportDoc(null)
     setKycDoc(null)
+    setBankStatementDoc(null)
     setAliasAccepted(false)
     setUboMode("declared")
   }
@@ -260,7 +264,9 @@ export default function SubAccountsPage() {
     // In alias mode, send no documents so the server derives an alias; in
     // declared mode, send the uploaded passport + KYC.
     const kycDocuments =
-      uboMode === "declared" ? ([passportDoc, kycDoc].filter(Boolean) as SubAccountDoc[]) : []
+      uboMode === "declared"
+        ? ([passportDoc, kycDoc, bankStatementDoc].filter(Boolean) as SubAccountDoc[])
+        : []
     const res = await requestSubAccount({
       label,
       currency,
@@ -491,8 +497,9 @@ export default function SubAccountsPage() {
                     <Label className="text-sm">Beneficiary identity (UBO)</Label>
                   </div>
                   <p className="text-[11px] leading-relaxed text-muted-foreground">
-                    Choose how this sub-account is held. Declaring the ultimate beneficial owner requires
-                    a passport and a KYC document. An alias needs no documents, but you accept full legal
+                    Open this sub-account for yourself or for a third party. Declaring the ultimate
+                    beneficial owner requires the beneficiary&apos;s passport, a KYC document and their last
+                    bank-account statement. An alias needs no documents, but you accept full legal
                     responsibility for it.
                   </p>
 
@@ -512,7 +519,7 @@ export default function SubAccountsPage() {
                         Declare UBO
                       </span>
                       <span className="text-[11px] leading-tight text-muted-foreground">
-                        Upload KYC + passport
+                        KYC + passport + bank statement
                       </span>
                     </button>
                     <button
@@ -539,6 +546,7 @@ export default function SubAccountsPage() {
                       [
                         { kind: "passport", label: "Passport", doc: passportDoc },
                         { kind: "kyc", label: "KYC document", doc: kycDoc },
+                        { kind: "bank_statement", label: "Last bank statement", doc: bankStatementDoc },
                       ] as const
                     ).map((slot) => (
                       <div
@@ -602,8 +610,8 @@ export default function SubAccountsPage() {
 
                   {uboMode === "declared" && !isDeclared && (
                     <p className="text-[11px] leading-relaxed text-muted-foreground">
-                      Upload both the passport and the KYC document to declare the UBO, or switch to
-                      Alias above if you do not want to provide KYC.
+                      Upload the passport, the KYC document and the last bank statement to declare the UBO,
+                      or switch to Alias above if you do not want to provide KYC.
                     </p>
                   )}
 

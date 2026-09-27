@@ -13,11 +13,18 @@ import {
   closeSubAccount,
   getSubAccountById,
   dismissSubAccountForAdmin,
+  setSubAccountExtraction,
 } from "@/lib/sub-account-db"
 import { insertNotification } from "@/lib/notifications-db"
 import { upsertLedgerEntry } from "@/lib/ledger-db"
 import { buildSubAccountFeeEntries } from "@/lib/sub-account-fees"
-import type { SubAccount } from "@/lib/sub-account-types"
+import { analyzeDocumentCompliance } from "@/lib/kyc-analyze"
+import type {
+  SubAccount,
+  SubAccountDoc,
+  SubAccountExtraction,
+  SubAccountExtractedDoc,
+} from "@/lib/sub-account-types"
 import { getVisitorLink, setVisitorLink, removeVisitorLink, listAllVisitorLinks } from "@/lib/visitor-link-db"
 import { resolvePlatformTier } from "@/lib/platform-tier"
 import { validateIban, validateBic } from "@/lib/iban-swift"
@@ -81,6 +88,22 @@ function holderFor(sub: SubAccount, clients: ClientLite[]): { holderName: string
   return { holderName: c ? c.label : sub.userId, holderEmail: c ? c.email : "" }
 }
 
+/** Human labels passed to the OCR pass for each document kind. */
+const SUB_DOC_LABELS: Record<SubAccountDoc["kind"], string> = {
+  passport: "Passport",
+  kyc: "KYC document",
+  bank_statement: "Last bank-account statement",
+}
+
+/** First non-empty value whose label contains any of the given keywords. */
+function pickField(fields: { label: string; value: string }[], ...keywords: string[]): string {
+  for (const kw of keywords) {
+    const hit = fields.find((f) => (f.label || "").toLowerCase().includes(kw) && (f.value || "").trim())
+    if (hit) return hit.value.trim()
+  }
+  return ""
+}
+
 export async function POST(req: Request) {
   let body: Record<string, unknown>
   try {
@@ -114,6 +137,77 @@ export async function POST(req: Request) {
         .map((u) => ({ id: u.id, label: u.profile.fullName || u.profile.company || u.email, email: u.email }))
       const links = await listAllVisitorLinks()
       return NextResponse.json({ ok: true, subAccounts: enriched, clients, visitors, links })
+    }
+
+    // Automatically retrieve the data from the furnished documents (passport,
+    // KYC, last bank statement) using the OCR/compliance pipeline, consolidate
+    // it into identity + banking fields the administrator reviews before
+    // approving, and cache it on the request row.
+    if (op === "analyze") {
+      const id = typeof body.id === "string" ? body.id : ""
+      if (!id) return NextResponse.json({ ok: false, error: "Missing sub-account id." })
+      const sub = await getSubAccountById(id)
+      if (!sub) return NextResponse.json({ ok: false, error: "That sub-account no longer exists." })
+      const docs = (sub.kycDocuments || []).filter(
+        (d): d is SubAccountDoc & { pathname: string } => !!d && typeof d.pathname === "string" && d.pathname.length > 0,
+      )
+      if (docs.length === 0) {
+        return NextResponse.json({ ok: false, error: "This request has no stored documents to analyse." })
+      }
+
+      const holder = holderFor(sub, clients)
+      const analyzed: SubAccountExtractedDoc[] = []
+      for (const d of docs) {
+        const contentType = d.contentType || "application/octet-stream"
+        const res = await analyzeDocumentCompliance(
+          {
+            id: `${id}-${d.kind}`,
+            label: SUB_DOC_LABELS[d.kind] || d.kind,
+            filename: d.fileName,
+            pathname: d.pathname,
+            contentType,
+            isImage: contentType.startsWith("image/"),
+          },
+          { fullName: holder.holderName, country: "" },
+        )
+        analyzed.push({
+          kind: d.kind,
+          fileName: d.fileName,
+          detectedType: res.detectedType,
+          personName: res.personName,
+          documentNumber: res.documentNumber,
+          issuingAuthority: res.issuingAuthority,
+          issueDate: res.issueDate,
+          expiryDate: res.expiryDate,
+          fields: res.extractedFields,
+          redFlags: res.redFlags,
+          riskLevel: res.riskLevel,
+          summary: res.summary,
+          error: res.error,
+        })
+      }
+
+      const passport = analyzed.find((a) => a.kind === "passport")
+      const bank = analyzed.find((a) => a.kind === "bank_statement")
+      const allFields = analyzed.flatMap((a) => a.fields)
+
+      const extraction: SubAccountExtraction = {
+        analyzedAt: new Date().toISOString(),
+        fullName: (passport?.personName || analyzed.map((a) => a.personName).find((v) => v.trim()) || "").trim(),
+        passportNo: (passport?.documentNumber || "").trim(),
+        nationality:
+          pickField(passport?.fields || [], "nationality", "citizen", "country") ||
+          (passport?.issuingAuthority || "").trim(),
+        address: pickField([...(bank?.fields || []), ...allFields], "address", "residence", "domicile"),
+        bankName: (bank?.issuingAuthority || pickField(bank?.fields || [], "bank")).trim(),
+        iban: pickField(bank?.fields || [], "iban", "account number", "account no").replace(/\s+/g, "").toUpperCase(),
+        bic: pickField(bank?.fields || [], "bic", "swift").replace(/\s+/g, "").toUpperCase(),
+        documents: analyzed,
+      }
+
+      const updated = await setSubAccountExtraction(id, extraction)
+      const enriched = updated ? { ...updated, ...holderFor(updated, clients) } : null
+      return NextResponse.json({ ok: true, subAccount: enriched, extraction })
     }
 
     // Link a VISITOR user to an ACTIVE sub-account (exactly one per visitor).

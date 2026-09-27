@@ -1,6 +1,6 @@
 import "server-only"
 import { query } from "@/lib/db"
-import type { SubAccount, SubAccountStatus, SubAccountVerification, SubAccountDoc } from "@/lib/sub-account-types"
+import type { SubAccount, SubAccountStatus, SubAccountVerification, SubAccountDoc, SubAccountExtraction } from "@/lib/sub-account-types"
 import { buildSubAccountFeeEntries } from "@/lib/sub-account-fees"
 import { upsertLedgerEntry } from "@/lib/ledger-db"
 
@@ -68,7 +68,24 @@ async function ensureTable(): Promise<void> {
   // the client `dismissed_at` so a client purge never hides a row from the admin
   // and vice-versa.
   await query(`ALTER TABLE sub_accounts ADD COLUMN IF NOT EXISTS admin_dismissed_at timestamptz`)
+  // Administrator-side automatic data extraction (OCR) from the uploaded
+  // documents — consolidated identity + banking fields, cached on the row.
+  await query(`ALTER TABLE sub_accounts ADD COLUMN IF NOT EXISTS extracted_data jsonb`)
   ensured = true
+}
+
+/** Coerce the jsonb extraction column into the typed shape, tolerating null. */
+function parseExtraction(value: unknown): SubAccountExtraction | undefined {
+  if (!value) return undefined
+  let obj: unknown = value
+  if (typeof value === "string") {
+    try {
+      obj = JSON.parse(value)
+    } catch {
+      return undefined
+    }
+  }
+  return obj && typeof obj === "object" ? (obj as SubAccountExtraction) : undefined
 }
 
 function rowToSubAccount(r: Record<string, unknown>): SubAccount {
@@ -91,7 +108,21 @@ function rowToSubAccount(r: Record<string, unknown>): SubAccount {
     decidedAt: r.decided_at ? new Date(r.decided_at as string).toISOString() : undefined,
     activatedAt: r.activated_at ? new Date(r.activated_at as string).toISOString() : undefined,
     closedAt: r.closed_at ? new Date(r.closed_at as string).toISOString() : undefined,
+    extractedData: parseExtraction(r.extracted_data),
   }
+}
+
+/** Store the administrator-side OCR extraction on a sub-account request. */
+export async function setSubAccountExtraction(
+  id: string,
+  extraction: SubAccountExtraction,
+): Promise<SubAccount | null> {
+  await ensureTable()
+  const { rows } = await query(
+    `UPDATE sub_accounts SET extracted_data = $2::jsonb WHERE id = $1 RETURNING *`,
+    [id, JSON.stringify(extraction)],
+  )
+  return rows[0] ? rowToSubAccount(rows[0]) : null
 }
 
 /** Insert a brand-new sub-account request (status = pending). */

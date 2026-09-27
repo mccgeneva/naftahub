@@ -8,8 +8,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
-import { Layers, Check, X, Loader2, RefreshCw, Search, ShieldCheck, ShieldAlert, FileText, ArrowLeft, Download, UserPlus, Trash2 } from "lucide-react"
-import type { SubAccount, SubAccountDoc } from "@/lib/sub-account-types"
+import { Layers, Check, X, Loader2, RefreshCw, Search, ShieldCheck, ShieldAlert, FileText, ArrowLeft, Download, UserPlus, Trash2, ScanText } from "lucide-react"
+import type { SubAccount, SubAccountDoc, SubAccountExtraction } from "@/lib/sub-account-types"
 import { blobFileUrl } from "@/lib/kyc-types"
 import { serviceFeeFor, formatSubAccountFee, SUB_ACCOUNT_ANNUAL_FEE, SUB_ACCOUNT_CLOSING_FEE } from "@/lib/sub-account-fees"
 import { validateIban, validateBic, lookupBankByIban, isGenericBankInfo } from "@/lib/iban-swift"
@@ -26,7 +26,104 @@ const STATUS_VARIANT: Record<string, string> = {
   closed: "border-muted-foreground/30 text-muted-foreground",
 }
 
-const DOC_LABEL: Record<SubAccountDoc["kind"], string> = { passport: "Passport", kyc: "KYC document" }
+const DOC_LABEL: Record<SubAccountDoc["kind"], string> = {
+  passport: "Passport",
+  kyc: "KYC document",
+  bank_statement: "Bank statement",
+}
+
+const RISK_VARIANT: Record<string, string> = {
+  low: "border-emerald-500/40 text-emerald-600",
+  medium: "border-amber-500/40 text-amber-600",
+  high: "border-red-500/40 text-red-600",
+}
+
+/**
+ * Review panel for the data the OCR/compliance pipeline retrieved from the
+ * furnished documents (passport, KYC, last bank statement). Consolidated
+ * identity + banking fields the administrator verifies before approving, plus a
+ * per-document breakdown with compliance flags. Read-only — the extracted IBAN
+ * / BIC are pre-filled into the activation fields when found.
+ */
+function ExtractionReview({ extraction }: { extraction: SubAccountExtraction }) {
+  const consolidated = [
+    { label: "Full name", value: extraction.fullName },
+    { label: "Passport no.", value: extraction.passportNo },
+    { label: "Nationality", value: extraction.nationality },
+    { label: "Address", value: extraction.address },
+    { label: "Bank", value: extraction.bankName },
+    { label: "IBAN", value: extraction.iban },
+    { label: "BIC / SWIFT", value: extraction.bic },
+  ].filter((f) => (f.value || "").trim())
+  const flags = extraction.documents.flatMap((d) => d.redFlags || [])
+
+  return (
+    <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+      <p className="text-[11px] text-muted-foreground">
+        Retrieved {new Date(extraction.analyzedAt).toLocaleString()} — verify before activating. Any IBAN / BIC found has
+        been pre-filled into the activation fields below.
+      </p>
+      {consolidated.length > 0 ? (
+        <div className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+          {consolidated.map((f) => (
+            <div key={f.label} className="flex flex-col">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{f.label}</span>
+              <span className="break-words text-sm font-medium text-foreground">{f.value}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[11px] text-muted-foreground">
+          No fields could be read automatically — review the documents manually.
+        </p>
+      )}
+
+      {flags.length > 0 && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-700">
+          <div className="flex items-center gap-1.5 font-medium">
+            <ShieldAlert className="h-3.5 w-3.5" /> Compliance flags
+          </div>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {flags.map((f, i) => (
+              <li key={i}>{f}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {extraction.documents.map((d, i) => (
+          <div key={`${d.kind}-${i}`} className="rounded-md border border-border bg-background p-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-foreground">{DOC_LABEL[d.kind] || d.kind}</span>
+              <Badge variant="outline" className={RISK_VARIANT[d.riskLevel] || ""}>
+                {d.riskLevel} risk
+              </Badge>
+              {d.detectedType && <span className="text-[11px] text-muted-foreground">detected: {d.detectedType}</span>}
+            </div>
+            {d.error ? (
+              <p className="mt-1 text-[11px] text-red-600">Could not analyse: {d.error}</p>
+            ) : (
+              <>
+                {d.summary && <p className="mt-1 text-[11px] text-muted-foreground">{d.summary}</p>}
+                {d.fields.length > 0 && (
+                  <div className="mt-1.5 space-y-0.5">
+                    {d.fields.map((f, j) => (
+                      <div key={j} className="flex justify-between gap-3 text-[11px]">
+                        <span className="shrink-0 text-muted-foreground">{f.label}</span>
+                        <span className="break-all text-right font-medium text-foreground">{f.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 /**
  * In-app overlay for viewing an uploaded UBO document. NEVER use target="_blank"
@@ -502,6 +599,8 @@ export function SubAccountsManager({ passcode }: { passcode: string }) {
   // Convert a closed sub-account into a standalone Visitor customer.
   const [convertDrafts, setConvertDrafts] = useState<Record<string, ConvertDraft>>({})
   const [convertBusyId, setConvertBusyId] = useState<string | null>(null)
+  // OCR: retrieve identity + banking data from the furnished documents.
+  const [analyzingId, setAnalyzingId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -628,6 +727,40 @@ export function SubAccountsManager({ passcode }: { passcode: string }) {
       setError("Network error while activating.")
     } finally {
       setBusyId(null)
+    }
+  }
+
+  // Automatically retrieve identity + banking data from the furnished documents
+  // (passport, KYC, last bank statement), cache it on the row, and pre-fill the
+  // activation IBAN / BIC with anything read from the bank statement.
+  const analyze = async (row: AdminRow) => {
+    setAnalyzingId(row.id)
+    setError("")
+    try {
+      const res = await fetch("/api/admin/sub-accounts", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ op: "analyze", pin: passcode, id: row.id }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.ok) {
+        setError(data?.error || "Could not analyse the documents.")
+        return
+      }
+      const ext = data.extraction as SubAccountExtraction | undefined
+      if (ext) {
+        const patch: Partial<{ iban: string; bic: string }> = {}
+        if (ext.iban) patch.iban = ext.iban
+        if (ext.bic) patch.bic = ext.bic
+        if (Object.keys(patch).length > 0) setDraft(row.id, patch)
+      }
+      await load()
+    } catch {
+      setError("Network error while analysing documents.")
+    } finally {
+      setAnalyzingId(null)
     }
   }
 
@@ -924,6 +1057,38 @@ export function SubAccountsManager({ passcode }: { passcode: string }) {
                       )}
                     </div>
                   </div>
+
+                  {row.status === "pending" && row.kycDocuments && row.kycDocuments.length > 0 && (
+                    <div className="mt-4 space-y-3 border-t border-border pt-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                          <ScanText className="h-3.5 w-3.5" />
+                          Automatic document data
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void analyze(row)}
+                          disabled={analyzingId === row.id}
+                        >
+                          {analyzingId === row.id ? (
+                            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <ScanText className="mr-1.5 h-3.5 w-3.5" />
+                          )}
+                          {row.extractedData ? "Re-analyze documents" : "Analyze documents"}
+                        </Button>
+                      </div>
+                      {row.extractedData ? (
+                        <ExtractionReview extraction={row.extractedData} />
+                      ) : (
+                        <p className="text-[11px] text-muted-foreground">
+                          Retrieve the beneficiary&apos;s identity and banking details automatically from the uploaded
+                          passport, KYC and bank statement, then review before activating.
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {row.status === "pending" && (
                     <ActivatePanel
