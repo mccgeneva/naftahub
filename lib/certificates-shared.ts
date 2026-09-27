@@ -54,6 +54,12 @@ export interface CertificateRequest {
   iban?: string
   bic?: string
   accountEmail?: string
+  /** Set when the certificate is scoped to a single sub-account compartment.
+   *  The holder stays the master user; these describe the sub-account. */
+  subAccountLabel?: string
+  subAccountCurrency?: string
+  subAccountAlias?: boolean
+  subAccountBeneficiary?: string
   /** Per-currency cleared balances (Proof of Funds). */
   balances: CertificateBalance[]
   /** Aggregate of all balances converted to EUR (headline figure). */

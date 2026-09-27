@@ -51,6 +51,10 @@ export interface CertificateDocProps {
   bankAddress?: string
   iban?: string
   bic?: string
+  subAccountLabel?: string
+  subAccountCurrency?: string
+  subAccountAlias?: boolean
+  subAccountBeneficiary?: string
   balances: { currency: string; amount: number }[]
   totalEur: number
   displayCurrency: string
@@ -109,6 +113,15 @@ export function CertificateDocument(props: CertificateDocProps) {
     ...(props.iban ? ([["IBAN", props.iban]] as [string, string][]) : []),
     ...(props.bic ? ([["BIC / SWIFT", props.bic]] as [string, string][]) : []),
     ["Account", props.accountLabel],
+    ...(props.subAccountLabel
+      ? ([[
+          "Sub-Account",
+          `${props.subAccountLabel}${props.subAccountCurrency ? ` — ${props.subAccountCurrency}` : ""}${props.subAccountAlias ? " (alias — under the account holder's responsibility)" : ""}`,
+        ]] as [string, string][])
+      : []),
+    ...(props.subAccountBeneficiary
+      ? ([["Sub-Account Beneficiary", props.subAccountBeneficiary]] as [string, string][])
+      : []),
     // Explicitly names the platform owner/operator so the account holder (client)
     // and settlement bank are never mistaken for the party that owns the platform.
     ["Platform Operator", "NAFTAhub plc"],

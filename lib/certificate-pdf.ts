@@ -280,6 +280,12 @@ export interface AccountCertificateData {
   bic?: string
   accountEmail?: string
 
+  // Sub-account identity (when the certificate is scoped to one compartment)
+  subAccountLabel?: string
+  subAccountCurrency?: string
+  subAccountAlias?: boolean
+  subAccountBeneficiary?: string
+
   // Proof of Funds figures
   balances: { currency: string; amount: number }[]
   totalEur: number
@@ -515,6 +521,15 @@ export function generateAccountCertificate(data: AccountCertificateData): Genera
     ...(data.iban ? ([["IBAN", data.iban]] as [string, string][]) : []),
     ...(data.bic ? ([["BIC / SWIFT", data.bic]] as [string, string][]) : []),
     ["Account", data.accountLabel],
+    ...(data.subAccountLabel
+      ? ([[
+          "Sub-Account",
+          `${data.subAccountLabel}${data.subAccountCurrency ? ` — ${data.subAccountCurrency}` : ""}${data.subAccountAlias ? " (alias — under the account holder's responsibility)" : ""}`,
+        ]] as [string, string][])
+      : []),
+    ...(data.subAccountBeneficiary
+      ? ([["Sub-Account Beneficiary", data.subAccountBeneficiary]] as [string, string][])
+      : []),
     // Explicitly names the platform owner/operator so the account holder (client)
     // and settlement bank are never mistaken for the party that owns the platform.
     ["Platform Operator", "NAFTAhub plc"],

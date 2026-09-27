@@ -146,9 +146,13 @@ export default function CertificateDetailPage() {
       bankName: req.bankName,
       bankAddress: req.bankAddress,
       beneficiaryAddress: req.beneficiaryAddress,
-      iban: req.iban,
-      bic: req.bic,
-      accountEmail: req.accountEmail,
+  iban: req.iban,
+  bic: req.bic,
+  subAccountLabel: req.subAccountLabel,
+  subAccountCurrency: req.subAccountCurrency,
+  subAccountAlias: req.subAccountAlias,
+  subAccountBeneficiary: req.subAccountBeneficiary,
+  accountEmail: req.accountEmail,
       balances: req.balances,
       totalEur: req.totalEur,
       displayCurrency: req.displayCurrency,
@@ -337,9 +341,13 @@ export default function CertificateDetailPage() {
             holderCompany={req.holderCompany}
             bankName={req.bankName}
             bankAddress={req.bankAddress}
-            iban={req.iban}
-            bic={req.bic}
-            balances={req.balances}
+  iban={req.iban}
+  bic={req.bic}
+  subAccountLabel={req.subAccountLabel}
+  subAccountCurrency={req.subAccountCurrency}
+  subAccountAlias={req.subAccountAlias}
+  subAccountBeneficiary={req.subAccountBeneficiary}
+  balances={req.balances}
             totalEur={req.totalEur}
             displayCurrency={req.displayCurrency}
           />

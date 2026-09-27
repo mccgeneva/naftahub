@@ -179,6 +179,35 @@ export default function CertificatesPage() {
     return { balances: balances.length ? balances : [{ currency: "EUR", amount: 0 }], totalEur, displayCurrency }
   }
 
+  // Resolve the coordinates + identity for the chosen scope. The account HOLDER
+  // always stays the master user; a sub-account scope shows the sub-account's
+  // OWN IBAN/BIC and a sub-account identity line (never the master's IBAN).
+  const scopeIdentity = (
+    scope: string,
+  ): {
+    iban?: string
+    bic?: string
+    subAccountLabel?: string
+    subAccountCurrency?: string
+    subAccountAlias?: boolean
+    subAccountBeneficiary?: string
+  } => {
+    if (scope.startsWith("sub:")) {
+      const sub = subAccounts.find((s) => s.id === scope.slice(4))
+      if (sub) {
+        return {
+          iban: sub.iban,
+          bic: sub.bic,
+          subAccountLabel: sub.label,
+          subAccountCurrency: sub.currency,
+          subAccountAlias: sub.verification === "alias",
+          subAccountBeneficiary: sub.beneficiaryName,
+        }
+      }
+    }
+    return { iban, bic }
+  }
+
   // Live preview reflecting the in-progress request form.
   const draftPreview = useMemo(() => {
     const snap = buildSnapshot(accountScope)
@@ -195,12 +224,11 @@ export default function CertificatesPage() {
       holderCompany: user.company,
       bankName,
       bankAddress,
-      iban,
-      bic,
+      ...scopeIdentity(accountScope),
       ...snap,
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type, accountScope, purpose, addressee, holderName, bankName, bankAddress, iban, bic, currencies])
+  }, [type, accountScope, purpose, addressee, holderName, bankName, bankAddress, iban, bic, currencies, subAccounts])
 
   const openRequest = (t: CertificateType) => {
     setType(t)
@@ -227,8 +255,7 @@ export default function CertificatesPage() {
       bankName,
       bankAddress,
       beneficiaryAddress,
-      iban,
-      bic,
+      ...scopeIdentity(accountScope),
       accountEmail: user.accountEmail,
       ...snap,
     })
