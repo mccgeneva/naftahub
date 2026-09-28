@@ -3056,8 +3056,8 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
       </Dialog>
 
       <Dialog open={rejectTarget !== null} onOpenChange={(o) => !o && setRejectTarget(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[88dvh] max-w-md flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <DialogTitle>
               {rejectTarget?.bulk ? `Reject ${selected.size} request${selected.size === 1 ? "" : "s"}` : "Reject request"}
             </DialogTitle>
@@ -3065,14 +3065,16 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
               A reason is required and will be recorded in the audit trail and shown to the client.
             </DialogDescription>
           </DialogHeader>
-          <Textarea
-            value={rejectReason}
-            onChange={(e) => setRejectReason(e.target.value)}
-            placeholder="Explain why this request is being declined…"
-            className="min-h-24 text-base md:text-sm"
-            autoFocus
-          />
-          <DialogFooter>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <Textarea
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="Explain why this request is being declined…"
+              className="max-h-60 min-h-24 text-base md:text-sm"
+              autoFocus
+            />
+          </div>
+          <DialogFooter className="shrink-0 border-t border-border pt-4">
             <Button variant="ghost" onClick={() => setRejectTarget(null)} disabled={acting}>
               Cancel
             </Button>
