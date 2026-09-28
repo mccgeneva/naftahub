@@ -11,6 +11,7 @@ import { drawBrandMark } from "@/lib/pdf-logos"
 import {
   COST_CATALOGUE_META,
   COST_CATALOGUE_REVISIONS,
+  COST_CATALOGUE_DISCLAIMERS,
   COST_SECTIONS,
   LEVERAGE_RATE_LADDER,
   type CostSection,
@@ -277,6 +278,37 @@ export function generateCostCataloguePdf(): GeneratedPdf {
         y += 18
       })
     }
+  })
+
+  // ===== Disclaimers =====================================================
+  newContentPage()
+  doc.setTextColor(...BRAND.gold)
+  doc.setFont("helvetica", "bold")
+  doc.setFontSize(11)
+  doc.text("DISCLAIMERS", margin, y)
+  y += 24
+  doc.setTextColor(...BRAND.ink)
+  doc.setFont("helvetica", "bold")
+  doc.setFontSize(20)
+  doc.text("Disclaimers", margin, y)
+  y += 24
+  addParagraph(
+    "The legal and risk context that applies to every fee, charge and interest rate in this schedule. Read together with the platform's Terms of Use.",
+    { color: BRAND.slate, size: 10.5 },
+  )
+  doc.setDrawColor(...BRAND.line)
+  doc.setLineWidth(1)
+  doc.line(margin, y, pageWidth - margin, y)
+  y += 16
+  COST_CATALOGUE_DISCLAIMERS.forEach((clause, i) => {
+    ensureSpace(30)
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(11)
+    doc.setTextColor(...BRAND.ink)
+    doc.text(`${i + 1}. ${clause.heading}`, margin, y)
+    y += 16
+    addParagraph(clause.body, { color: BRAND.slate, size: 10 })
+    y += 2
   })
 
   // ===== Revision history (versioning / audit trail) =====================

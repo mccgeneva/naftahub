@@ -1,14 +1,19 @@
 "use client"
 
 import { useState } from "react"
-import { Receipt, Download, FileText, ChevronRight, ShieldCheck, History } from "lucide-react"
+import { Receipt, Download, FileText, ChevronRight, ShieldCheck, History, ScrollText } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useActivityLog } from "@/components/activity-tracker"
 import { generateCostCataloguePdf } from "@/lib/cost-catalogue-pdf"
 import { usePdfViewer } from "@/lib/pdf-viewer"
-import { COST_CATALOGUE_META, COST_CATALOGUE_REVISIONS, COST_SECTIONS } from "@/lib/cost-catalogue"
+import {
+  COST_CATALOGUE_META,
+  COST_CATALOGUE_REVISIONS,
+  COST_SECTIONS,
+  COST_CATALOGUE_DISCLAIMERS,
+} from "@/lib/cost-catalogue"
 
 export default function TermsCostsPage() {
   const logActivity = useActivityLog()
@@ -103,6 +108,16 @@ export default function TermsCostsPage() {
               <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
             </a>
           ))}
+          <a
+            href="#disclaimers"
+            className="group flex items-center gap-3 rounded-lg border border-border bg-secondary/30 p-3 transition-colors hover:bg-secondary/60"
+          >
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary">
+              <ScrollText className="h-4 w-4" />
+            </span>
+            <span className="flex-1 text-sm font-medium text-foreground">Disclaimers</span>
+            <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+          </a>
         </CardContent>
       </Card>
 
@@ -145,6 +160,32 @@ export default function TermsCostsPage() {
           </Card>
         ))}
       </div>
+
+      {/* Disclaimers */}
+      <Card id="disclaimers" className="scroll-mt-20 border-primary/20 bg-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-xl font-bold text-foreground text-balance">
+            <ScrollText className="h-5 w-5 text-primary" /> Disclaimers
+          </CardTitle>
+          <p className="text-sm text-muted-foreground text-pretty">
+            The legal and risk context that applies to every fee, charge and interest rate in this schedule. Please read
+            it together with the platform&apos;s Terms of Use.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {COST_CATALOGUE_DISCLAIMERS.map((clause, i) => (
+            <div key={clause.heading} className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/15 text-xs font-bold text-primary">
+                {i + 1}
+              </span>
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-foreground">{clause.heading}</p>
+                <p className="text-sm leading-relaxed text-muted-foreground text-pretty">{clause.body}</p>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
 
       {/* Revision history */}
       <Card className="border-border bg-card">

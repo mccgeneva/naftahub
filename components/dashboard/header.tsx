@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { createPortal } from "react-dom"
 import Link from "next/link"
 import useSWR from "swr"
-import { Bell, User, LogOut, Settings, HelpCircle, Menu, BookOpen, ShieldCheck, Cpu } from "lucide-react"
+import { Bell, User, LogOut, Settings, HelpCircle, Menu, BookOpen, ShieldCheck, Cpu, Receipt } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { GlobalSearch } from "./global-search"
 import { PersistentSessionToggleItem } from "./persistent-session-toggle-item"
@@ -408,6 +408,12 @@ export function DashboardHeader() {
               <Link href="/dashboard/handbook">
                 <BookOpen className="mr-2 h-4 w-4" />
                 Client Handbook
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href="/dashboard/terms-costs">
+                <Receipt className="mr-2 h-4 w-4" />
+                Fees &amp; Disclaimers
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>

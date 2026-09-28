@@ -452,6 +452,69 @@ export const COST_SECTIONS: CostSection[] = [
   },
 ]
 
+// --- Disclaimers (published for all users) ----------------------------------
+
+export interface DisclaimerClause {
+  heading: string
+  body: string
+}
+
+/**
+ * Formal disclaimers published alongside the fee catalogue. Rendered on the
+ * on-screen page and in the downloadable PDF so every user has the full legal
+ * and risk context of the charges above.
+ */
+export const COST_CATALOGUE_DISCLAIMERS: DisclaimerClause[] = [
+  {
+    heading: "Informational schedule",
+    body: "This catalogue is published for general information so that every user can see, in advance, each fee, charge and interest rate that can apply across the platform and exactly when it is triggered. It is a schedule of costs — not financial, investment, legal or tax advice, and not an offer or solicitation to enter into any transaction.",
+  },
+  {
+    heading: "Live, authoritative rates",
+    body: "Every rate shown is the same value the system applies when the corresponding action is taken. Where a fee is retuned in the platform's live logic, this schedule follows it. In case of any discrepancy between a figure quoted elsewhere and the amount the system computes at the moment of a transaction, the live computed amount governs.",
+  },
+  {
+    heading: "Fees may change",
+    body: "Charges, rates and thresholds may be updated over time. Material changes are version-controlled and recorded in the Revision History below so that prior schedules remain documented. The version and effective date shown at the top of this document identify the schedule currently in force.",
+  },
+  {
+    heading: "Security deposits are not fees",
+    body: "Membership security deposits and leverage deposits are refundable guarantees held in treasury to secure the account. They are not consumed as fees and are returned on closure, subject to settlement of any amounts genuinely due.",
+  },
+  {
+    heading: "No upfront payment to release your funds",
+    body: "The platform never requires you to pay a fee up front, to any personal or third-party account, as a condition of releasing money that is claimed to be owed to you. Any such demand should be treated as fraudulent. All legitimate fees are debited transparently from your Master Account and itemised in your transaction history.",
+  },
+  {
+    heading: "How fees are charged",
+    body: "Unless stated otherwise, fees are debited from the Master Account in the currency of the underlying transaction, or converted at the applicable FX rate where a conversion is required. Percentage fees are applied to the stated base (for example the payment amount, instrument face value, buying power or advance) as described in each section.",
+  },
+  {
+    heading: "Interest accrues over time",
+    body: "Leverage, financing, loan, project-funding, treasury-financing and overdraft costs accrue over time (daily or monthly, as stated) for as long as the facility or negative balance remains outstanding. The total cost therefore depends on how long funds are used.",
+  },
+  {
+    heading: "Capital and leverage risk",
+    body: "Leverage, monetization, yield/PPP and financing products carry risk, including the risk of loss and of charges that can exceed initial expectations. Leverage amplifies both gains and losses. You are responsible for ensuring any facility is suitable for your circumstances before you use it.",
+  },
+  {
+    heading: "Cashback is discretionary",
+    body: "Where a fee cashback applies, it is authorised at the platform's discretion (globally, per product, or per customer). The original fee, the cashback percentage and the net amount are shown before you confirm and are recorded in your records. Cashback may be varied or withdrawn for future transactions.",
+  },
+  {
+    heading: "Taxes and third-party costs",
+    body: "The fees in this schedule are the platform's own charges. Any taxes, correspondent-bank or beneficiary-bank charges, and other third-party costs are separate and remain your responsibility.",
+  },
+  {
+    heading: "Returned & rejected payments",
+    body: "If a delivered payment is returned by the beneficiary bank, only the principal that actually left the platform is credited back, less the stated transaction fee and return fine; the original outgoing send fee, already earned, is not refunded.",
+  },
+  {
+    heading: "Governing terms",
+    body: `This schedule forms part of, and is read together with, the platform's Terms of Use. It is operated by ${COST_CATALOGUE_META.legalEntity} (${COST_CATALOGUE_META.address}). Questions about any charge can be raised with ${COST_CATALOGUE_META.email}.`,
+  },
+]
+
 /** Human label for the leverage debit-interest scale, e.g. "1:2 2% … 1:30 22%". */
 function interestScaleLabel(): string {
   const first = DEBIT_INTEREST_SCALE[0]
