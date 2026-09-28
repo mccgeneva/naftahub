@@ -2785,8 +2785,17 @@ export default function AdminPage() {
       <div className="space-y-6">
       {/* Pending requests */}
       <Card id="section-payments" className="bg-card border-border">
-        <CardHeader>
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle className="text-lg font-semibold">Pending Payment Requests</CardTitle>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => openPending({ view: "approvals", kind: "payment" })}
+          >
+            <ArrowUpRight className="h-4 w-4" />
+            All payments (delivered &amp; returns)
+          </Button>
         </CardHeader>
         <CardContent className="space-y-4">
           {pending.length === 0 ? (
@@ -2795,6 +2804,18 @@ export default function AdminPage() {
               <p className="text-sm text-muted-foreground">
                 No pending requests. All outgoing payments have been reviewed.
               </p>
+              <p className="max-w-sm text-xs text-muted-foreground">
+                To recall a delivered payment or mark funds returned by the beneficiary bank, open the full list below.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2 gap-1.5"
+                onClick={() => openPending({ view: "approvals", kind: "payment" })}
+              >
+                <ArrowUpRight className="h-4 w-4" />
+                View delivered payments &amp; returns
+              </Button>
             </div>
           ) : (
             pending.map((r) => (
