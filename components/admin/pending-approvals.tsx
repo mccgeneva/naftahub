@@ -3726,8 +3726,8 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
 
       {/* Revoke approved commodity deal dialog */}
       <Dialog open={returnTarget !== null} onOpenChange={(o) => !o && !acting && setReturnTarget(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[88dvh] max-w-md flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <Undo2 className="h-4 w-4 text-orange-600" /> Returned by beneficiary bank
             </DialogTitle>
@@ -3743,7 +3743,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
               ) : null}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-foreground">Return reason</label>
               <Select value={returnReasonCode} onValueChange={setReturnReasonCode}>
@@ -3766,10 +3766,11 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                 onChange={(e) => setReturnNote(e.target.value)}
                 placeholder="Any extra detail from the beneficiary bank's return advice…"
                 rows={3}
+                className="max-h-40 overflow-y-auto"
               />
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button variant="ghost" disabled={acting} onClick={() => setReturnTarget(null)}>
               Cancel
             </Button>
