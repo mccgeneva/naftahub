@@ -1555,6 +1555,22 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
     mutate()
   }
 
+  // The interbank return leg (:32A:) is ALWAYS the principal the beneficiary bank
+  // actually received — never principal + the platform fee. Prefer the stored
+  // principal (payload.record.amount); if it's ever missing, derive it as
+  // total − fee; only as a last resort fall back to the total.
+  const returnPrincipalAmount = (
+    rec: Record<string, unknown>,
+    approvalAmount?: number | null,
+  ): number => {
+    const principal = Number(rec.amount)
+    if (Number.isFinite(principal) && principal > 0) return principal
+    const total = Number(rec.total ?? approvalAmount)
+    const fee = Number(rec.fee)
+    if (Number.isFinite(total) && Number.isFinite(fee) && total - fee > 0) return total - fee
+    return Number.isFinite(total) && total > 0 ? total : 0
+  }
+
   const confirmReturnPayment = async () => {
     if (!returnTarget) return
     const reason = PAYMENT_RETURN_REASONS.find((r) => r.code === returnReasonCode)
@@ -1586,7 +1602,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         beneficiaryCountry: (rec.beneficiaryCountry as string) ?? undefined,
         // :32A: is the interbank return leg — the beneficiary bank only ever received
         // the PRINCIPAL, so it returns the principal (never principal + platform fee).
-        amount: Number(rec.amount ?? res.request?.amount ?? rec.total ?? 0),
+        amount: returnPrincipalAmount(rec, res.request?.amount),
         currency: res.request?.currency ?? "EUR",
         reference: (rec.reference as string) ?? returnTarget.id,
         reasonCode: reason.code,
@@ -1619,7 +1635,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         beneficiaryBankBic: (rec.swiftCode as string) ?? (rec.swift as string) ?? "",
         beneficiaryCountry: (rec.beneficiaryCountry as string) ?? undefined,
         // :32A: is the principal returned by the beneficiary bank (excludes the platform fee).
-        amount: Number(rec.amount ?? req.amount ?? rec.total ?? 0),
+        amount: returnPrincipalAmount(rec, req.amount),
         currency: req.currency ?? "EUR",
         reference: (rec.reference as string) ?? req.id,
         reasonCode,
