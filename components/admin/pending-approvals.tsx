@@ -1584,7 +1584,9 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         beneficiaryIban: (rec.iban as string) ?? (res.request?.payload as { iban?: string } | undefined)?.iban ?? "",
         beneficiaryBankBic: (rec.swiftCode as string) ?? (rec.swift as string) ?? "",
         beneficiaryCountry: (rec.beneficiaryCountry as string) ?? undefined,
-        amount: Number(res.request?.amount ?? rec.total ?? 0),
+        // :32A: is the interbank return leg — the beneficiary bank only ever received
+        // the PRINCIPAL, so it returns the principal (never principal + platform fee).
+        amount: Number(rec.amount ?? res.request?.amount ?? rec.total ?? 0),
         currency: res.request?.currency ?? "EUR",
         reference: (rec.reference as string) ?? returnTarget.id,
         reasonCode: reason.code,
@@ -1616,7 +1618,8 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         beneficiaryIban: (rec.iban as string) ?? (payload.iban as string) ?? "",
         beneficiaryBankBic: (rec.swiftCode as string) ?? (rec.swift as string) ?? "",
         beneficiaryCountry: (rec.beneficiaryCountry as string) ?? undefined,
-        amount: Number(req.amount ?? rec.total ?? 0),
+        // :32A: is the principal returned by the beneficiary bank (excludes the platform fee).
+        amount: Number(rec.amount ?? req.amount ?? rec.total ?? 0),
         currency: req.currency ?? "EUR",
         reference: (rec.reference as string) ?? req.id,
         reasonCode,
