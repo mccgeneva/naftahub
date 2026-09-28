@@ -214,7 +214,7 @@ export async function submitApproval(input: SubmitApprovalInput): Promise<Submit
   // unaffordable upfront charges). Policy: leverage is NEVER silently dropped for
   // these — the request is still created as PENDING, EVERY administrator is
   // notified, and these flags travel on the payload so the admin sees exactly why
-  // it needs a decision and can approve or reject. (Genuine INTEGRITY failures —
+  // it needs a decision and can approve or reject. (Genuine INTEGRITY failures ��
   // malformed equity, double-pledged collateral — still hard-fail below.) Other
   // credit-sensitive kinds keep their automatic hard block.
   const leverageReviewFlags: string[] = []
@@ -5336,9 +5336,13 @@ export async function adminReturnPaymentFromReceiver(
     if (!reasonCode) return { ok: false, error: "Select a return reason." }
 
     const record0 = (payload0.record ?? {}) as { total?: number; amount?: number }
-    // The sender was debited the TOTAL (amount + tiered fee) at approval; a full
-    // return makes them whole by crediting exactly that back.
-    const refundAmount = Number(existing.amount ?? record0.total ?? 0)
+    // Only the PRINCIPAL that actually left to the beneficiary comes back on a
+    // bank return — the original outgoing transaction fee was already earned and
+    // is NOT refunded. Crediting the full total (principal + original fee) would
+    // hand the customer back MORE than they sent out.
+    const principal = Number(record0.amount)
+    const refundAmount =
+      Number.isFinite(principal) && principal > 0 ? principal : Number(existing.amount ?? record0.total ?? 0)
     const refundCurrency = existing.currency ?? "EUR"
     if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
       return { ok: false, error: "This payment's amount could not be determined." }
@@ -5347,14 +5351,12 @@ export async function adminReturnPaymentFromReceiver(
     const returnedAt = new Date().toISOString()
 
     // Return charges billed to the customer: the 2% transaction fee (not taken on
-    // the original send) plus a 0.50% return fine. Both based on the payment
-    // principal (falling back to the returned amount if the principal is not
-    // stored). The full amount is credited back first (below), so these fees are
-    // always covered.
+    // the original send) plus a 0.50% return fine. Both based on the returned
+    // principal — which is exactly what we credit back — so the net returned is
+    // principal − 2% − 0.50%, never more than was sent out.
     const PAYMENT_RETURN_TXN_FEE_RATE = 0.02
     const PAYMENT_RETURN_FINE_RATE = 0.005
-    const principal = Number(record0.amount)
-    const feeBase = Number.isFinite(principal) && principal > 0 ? principal : refundAmount
+    const feeBase = refundAmount
     const txnFee = Math.round(feeBase * PAYMENT_RETURN_TXN_FEE_RATE * 100) / 100
     const returnFine = Math.round(feeBase * PAYMENT_RETURN_FINE_RATE * 100) / 100
 
