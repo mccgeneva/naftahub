@@ -10,6 +10,8 @@ import { insertNotification } from "@/lib/notifications-db"
 import { listApprovalsForUser } from "@/lib/approvals-db"
 import { reconcileSubAccountFees } from "@/lib/sub-account-db"
 import { getFinancingRingfence } from "@/lib/guarantees-profile"
+import { getOutgoingBlock } from "@/lib/outgoing-blocks-db"
+import { evaluateOutgoingBlock, outgoingBlockMessage } from "@/lib/outgoing-blocks-eval"
 import { convertCurrency } from "@/lib/fx"
 import { internalTransferFee } from "@/lib/incoming-fees"
 import { getFeeTiers } from "@/lib/tiered-fees-db"
@@ -259,6 +261,19 @@ export async function sendInstantTransfer(input: {
   const membership = await getMyMembership()
   if (!capabilitiesForAccount(session.profile.accountBadge, membership).canSendMoney) {
     return { ok: false, error: VISITOR_RESTRICTION_MESSAGE }
+  }
+
+  // Administrator OUTGOING BLOCK (payments scope). A selected user's outgoing
+  // transfers can be suspended for a period with an explanation; auto-reject
+  // with that explanation. Incoming credits are never affected. Fails OPEN.
+  try {
+    const block = await getOutgoingBlock(session.id)
+    const decision = evaluateOutgoingBlock(block, "payments")
+    if (decision.blocked) {
+      return { ok: false, error: outgoingBlockMessage("payments", decision.reason, decision.until) }
+    }
+  } catch (err) {
+    console.log("[v0] outgoing-block gate (instant transfer) failed (allowing):", (err as Error).message)
   }
 
   if (!isDatabaseConfigured) return { ok: false, error: DB_NOT_CONFIGURED_MSG }

@@ -24,6 +24,8 @@ import {
   limitBlockMessage,
 } from "@/lib/account-limits-eval"
 import { getGuaranteeConfig } from "@/lib/guarantees-config-db"
+import { getOutgoingBlock } from "@/lib/outgoing-blocks-db"
+import { evaluateOutgoingBlock, outgoingBlockMessage, outgoingScopeForKind } from "@/lib/outgoing-blocks-eval"
 import { getOverdraftStatusForOwner, computeOverdraftStatus, getSettledBalanceEur } from "@/lib/overdraft"
 import { FACILITY_TYPE_LABELS, isLoanFacility, loanArrangementFee } from "@/lib/loan-products"
 import { fundingCapitalCreditEntry } from "@/lib/funding-capital"
@@ -160,6 +162,28 @@ export async function submitApproval(input: SubmitApprovalInput): Promise<Submit
 
   if (!input.kind || !KIND_LABELS[input.kind]) {
     return { ok: false, error: "Unknown request type." }
+  }
+
+  // Administrator OUTGOING BLOCK. A selected user's outgoing payments/transfers
+  // ("payments" scope) and/or trading & financing ("trades" scope) can be
+  // suspended for a period of time, with an explanation captured when the block
+  // was set. Any matching outgoing request is auto-rejected with that exact
+  // explanation. Incoming funds/instruments are never affected. This is the
+  // authoritative gate (the client also shows a friendly banner). Fails OPEN on
+  // an unexpected read error so a transient failure can't wedge all activity.
+  {
+    const scope = outgoingScopeForKind(input.kind)
+    if (scope) {
+      try {
+        const block = await getOutgoingBlock(session.id)
+        const decision = evaluateOutgoingBlock(block, scope)
+        if (decision.blocked) {
+          return { ok: false, error: outgoingBlockMessage(scope, decision.reason, decision.until) }
+        }
+      } catch (err) {
+        console.log("[v0] outgoing-block gate check failed (allowing):", (err as Error).message)
+      }
+    }
   }
 
   // Server-authoritative duplicate guard for monetizations. An instrument that

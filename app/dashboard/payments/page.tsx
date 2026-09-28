@@ -10,6 +10,7 @@ import {
   limitBlockMessage,
   type LimitFigures,
 } from "@/lib/account-limits-eval"
+import { outgoingBlockMessage } from "@/lib/outgoing-blocks-eval"
 import {
   Send,
   Download,
@@ -29,6 +30,7 @@ import {
   ShieldCheck,
   Undo2,
   FileText,
+  Ban,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -302,6 +304,33 @@ export default function PaymentsPage() {
     }
   }, [])
   const hasBorrowed = (ringfence?.exposureEur ?? 0) > 0.01
+
+  // Administrator OUTGOING BLOCK (payments scope). If an admin has suspended this
+  // user's outgoing payments, surface the explanation and disable the submit.
+  // Read via the non-proxied /api/outgoing-block route; the authoritative gate
+  // still lives server-side in submitApproval.
+  const [outgoingBlock, setOutgoingBlock] = useState<{ blocked: boolean; reason?: string; until?: string | null }>({
+    blocked: false,
+  })
+  useEffect(() => {
+    let cancelled = false
+    fetch("/api/outgoing-block", { credentials: "include", cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled && data?.ok && data.payments) setOutgoingBlock(data.payments)
+      })
+      .catch(() => {
+        /* pre-check simply won't run; the server gate still enforces */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const paymentsBlocked = !!outgoingBlock.blocked
+  const paymentsBlockMessage = paymentsBlocked
+    ? outgoingBlockMessage("payments", outgoingBlock.reason ?? "", outgoingBlock.until ?? null)
+    : ""
+
   const fmtEur = (n: number) =>
     `EUR ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
@@ -688,6 +717,10 @@ export default function PaymentsPage() {
   }
 
   const handleSendPayment = async () => {
+    if (paymentsBlocked) {
+      setFormError(paymentsBlockMessage)
+      return
+    }
     const amountValue = Number.parseFloat(payAmount)
     if (!payBeneficiary.trim()) {
       setFormError("Please enter a beneficiary name.")
@@ -1372,11 +1405,17 @@ export default function PaymentsPage() {
                     </div>
                   )
                 })()}
+                {paymentsBlocked && (
+                  <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3" role="alert">
+                    <Ban className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                    <p className="text-xs text-destructive text-pretty">{paymentsBlockMessage}</p>
+                  </div>
+                )}
                 <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3">
                   <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                   <p className="text-xs text-muted-foreground text-pretty">
                     All outgoing payments require mandatory Administrator approval. Submitting this
-                    form creates a pending request ��� no funds leave your account until an
+                    form creates a pending request — no funds leave your account until an
                     Administrator approves it.
                   </p>
                 </div>
@@ -1396,7 +1435,7 @@ export default function PaymentsPage() {
                 >
                   Cancel
                 </Button>
-                <Button onClick={handleSendPayment} disabled={liveTransfer.insufficient || exceedsOwnFunds}>
+                <Button onClick={handleSendPayment} disabled={liveTransfer.insufficient || exceedsOwnFunds || paymentsBlocked}>
                   <ShieldCheck className="mr-2 h-4 w-4" />
                   {liveTransfer.insufficient
                     ? "Insufficient balance"

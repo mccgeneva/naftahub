@@ -52,6 +52,8 @@ import { logActivity } from "@/app/actions/log-activity"
 import { getGuaranteeConfig } from "@/lib/guarantees-config-db"
 import { gatherGuaranteeProfile } from "@/lib/guarantees-profile"
 import { guaranteeBlockMessage } from "@/lib/guarantees-accumulator"
+import { getOutgoingBlock } from "@/lib/outgoing-blocks-db"
+import { evaluateOutgoingBlock, outgoingBlockMessage } from "@/lib/outgoing-blocks-eval"
 import {
   readInternalLoanTerms,
   outstandingInternalLoan,
@@ -119,6 +121,20 @@ export async function applyForInternalLoan(input: {
   if (!Number.isFinite(amount) || amount <= 0) {
     return { ok: false, error: "Enter a valid loan amount greater than 0." }
   }
+
+  // Administrator OUTGOING BLOCK (trades scope). Internal loans are a financing
+  // operation, so a "trades" block auto-rejects the application with the admin's
+  // stored explanation. Incoming funds/instruments are never affected. Fails OPEN.
+  try {
+    const block = await getOutgoingBlock(session.id)
+    const decision = evaluateOutgoingBlock(block, "trades")
+    if (decision.blocked) {
+      return { ok: false, error: outgoingBlockMessage("trades", decision.reason, decision.until) }
+    }
+  } catch (err) {
+    console.log("[v0] outgoing-block gate (internal loan) failed (allowing):", (err as Error).message)
+  }
+
   const currency = (input.currency || INTERNAL_LOAN_DEFAULT_CURRENCY).toUpperCase()
   const purpose = (input.purpose || "").trim()
   const repaymentPlan = (input.repaymentPlan || "").trim()
