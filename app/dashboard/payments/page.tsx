@@ -100,6 +100,9 @@ type Payment = {
   currency: string
   beneficiary: string
   beneficiaryCountry: string
+  beneficiaryAddress?: string
+  beneficiaryCity?: string
+  beneficiaryPostalCode?: string
   iban: string
   reference: string
   /** For outgoing rows this holds the three-stage key; incoming rows use "received". */
@@ -175,6 +178,12 @@ export default function PaymentsPage() {
   const [payCountry, setPayCountry] = useState("")
   const [paySwift, setPaySwift] = useState("")
   const [payIban, setPayIban] = useState("")
+  // Beneficiary postal address (street, city, postal/ZIP). Country is captured
+  // by payCountry above. These travel with the payment request and are saved
+  // to the Beneficiaries book when "Save this payee" is ticked.
+  const [payAddress, setPayAddress] = useState("")
+  const [payCity, setPayCity] = useState("")
+  const [payPostal, setPayPostal] = useState("")
   const [payReference, setPayReference] = useState("")
   const [payNotes, setPayNotes] = useState("")
   const [selectedPayeeId, setSelectedPayeeId] = useState("manual")
@@ -410,6 +419,9 @@ export default function PaymentsPage() {
         currency: r.currency,
         beneficiary: r.beneficiary,
         beneficiaryCountry: r.beneficiaryCountry,
+        beneficiaryAddress: r.beneficiaryAddress,
+        beneficiaryCity: r.beneficiaryCity,
+        beneficiaryPostalCode: r.beneficiaryPostalCode,
         iban: r.iban,
         reference: r.reference,
         // Canonical three-stage lifecycle: review → initiated → delivered
@@ -674,6 +686,9 @@ export default function PaymentsPage() {
     setPayCountry("")
     setPaySwift("")
     setPayIban("")
+    setPayAddress("")
+    setPayCity("")
+    setPayPostal("")
     setPayReference("")
     setPayNotes("")
     setSelectedPayeeId("manual")
@@ -700,6 +715,9 @@ export default function PaymentsPage() {
       setPayCountry("")
       setPaySwift("")
       setPayIban("")
+      setPayAddress("")
+      setPayCity("")
+      setPayPostal("")
       setPayCurrency("EUR")
       return
     }
@@ -712,6 +730,9 @@ export default function PaymentsPage() {
       setPayCountry(payee.beneficiaryCountry || "")
       setPaySwift(payee.swiftBic || "")
       setPayIban(payee.iban || payee.accountNumber || "")
+      setPayAddress(payee.beneficiaryAddress || "")
+      setPayCity(payee.beneficiaryCity || "")
+      setPayPostal(payee.beneficiaryPostalCode || "")
       setPayCurrency(payee.currency || "EUR")
     }
   }
@@ -862,6 +883,9 @@ export default function PaymentsPage() {
       id: requestId,
       beneficiary,
       beneficiaryCountry: country,
+      beneficiaryAddress: payAddress.trim(),
+      beneficiaryCity: payCity.trim(),
+      beneficiaryPostalCode: payPostal.trim(),
       iban,
       swiftCode: swift,
       reference,
@@ -899,8 +923,9 @@ export default function PaymentsPage() {
           bankName: "",
           bankAddress: "",
           bankCountry: payCountry.trim(),
-          beneficiaryAddress: "",
-          beneficiaryCity: "",
+          beneficiaryAddress: payAddress.trim(),
+          beneficiaryCity: payCity.trim(),
+          beneficiaryPostalCode: payPostal.trim(),
           beneficiaryCountry: payCountry.trim(),
           currency: payCurrency,
           status: "pending",
@@ -1276,6 +1301,35 @@ export default function PaymentsPage() {
                     if (info?.country && !payCountry.trim()) setPayCountry(info.country)
                   }}
                 />
+                <div className="grid gap-2">
+                  <Label htmlFor="ben-address">Beneficiary Address</Label>
+                  <Input
+                    id="ben-address"
+                    placeholder="Street and number, e.g. Rue du Rhône 8"
+                    value={payAddress}
+                    onChange={(e) => setPayAddress(e.target.value)}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="ben-city">City</Label>
+                    <Input
+                      id="ben-city"
+                      placeholder="e.g. Geneva"
+                      value={payCity}
+                      onChange={(e) => setPayCity(e.target.value)}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="ben-postal">Postal / ZIP Code</Label>
+                    <Input
+                      id="ben-postal"
+                      placeholder="e.g. 1204"
+                      value={payPostal}
+                      onChange={(e) => setPayPostal(e.target.value)}
+                    />
+                  </div>
+                </div>
                 <div className="grid gap-2">
                   <Label htmlFor="reference">Payment Reference</Label>
                   <Input id="reference" placeholder="INV-2024-XXX" value={payReference} onChange={(e) => setPayReference(e.target.value)} />
@@ -1794,6 +1848,17 @@ export default function PaymentsPage() {
                 {[
                   ["Direction", viewPaymentTarget.type === "incoming" ? "Incoming" : "Outgoing"],
                   ["Counterparty", viewPaymentTarget.beneficiary],
+                  [
+                    "Beneficiary Address",
+                    [
+                      viewPaymentTarget.beneficiaryAddress,
+                      [viewPaymentTarget.beneficiaryPostalCode, viewPaymentTarget.beneficiaryCity]
+                        .filter(Boolean)
+                        .join(" "),
+                    ]
+                      .filter(Boolean)
+                      .join(", "),
+                  ],
                   ["Country", viewPaymentTarget.beneficiaryCountry],
                   ["Reference", viewPaymentTarget.reference],
                   ["IBAN / Account", viewPaymentTarget.iban],

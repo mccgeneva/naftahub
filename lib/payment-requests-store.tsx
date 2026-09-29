@@ -14,6 +14,10 @@ export interface PaymentRequest {
   uetr: string // SWIFT gpi Unique End-to-End Transaction Reference (UUID v4)
   beneficiary: string
   beneficiaryCountry: string
+  /** Beneficiary postal address (optional; captured on the payment form). */
+  beneficiaryAddress?: string
+  beneficiaryCity?: string
+  beneficiaryPostalCode?: string
   iban: string
   swiftCode: string
   reference: string
