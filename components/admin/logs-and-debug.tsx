@@ -127,9 +127,9 @@ function Chip({
 function Field({ label, value, mono }: { label: string; value: string | null | undefined; mono?: boolean }) {
   if (!value) return null
   return (
-    <div className="rounded-md border border-border bg-secondary/20 px-3 py-2">
+    <div className="min-w-0 rounded-md border border-border bg-secondary/20 px-3 py-2">
       <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className={`mt-0.5 break-words text-sm text-foreground ${mono ? "font-mono text-xs" : ""}`}>{value}</p>
+      <p className={`mt-0.5 break-words [overflow-wrap:anywhere] text-sm text-foreground ${mono ? "font-mono text-xs" : ""}`}>{value}</p>
     </div>
   )
 }
@@ -183,7 +183,7 @@ function LogDetailDrawer({
 
   return (
     <Sheet open={open} onOpenChange={(o) => (!o ? onClose() : undefined)}>
-      <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-lg">
+      <SheetContent className="flex w-full max-w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
         <SheetHeader className="border-b border-border p-4">
           <div className="flex items-center gap-2">
             <SeverityBadge severity={severity} />
@@ -192,16 +192,16 @@ function LogDetailDrawer({
           {subtitle ? <p className="text-xs text-muted-foreground">{subtitle}</p> : null}
         </SheetHeader>
 
-        <ScrollArea className="flex-1">
-          <div className="space-y-4 p-4">
+        <ScrollArea className="min-w-0 flex-1">
+          <div className="min-w-0 space-y-4 p-4">
             {message ? (
-              <div className="rounded-md border border-border bg-secondary/20 px-3 py-2">
+              <div className="min-w-0 rounded-md border border-border bg-secondary/20 px-3 py-2">
                 <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Message</p>
-                <p className="mt-0.5 break-words text-sm text-foreground">{message}</p>
+                <p className="mt-0.5 break-words [overflow-wrap:anywhere] text-sm text-foreground">{message}</p>
               </div>
             ) : null}
 
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
               {fields.map((f) => (
                 <Field key={f.label} label={f.label} value={f.value} mono={f.mono} />
               ))}
@@ -216,9 +216,9 @@ function LogDetailDrawer({
               </div>
             ) : null}
 
-            <div>
+            <div className="min-w-0">
               <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">Raw record</p>
-              <pre className="max-h-72 overflow-auto rounded-md border border-border bg-background p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
+              <pre className="max-h-72 w-full overflow-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-md border border-border bg-background p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
                 {json}
               </pre>
             </div>
