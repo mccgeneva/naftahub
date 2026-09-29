@@ -1496,12 +1496,20 @@ export async function requestPaymentRecall(
       beneficiary?: string
       iban?: string
       reference?: string
+      amount?: number
       total?: number
       uetr?: string
     }
-    // The sender was debited the TOTAL (amount + 2% platform fee); a full recall
-    // makes them whole by refunding exactly that.
-    const refundAmount = Number(original.amount ?? record.total ?? 0)
+    // Unified return/recall policy: only the PRINCIPAL that actually left comes
+    // back. The original outgoing send fee was already earned and is NOT refunded
+    // — same rule as a beneficiary-bank return (adminReturnPaymentFromReceiver).
+    // Refunding the full total (principal + send fee) would hand the customer
+    // back MORE than they sent out.
+    const recallPrincipal = Number(record.amount)
+    const refundAmount =
+      Number.isFinite(recallPrincipal) && recallPrincipal > 0
+        ? recallPrincipal
+        : Number(original.amount ?? record.total ?? 0)
     const refundCurrency = original.currency ?? "EUR"
     if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
       return { ok: false, error: "This payment's amount could not be determined." }
