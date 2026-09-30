@@ -43,8 +43,38 @@ export async function resolveTransferRecipient(
   }
 }
 
-/**
- * The platform transfer directory: a secrets-free list of every *active*
+  /**
+  * Type-ahead recipient search: matches active accounts by name, company or
+  * email once at least 2 characters are typed. Returns up to 8 matches, best
+  * (prefix) matches first. Empty list on any error.
+  */
+  export async function searchTransferRecipients(query: string): Promise<TransferDirectoryEntry[]> {
+  const q = (query ?? "").trim().toLowerCase()
+  if (q.length < 2) return []
+  try {
+  const entries = (await listDynamicUsers())
+  .filter((u) => u.status === "active")
+  .map(toDirectoryEntry)
+  const scored = entries
+  .map((e) => {
+  const fields = [e.displayName, e.company ?? "", e.email].map((f) => f.toLowerCase())
+  const words = fields.flatMap((f) => f.split(/[\s@.·-]+/))
+  let score = 0
+  if (fields.some((f) => f.startsWith(q))) score = 3
+  else if (words.some((w) => w.startsWith(q))) score = 2
+  else if (fields.some((f) => f.includes(q))) score = 1
+  return { e, score }
+  })
+  .filter((s) => s.score > 0)
+  .sort((a, b) => b.score - a.score || a.e.displayName.localeCompare(b.e.displayName))
+  return scored.slice(0, 8).map((s) => s.e)
+  } catch {
+  return []
+  }
+  }
+
+  /**
+  * The platform transfer directory: a secrets-free list of every *active*
  * account that can send/receive internal transfers. Used by the Send Money page
  * to render the quick-pick "Platform accounts" list. Returns an empty list if
  * the database is unreachable.

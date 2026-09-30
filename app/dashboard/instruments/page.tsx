@@ -94,7 +94,7 @@ import {
   MCC_HOLDING_OWNER,
   isMccOwnedAction,
 } from "@/lib/instrument-marketplace"
-import { resolveTransferRecipient } from "@/app/actions/transfers"
+import { resolveTransferRecipient, searchTransferRecipients } from "@/app/actions/transfers"
   import { acceptInstrumentUpgrade, declineInstrumentUpgrade, counterInstrumentUpgrade, withdrawInstrumentUpgradeCounter, requestInstrumentUpgrade } from "@/app/actions/approvals"
 import { INSTRUMENT_UPGRADE_FEE_LABEL, isUpgradeOpen } from "@/lib/instrument-upgrade"
 import {
@@ -404,6 +404,9 @@ export default function InstrumentsPage() {
     "idle" | "checking" | "found" | "notfound" | "self" | "error"
   >("idle")
   const [recipient, setRecipient] = useState<TransferDirectoryEntry | null>(null)
+  const [recipientMatches, setRecipientMatches] = useState<TransferDirectoryEntry[]>([])
+  const [recipientSearching, setRecipientSearching] = useState(false)
+  const [recipientMenuOpen, setRecipientMenuOpen] = useState(false)
   const [transferring, setTransferring] = useState(false)
 
   // Dedicated bank-instrument monetization request (MT760, advance rate, etc.)
@@ -1201,6 +1204,41 @@ export default function InstrumentsPage() {
     setBenBic("")
     setBenBank("")
     setBenAddress("")
+  }
+
+  // Type-ahead: from 2 characters, search active accounts by name, company or
+  // email and show the matches in a menu the customer can pick from.
+  useEffect(() => {
+    const q = actionDestination.trim()
+    if (q.length < 2 || recipientStatus === "found") {
+      setRecipientMatches([])
+      setRecipientSearching(false)
+      return
+    }
+    let cancelled = false
+    setRecipientSearching(true)
+    const t = setTimeout(async () => {
+      try {
+        const res = await searchTransferRecipients(q)
+        if (!cancelled) setRecipientMatches(res)
+      } catch {
+        if (!cancelled) setRecipientMatches([])
+      } finally {
+        if (!cancelled) setRecipientSearching(false)
+      }
+    }, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [actionDestination, recipientStatus])
+
+  const pickRecipient = (entry: TransferDirectoryEntry) => {
+    setActionDestination(entry.email)
+    setRecipient(entry)
+    setRecipientStatus("found")
+    setRecipientMatches([])
+    setRecipientMenuOpen(false)
   }
 
   // Step 1 — verify the recipient email resolves to a real, active account and
@@ -2782,28 +2820,86 @@ export default function InstrumentsPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="action-destination">For further credit to (recipient account email)</Label>
+                <Label htmlFor="action-destination">For further credit to (customer name or email)</Label>
                 <div className="flex gap-2">
-                  <Input
-                    id="action-destination"
-                    type="email"
-                    inputMode="email"
-                    autoComplete="off"
-                    value={actionDestination}
-                    onChange={(e) => {
-                      setActionDestination(e.target.value)
-                      // Any edit invalidates a prior verification — force re-check.
-                      setRecipient(null)
-                      setRecipientStatus("idle")
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault()
-                        void verifyRecipient()
-                      }
-                    }}
-                    placeholder="name@example.com"
-                  />
+                  <div className="relative min-w-0 flex-1">
+                    <Input
+                      id="action-destination"
+                      type="text"
+                      role="combobox"
+                      aria-expanded={recipientMenuOpen && recipientMatches.length > 0}
+                      aria-controls="recipient-matches"
+                      aria-autocomplete="list"
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      data-1p-ignore
+                      data-lpignore="true"
+                      className="text-base"
+                      value={actionDestination}
+                      onChange={(e) => {
+                        setActionDestination(e.target.value)
+                        // Any edit invalidates a prior verification — force re-check.
+                        setRecipient(null)
+                        setRecipientStatus("idle")
+                        setRecipientMenuOpen(true)
+                      }}
+                      onFocus={() => setRecipientMenuOpen(true)}
+                      onBlur={() => setTimeout(() => setRecipientMenuOpen(false), 150)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                          e.preventDefault()
+                          if (recipientMatches.length === 1) pickRecipient(recipientMatches[0])
+                          else void verifyRecipient()
+                        } else if (e.key === "Escape") {
+                          setRecipientMenuOpen(false)
+                        }
+                      }}
+                      placeholder="Type 2+ letters of a name or email"
+                    />
+                    {recipientMenuOpen &&
+                      recipientStatus !== "found" &&
+                      actionDestination.trim().length >= 2 && (
+                        <div
+                          id="recipient-matches"
+                          role="listbox"
+                          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg"
+                        >
+                          {recipientSearching && recipientMatches.length === 0 ? (
+                            <p className="px-3 py-3 text-sm text-muted-foreground">Searching…</p>
+                          ) : recipientMatches.length === 0 ? (
+                            <p className="px-3 py-3 text-sm text-muted-foreground">No matching customers.</p>
+                          ) : (
+                            recipientMatches.map((m) => (
+                              <button
+                                key={m.id ?? m.email}
+                                type="button"
+                                role="option"
+                                aria-selected={false}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => pickRecipient(m)}
+                                className="flex min-h-11 w-full items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-accent focus:bg-accent focus:outline-none"
+                              >
+                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
+                                  {m.initials}
+                                </span>
+                                <span className="min-w-0">
+                                  <span className="block truncate text-sm font-medium text-popover-foreground">
+                                    {m.displayName}
+                                  </span>
+                                  <span className="block truncate text-xs text-muted-foreground">
+                                    {m.company ? `${m.company} · ` : ""}
+                                    {m.email}
+                                  </span>
+                                </span>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+                  </div>
                   <Button
                     type="button"
                     variant="outline"
