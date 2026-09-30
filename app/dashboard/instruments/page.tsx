@@ -95,7 +95,8 @@ import {
   isMccOwnedAction,
 } from "@/lib/instrument-marketplace"
 import { resolveTransferRecipient, searchTransferRecipients, resolveBeneficiaryIban } from "@/app/actions/transfers"
-import { validateIban, validateBic } from "@/lib/iban-swift"
+import { validateIban, validateBic, lookupBankByIban } from "@/lib/iban-swift"
+import { resolveIbanExternal } from "@/app/actions/bank-resolve"
   import { acceptInstrumentUpgrade, declineInstrumentUpgrade, counterInstrumentUpgrade, withdrawInstrumentUpgradeCounter, requestInstrumentUpgrade } from "@/app/actions/approvals"
 import { INSTRUMENT_UPGRADE_FEE_LABEL, isUpgradeOpen } from "@/lib/instrument-upgrade"
 import {
@@ -1232,6 +1233,45 @@ export default function InstrumentsPage() {
     return () => {
       cancelled = true
       clearTimeout(t)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalizedBenIban, benIbanIsTreasury, benIbanCheck.valid])
+  // A non-Treasury IBAN must never keep the Barclays Treasury bank details:
+  // drop any left-over Treasury values, then resolve the real bank from the IBAN.
+  const [benBankLookup, setBenBankLookup] = useState(false)
+  useEffect(() => {
+    if (benIbanIsTreasury || !benIbanCheck.valid) return
+    const T = INSTRUMENT_TREASURY_ACCOUNT
+    const staleBic = benBic.trim().toUpperCase().startsWith("BARCGB")
+    const staleBank = benBank.trim() === T.bank
+    const staleAddress = benAddress.trim() === T.address
+    if (staleBic) setBenBic("")
+    if (staleBank) setBenBank("")
+    if (staleAddress) setBenAddress("")
+    if (benName.trim() === T.holder) setBenName("")
+    let cancelled = false
+    setBenBankLookup(true)
+    const iban = normalizedBenIban
+    ;(async () => {
+      try {
+        const curated = await lookupBankByIban(iban)
+        const curatedIsReal = !!curated?.bic
+        const external = curatedIsReal ? null : await resolveIbanExternal(iban).catch(() => null)
+        if (cancelled) return
+        const bic = curated?.bic || external?.bic
+        const name = curatedIsReal ? curated?.name : external?.name
+        const addr = curatedIsReal
+          ? [curated?.address, curated?.postalCode, curated?.city, curated?.country].filter(Boolean).join(", ")
+          : [external?.address, external?.postalCode, external?.city].filter(Boolean).join(", ")
+        if (bic) setBenBic((cur) => (!cur.trim() || cur.trim().toUpperCase().startsWith("BARCGB") ? bic : cur))
+        if (name) setBenBank((cur) => (!cur.trim() || cur.trim() === T.bank ? name : cur))
+        if (addr) setBenAddress((cur) => (!cur.trim() || cur.trim() === T.address ? addr : cur))
+      } finally {
+        if (!cancelled) setBenBankLookup(false)
+      }
+    })()
+    return () => {
+      cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [normalizedBenIban, benIbanIsTreasury, benIbanCheck.valid])
@@ -2893,7 +2933,7 @@ export default function InstrumentsPage() {
                     spellCheck={false}
                     value={benIban}
                     onChange={(e) => setBenIban(e.target.value)}
-                    placeholder={INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay}
+                    placeholder="Beneficiary IBAN"
                   />
                   {benIbanTouched && !benIbanIsTreasury && !benIbanCheck.valid && (
                     <p className="flex items-start gap-1.5 text-xs leading-relaxed text-destructive">
@@ -2944,19 +2984,22 @@ export default function InstrumentsPage() {
                     spellCheck={false}
                     value={benBic}
                     onChange={(e) => setBenBic(e.target.value)}
-                    placeholder={INSTRUMENT_TREASURY_ACCOUNT.bic}
+                    placeholder="8 or 11 characters"
                   />
+                  {benBankLookup && (
+                    <p className="text-xs text-muted-foreground">Looking up the bank for this IBAN…</p>
+                  )}
                   {benBic.trim().length > 0 && !benBicOk && (
                     <p className="text-xs text-destructive">{benBicCheck.error ?? "Enter a valid 8 or 11 character SWIFT/BIC."}</p>
                   )}
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="ben-bank">Bank name</Label>
-                  <Input id="ben-bank" className="text-base" autoComplete="off" value={benBank} onChange={(e) => setBenBank(e.target.value)} placeholder={INSTRUMENT_TREASURY_ACCOUNT.bank} />
+                  <Input id="ben-bank" className="text-base" autoComplete="off" value={benBank} onChange={(e) => setBenBank(e.target.value)} placeholder="Beneficiary bank name" />
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="ben-address">Bank address</Label>
-                  <Input id="ben-address" className="text-base" autoComplete="off" value={benAddress} onChange={(e) => setBenAddress(e.target.value)} placeholder={INSTRUMENT_TREASURY_ACCOUNT.address} />
+                  <Input id="ben-address" className="text-base" autoComplete="off" value={benAddress} onChange={(e) => setBenAddress(e.target.value)} placeholder="Street, city, country" />
                 </div>
               </div>
 
