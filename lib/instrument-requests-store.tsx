@@ -7,6 +7,7 @@ import { useServerRequestList } from "@/lib/use-server-request-list"
 import {
   cancelMyApproval,
   transferMyInstrument,
+  transferMyInstrumentExternal,
   deleteMyInstrument,
   requestInstrumentExit,
   withdrawInstrumentExit,
@@ -216,6 +217,11 @@ interface InstrumentRequestsContextValue {
     approvalId: string,
     recipientEmail: string,
   ) => Promise<{ ok: boolean; error?: string; recipientName?: string }>
+  /** Transfer an ACTIVE instrument out to an external (non-platform) bank account. */
+  transferInstrumentExternal: (
+    approvalId: string,
+    beneficiary: { name: string; iban: string; bic: string; bank: string; address?: string },
+  ) => Promise<{ ok: boolean; error?: string; beneficiaryLabel?: string }>
   /** Re-fetch the authoritative portfolio from the server (e.g. after an upgrade). */
   refresh: () => Promise<Instrument[] | null>
   hydrated: boolean
@@ -405,6 +411,23 @@ export function InstrumentRequestsProvider({ children }: { children: React.React
     return { ok: true, recipientName: res.recipientName }
   }
 
+  const transferInstrumentExternal: InstrumentRequestsContextValue["transferInstrumentExternal"] = async (
+    approvalId,
+    beneficiary,
+  ) => {
+    const res = await transferMyInstrumentExternal(approvalId, beneficiary)
+    if (!res.ok) return { ok: false, error: res.error }
+    setInstruments(
+      instruments.map((i) =>
+        i.approvalId === approvalId
+          ? { ...i, status: "transferred", decisionNote: `Transferred to ${res.beneficiaryLabel}` }
+          : i,
+      ),
+    )
+    void refresh()
+    return { ok: true, beneficiaryLabel: res.beneficiaryLabel }
+  }
+
   return (
     <InstrumentRequestsContext.Provider
       value={{
@@ -418,6 +441,7 @@ export function InstrumentRequestsProvider({ children }: { children: React.React
           withdrawExit,
           returnInstrument,
           transferInstrument,
+          transferInstrumentExternal,
           refresh,
           hydrated,
       }}

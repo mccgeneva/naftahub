@@ -2,6 +2,43 @@
 
 import type { TransferDirectoryEntry } from "@/lib/users"
 import { getDynamicUserByEmail, listDynamicUsers } from "@/lib/admin-users-db"
+import { extractCurrencyBankingCoordinates, currenciesWithBankingRows } from "@/lib/banking-coordinates"
+
+export type BeneficiaryIbanLookup =
+  | { status: "internal"; recipient: TransferDirectoryEntry; currency: string; bankName: string | null }
+  | { status: "external" }
+  | { status: "ambiguous" }
+
+/**
+ * Decide whether a beneficiary IBAN belongs to a platform customer (any of
+ * their master-account IBANs, primary or per-currency) or is an external bank
+ * account. Exactly one owning active customer → "internal"; none → "external";
+ * several distinct owners → "ambiguous" (never guess who to credit).
+ */
+export async function resolveBeneficiaryIban(raw: string): Promise<BeneficiaryIbanLookup> {
+  const iban = (raw ?? "").replace(/[\s-]/g, "").toUpperCase()
+  if (iban.length < 15) return { status: "external" }
+  try {
+    const users = (await listDynamicUsers()).filter((u) => u.status === "active")
+    const hits: { user: (typeof users)[number]; currency: string; bankName: string | null }[] = []
+    for (const u of users) {
+      const rows = u.profile?.banking
+      if (!rows || rows.length === 0) continue
+      for (const cur of ["EUR", ...currenciesWithBankingRows(rows)]) {
+        const c = extractCurrencyBankingCoordinates(rows, cur)
+        const own = (c.iban ?? "").replace(/[\s-]/g, "").toUpperCase()
+        if (own && own === iban) hits.push({ user: u, currency: cur, bankName: c.bankName ?? null })
+      }
+    }
+    const owners = Array.from(new Set(hits.map((h) => h.user.id)))
+    if (owners.length === 0) return { status: "external" }
+    if (owners.length > 1) return { status: "ambiguous" }
+    const hit = hits[0]
+    return { status: "internal", recipient: toDirectoryEntry(hit.user), currency: hit.currency, bankName: hit.bankName }
+  } catch {
+    return { status: "external" }
+  }
+}
 
 function toDirectoryEntry(dyn: {
   id: string

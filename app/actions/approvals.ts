@@ -2384,7 +2384,7 @@ export async function deleteMyInstrument(
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────��───────────────────────────────────────
 // Instrument EXIT ("settle out") — admin-negotiated with a cashback %.
 //
 // Unlike `deleteMyInstrument` (instant, applies only the customer's PRESET
@@ -7812,7 +7812,67 @@ export async function transferMyInstrument(
   }
 }
 
-// --- Client accept / decline of an Administrator-proposed instrument upgrade -
+  /**
+   * Transfer an ACTIVE instrument OUT of the platform to an external bank
+   * account (beneficiary IBAN not owned by any platform customer). The
+   * instrument leaves the holder's portfolio (marked Transferred) and the
+   * beneficiary coordinates are recorded for the SWIFT message / audit trail.
+   */
+  export async function transferMyInstrumentExternal(
+    approvalId: string,
+    beneficiary: { name: string; iban: string; bic: string; bank: string; address?: string },
+  ): Promise<{ ok: true; beneficiaryLabel: string } | { ok: false; error: string }> {
+    const session = await resolveCurrentSession()
+    if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
+    const name = (beneficiary?.name ?? "").trim()
+    const iban = (beneficiary?.iban ?? "").replace(/[\s-]/g, "").toUpperCase()
+    const bic = (beneficiary?.bic ?? "").replace(/\s+/g, "").toUpperCase()
+    const bank = (beneficiary?.bank ?? "").trim()
+    if (!name || !iban || !bic || !bank) {
+      return { ok: false, error: "Complete the beneficiary name, IBAN, SWIFT/BIC and bank name." }
+    }
+    const senderOwnerId = session.dataOwnerId
+    const record = await getApprovalById(approvalId)
+    if (!record || record.kind !== "instrument") return { ok: false, error: "Instrument not found." }
+    if (record.userId !== senderOwnerId) {
+      return { ok: false, error: "You can only transfer instruments held in your own portfolio." }
+    }
+    if (record.status !== "approved") return { ok: false, error: "Only active instruments can be transferred." }
+    try {
+      const engaged = await instrumentEngagementReason(record, senderOwnerId)
+      if (engaged) return { ok: false, error: `This instrument is pledged to ${engaged} and can't leave the portfolio.` }
+    } catch {
+      return { ok: false, error: "Couldn't verify the instrument is free to transfer. Please try again." }
+    }
+    const label = `${name} — ${bank} (external, IBAN ${iban})`
+    const senderName = session.profile.fullName || session.profile.company || session.profile.email
+    try {
+      const moved = await markApprovalTransferred(approvalId, senderOwnerId, label)
+      if (!moved) return { ok: false, error: "This instrument is no longer available to transfer." }
+      const p = (record.payload ?? {}) as Record<string, unknown>
+      await updateApprovalPayload(approvalId, {
+        ...p,
+        externalTransfer: { name, iban, bic, bank, address: beneficiary.address?.trim() || null, at: new Date().toISOString() },
+      }).catch(() => null)
+      await logActivity({
+        action: `Transferred ${record.title} to external account ${name}`,
+        category: "Bank Instruments",
+        user: senderName,
+        details: {
+          summary: `Client transferred ${record.title} (${record.currency ?? ""} ${(record.amount ?? 0).toLocaleString("en-US")}) out of the platform to ${name} at ${bank}, IBAN ${iban}, BIC ${bic}.`,
+          referenceId: approvalId,
+          beneficiary: label,
+          action: "Transferred (external)",
+        },
+      })
+      return { ok: true, beneficiaryLabel: label }
+    } catch (err) {
+      console.log("[v0] transferMyInstrumentExternal failed:", (err as Error).message)
+      return { ok: false, error: "The transfer could not be completed. Please try again." }
+    }
+  }
+
+  // --- Client accept / decline of an Administrator-proposed instrument upgrade -
 
 export type InstrumentUpgradeResult =
   | { ok: true; newInstrumentId?: string; refunded?: number; currency?: string }

@@ -94,7 +94,8 @@ import {
   MCC_HOLDING_OWNER,
   isMccOwnedAction,
 } from "@/lib/instrument-marketplace"
-import { resolveTransferRecipient, searchTransferRecipients } from "@/app/actions/transfers"
+import { resolveTransferRecipient, searchTransferRecipients, resolveBeneficiaryIban } from "@/app/actions/transfers"
+import { validateIban, validateBic } from "@/lib/iban-swift"
   import { acceptInstrumentUpgrade, declineInstrumentUpgrade, counterInstrumentUpgrade, withdrawInstrumentUpgradeCounter, requestInstrumentUpgrade } from "@/app/actions/approvals"
 import { INSTRUMENT_UPGRADE_FEE_LABEL, isUpgradeOpen } from "@/lib/instrument-upgrade"
 import {
@@ -204,7 +205,7 @@ export default function InstrumentsPage() {
   // Read-only portfolio: clients can no longer create, cancel, or delete
   // instruments. Bank instruments are issued and managed exclusively by the
   // administrator; the client view only displays them.
-  const { instruments, transferInstrument, addInstrument, deleteInstrument, returnInstrument, requestExit, withdrawExit, refresh: refreshInstruments } =
+  const { instruments, transferInstrument, transferInstrumentExternal, addInstrument, deleteInstrument, returnInstrument, requestExit, withdrawExit, refresh: refreshInstruments } =
     useInstrumentRequests()
   void deleteInstrument
   const { totalIn, balanceFor, addDebit, entries: ledgerEntries, refresh: refreshLedger, hydrated: ledgerHydrated } = useLedger()
@@ -1195,8 +1196,52 @@ export default function InstrumentsPage() {
   const normalizedBenIban = benIban.replace(/\s+/g, "").toUpperCase()
   const benIbanTouched = normalizedBenIban.length > 0
   const benIbanIsTreasury = normalizedBenIban === INSTRUMENT_TREASURY_ACCOUNT.iban
-  const benBicOk = benBic.replace(/\s+/g, "").toUpperCase().startsWith("BARCGB")
-  const benPanelComplete = benIbanIsTreasury && benBicOk && benName.trim().length > 0 && benBank.trim().length > 0
+  const benIbanCheck = validateIban(normalizedBenIban)
+  const benBicCheck = validateBic(benBic)
+  const benBicOk = benBicCheck.valid
+  // Where the IBAN routes: MCC Treasury (FFC a customer), a platform customer's
+  // own account (internal credit), or an outside bank (external transfer).
+  const [ibanRoute, setIbanRoute] = useState<"idle" | "checking" | "treasury" | "internal" | "external" | "ambiguous">("idle")
+  useEffect(() => {
+    if (benIbanIsTreasury) {
+      setIbanRoute("treasury")
+      return
+    }
+    if (!benIbanCheck.valid) {
+      setIbanRoute("idle")
+      return
+    }
+    let cancelled = false
+    setIbanRoute("checking")
+    const t = setTimeout(async () => {
+      try {
+        const res = await resolveBeneficiaryIban(normalizedBenIban)
+        if (cancelled) return
+        if (res.status === "internal") {
+          setRecipient(res.recipient)
+          setRecipientStatus("found")
+          setActionDestination(res.recipient.email)
+          if (!benName.trim()) setBenName(res.recipient.displayName)
+          if (!benBank.trim() && res.bankName) setBenBank(res.bankName)
+        }
+        setIbanRoute(res.status)
+      } catch {
+        if (!cancelled) setIbanRoute("external")
+      }
+    }, 300)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalizedBenIban, benIbanIsTreasury, benIbanCheck.valid])
+  const benPanelComplete =
+    (benIbanIsTreasury || benIbanCheck.valid) &&
+    benBicOk &&
+    benName.trim().length > 0 &&
+    benBank.trim().length > 0 &&
+    (ibanRoute === "treasury" || ibanRoute === "internal" || ibanRoute === "external")
+  const needsRecipient = ibanRoute !== "external"
   const fillTreasuryAccount = () => {
     setBenName(INSTRUMENT_TREASURY_ACCOUNT.holder)
     setBenIban(INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay)
@@ -1218,6 +1263,7 @@ export default function InstrumentsPage() {
     setBenBic("")
     setBenBank("")
     setBenAddress("")
+    setIbanRoute("idle")
   }
 
   // Type-ahead: from 2 characters, search active accounts by name, company or
@@ -1282,7 +1328,8 @@ export default function InstrumentsPage() {
   // Step 2 — confirm the transfer. The instrument moves immediately: it leaves
   // this portfolio (shown "Transferred") and becomes active for the recipient.
   const confirmInstrumentAction = async () => {
-    if (!actionTarget || !recipient) return
+    if (!actionTarget) return
+    if (needsRecipient && !recipient) return
     const { instrument } = actionTarget
     // Defense-in-depth: never let an engaged instrument (pledged to a
     // monetization, leverage line, yield/PPP, or loan) leave the portfolio, even
@@ -1297,7 +1344,7 @@ export default function InstrumentsPage() {
     }
     if (!benPanelComplete) {
       toast.error("Beneficiary bank details not accepted", {
-        description: `Instrument transfers are only accepted into the MCC Treasury instruments account at Barclays (IBAN ${INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay}, BIC ${INSTRUMENT_TREASURY_ACCOUNT.bic}).`,
+        description: "Enter a valid IBAN, SWIFT/BIC, account holder and bank name for the beneficiary.",
       })
       return
     }
@@ -1316,13 +1363,30 @@ export default function InstrumentsPage() {
       })
       return
     }
+    const ibanDisplay = benIbanCheck.formatted || normalizedBenIban
     setTransferring(true)
-    const res = await transferInstrument(instrument.approvalId, recipient.email)
+    const res =
+      needsRecipient && recipient
+        ? await transferInstrument(instrument.approvalId, recipient.email)
+        : await (async () => {
+            const r = await transferInstrumentExternal(instrument.approvalId!, {
+              name: benName.trim(),
+              iban: normalizedBenIban,
+              bic: benBicCheck.normalized,
+              bank: benBank.trim(),
+              address: benAddress.trim(),
+            })
+            return { ...r, recipientName: benName.trim() }
+          })()
     setTransferring(false)
     if (!res.ok) {
       toast.error("Transfer failed", { description: res.error })
       return
     }
+    const creditEmail = needsRecipient && recipient ? recipient.email : ""
+    const creditLabel = creditEmail
+      ? `${res.recipientName} (${creditEmail})`
+      : `${benName.trim()} — external account at ${benBank.trim()}`
     // Charge the 0.2% transfer fee immediately (deterministic id = idempotent).
     if (transferFee > 0) {
       addDebit({
@@ -1334,29 +1398,32 @@ export default function InstrumentsPage() {
         counterparty: `Instrument transfer fee — ${instrument.type} ${instrument.id}`,
         reference: instrument.id,
         category: "Instrument Transfer Fee",
-        comment: `0.2% assign/transfer fee on ${formatCurrency(instrument.faceValue, instrument.currency)} face value, charged upfront on transfer of ${instrument.type} ${instrument.id} via ${benName.trim()} (${benBank.trim()}, IBAN ${INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay}, BIC ${benBic.trim().toUpperCase()}) for further credit to ${res.recipientName} (${recipient.email}).`,
+        comment: `0.2% assign/transfer fee on ${formatCurrency(instrument.faceValue, instrument.currency)} face value, charged upfront on transfer of ${instrument.type} ${instrument.id} via ${benName.trim()} (${benBank.trim()}, IBAN ${ibanDisplay}, BIC ${benBicCheck.normalized}) for further credit to ${creditLabel}.`,
       })
     }
     logActivity({
       action: `Transferred ${instrument.type} ${instrument.id} (${formatCurrency(instrument.faceValue, instrument.currency)}) to ${res.recipientName}`,
       category: "Bank Instruments",
       details: {
-        summary: `Client transferred the ${instrument.typeFull} (${instrument.type}) ${instrument.id} with a face value of ${formatCurrency(instrument.faceValue, instrument.currency)} to ${res.recipientName} (${recipient.email}). The instrument left this portfolio and is now active for the recipient.`,
+        summary: `Client transferred the ${instrument.typeFull} (${instrument.type}) ${instrument.id} with a face value of ${formatCurrency(instrument.faceValue, instrument.currency)} to ${creditLabel}. ${creditEmail ? "The instrument left this portfolio and is now active for the recipient." : "The instrument left the platform to an external bank account."}`,
         referenceId: instrument.id,
         instrumentType: `${instrument.type} — ${instrument.typeFull}`,
         faceValue: formatCurrency(instrument.faceValue, instrument.currency),
         issuingBank: instrument.issuer,
-        recipient: `${res.recipientName} — ${recipient.email}`,
+        recipient: creditLabel,
+        route: ibanRoute === "treasury" ? "MCC Treasury (further credit)" : ibanRoute === "internal" ? "Internal platform account" : "External bank account",
         beneficiaryAccount: `${benName.trim()} — ${benBank.trim()}`,
-        beneficiaryIban: INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay,
-        beneficiaryBic: benBic.trim().toUpperCase(),
+        beneficiaryIban: ibanDisplay,
+        beneficiaryBic: benBicCheck.normalized,
         beneficiaryAddress: benAddress.trim() || "—",
-        furtherCreditTo: `${res.recipientName} — ${recipient.email}`,
+        furtherCreditTo: creditLabel,
         status: "Transferred",
       },
     })
     toast.success("Instrument transferred", {
-      description: `${instrument.id} is now in ${res.recipientName}'s portfolio. Your SWIFT ${transferMtType} printout is ready to download.`,
+      description: creditEmail
+        ? `${instrument.id} is now in ${res.recipientName}'s portfolio. Your SWIFT ${transferMtType} printout is ready to download.`
+        : `${instrument.id} was sent to ${benName.trim()} at ${benBank.trim()}. Your SWIFT ${transferMtType} printout is ready to download.`,
     })
     try {
       const swift = buildInstrumentTransferSwift({
@@ -1373,19 +1440,19 @@ export default function InstrumentsPage() {
         expiryDate: instrument.expiryDate,
         orderingName: instrument.owner || "MCC CAPITAL CLIENT",
         beneficiaryName: benName.trim(),
-        beneficiaryIban: INSTRUMENT_TREASURY_ACCOUNT.iban,
-        beneficiaryBic: benBic.trim(),
+        beneficiaryIban: normalizedBenIban,
+        beneficiaryBic: benBicCheck.normalized,
         beneficiaryBank: benBank.trim(),
         beneficiaryAddress: benAddress.trim(),
-        furtherCreditName: res.recipientName ?? recipient.displayName ?? recipient.email,
-        furtherCreditEmail: recipient.email,
+        furtherCreditName: creditEmail ? (res.recipientName ?? creditEmail) : benName.trim(),
+        furtherCreditEmail: creditEmail,
       })
       show(generateSwiftMessagePdf(swift))
       logActivity({
         action: `Downloaded SWIFT ${transferMtType} printout for ${instrument.type} ${instrument.id}`,
         category: "Bank Instruments",
         details: {
-          summary: `SWIFT ${transferMtType} transmission copy issued for the transfer of ${instrument.id} to ${INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay} for further credit to ${res.recipientName}.`,
+          summary: `SWIFT ${transferMtType} transmission copy issued for the transfer of ${instrument.id} to ${ibanDisplay} for further credit to ${creditLabel}.`,
           referenceId: swift.id,
           messageType: transferMtType,
           uetr: swift.uetr ?? "—",
@@ -2828,19 +2895,42 @@ export default function InstrumentsPage() {
                     onChange={(e) => setBenIban(e.target.value)}
                     placeholder={INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay}
                   />
-                  {benIbanTouched && !benIbanIsTreasury && (
+                  {benIbanTouched && !benIbanIsTreasury && !benIbanCheck.valid && (
                     <p className="flex items-start gap-1.5 text-xs leading-relaxed text-destructive">
                       <XCircle className="mt-px h-3.5 w-3.5 shrink-0" />
+                      <span>{benIbanCheck.error ?? "Enter a valid IBAN."}</span>
+                    </p>
+                  )}
+                  {ibanRoute === "checking" && (
+                    <p className="text-xs text-muted-foreground">Checking who holds this account…</p>
+                  )}
+                  {ibanRoute === "treasury" && (
+                    <p className="flex items-center gap-1.5 text-xs text-green-600">
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                      MCC Treasury instruments account — choose the customer to credit below
+                    </p>
+                  )}
+                  {ibanRoute === "internal" && recipient && (
+                    <p className="flex items-start gap-1.5 text-xs leading-relaxed text-green-600">
+                      <CheckCircle2 className="mt-px h-3.5 w-3.5 shrink-0" />
                       <span>
-                        Instruments can only be transferred to the MCC Treasury Barclays instruments account{" "}
-                        <span className="font-mono">{INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay}</span>.
+                        Internal platform account — {recipient.displayName}
+                        {recipient.company ? ` (${recipient.company})` : ""}. The instrument moves straight to their portfolio.
                       </span>
                     </p>
                   )}
-                  {benIbanIsTreasury && (
-                    <p className="flex items-center gap-1.5 text-xs text-green-600">
-                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                      MCC Treasury instruments account — Barclays
+                  {ibanRoute === "external" && (
+                    <p className="flex items-start gap-1.5 text-xs leading-relaxed text-amber-600">
+                      <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        External bank account — not held on the platform. The instrument will leave your portfolio and be sent to this bank by SWIFT.
+                      </span>
+                    </p>
+                  )}
+                  {ibanRoute === "ambiguous" && (
+                    <p className="flex items-start gap-1.5 text-xs leading-relaxed text-destructive">
+                      <XCircle className="mt-px h-3.5 w-3.5 shrink-0" />
+                      <span>This IBAN is registered to more than one platform account. Contact MCC before transferring.</span>
                     </p>
                   )}
                 </div>
@@ -2857,7 +2947,7 @@ export default function InstrumentsPage() {
                     placeholder={INSTRUMENT_TREASURY_ACCOUNT.bic}
                   />
                   {benBic.trim().length > 0 && !benBicOk && (
-                    <p className="text-xs text-destructive">The SWIFT/BIC must be the Barclays code ({INSTRUMENT_TREASURY_ACCOUNT.bic}).</p>
+                    <p className="text-xs text-destructive">{benBicCheck.error ?? "Enter a valid 8 or 11 character SWIFT/BIC."}</p>
                   )}
                 </div>
                 <div className="flex flex-col gap-1.5">
@@ -2870,6 +2960,7 @@ export default function InstrumentsPage() {
                 </div>
               </div>
 
+              {ibanRoute === "treasury" && (
               <div className="space-y-2">
                 <Label htmlFor="action-destination">For further credit to (customer name or email)</Label>
                 <div className="flex gap-2">
@@ -2992,6 +3083,7 @@ export default function InstrumentsPage() {
                   </p>
                 )}
               </div>
+              )}
               <div className="space-y-2 rounded-lg border border-border p-4">
                 <Label htmlFor="transfer-mt-type">SWIFT message type</Label>
                 <Select
@@ -3020,7 +3112,10 @@ export default function InstrumentsPage() {
                 <Button
                   onClick={() => void confirmInstrumentAction()}
                   disabled={
-                    recipientStatus !== "found" || !recipient || transferring || !canCoverTransferFee || !benPanelComplete
+                    (needsRecipient && (recipientStatus !== "found" || !recipient)) ||
+                    transferring ||
+                    !canCoverTransferFee ||
+                    !benPanelComplete
                   }
                 >
                   {transferring
@@ -3029,7 +3124,11 @@ export default function InstrumentsPage() {
                       ? "Insufficient balance for fee"
                       : !benPanelComplete
                         ? "Complete beneficiary bank details"
-                        : "Confirm Transfer"}
+                        : needsRecipient && !recipient
+                          ? "Choose the customer to credit"
+                          : ibanRoute === "external"
+                            ? "Confirm external transfer"
+                            : "Confirm Transfer"}
                 </Button>
               </DialogFooter>
             </>
