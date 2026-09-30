@@ -465,13 +465,27 @@ export function useBankAccounts(): BankAccount[] {
   const [resolvedMaster, setResolvedMaster] = useState<MyMasterBanking | null>(null)
   useEffect(() => {
     let cancelled = false
-    getMyMasterBanking()
-      .then((b) => {
-        if (!cancelled) setResolvedMaster(b)
-      })
-      .catch(() => {
-        // Transient failure — keep the own-profile fallback below.
-      })
+    // A plain /api route, not the Server Action: on the installed PWA a stale
+    // session makes the action fail silently, and joint members (who have no
+    // banking of their own) then saw the hardcoded default master IBAN.
+    const hasCoords = (b: MyMasterBanking | null | undefined) => !!(b && (b.iban || b.swift || b.bankName))
+    const fetchOnce = async (): Promise<MyMasterBanking | null> => {
+      const res = await fetch("/api/my-banking", { cache: "no-store", credentials: "same-origin" })
+      if (!res.ok) return null
+      return (await res.json()) as MyMasterBanking
+    }
+    ;(async () => {
+      let b: MyMasterBanking | null = null
+      for (let attempt = 0; attempt < 2 && !hasCoords(b); attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 800))
+        b = await fetchOnce().catch(() => null)
+      }
+      if (!hasCoords(b)) b = await getMyMasterBanking().catch(() => null)
+      if (!cancelled && b) setResolvedMaster(b)
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [currentUser.id])
   // Use the resolved master once available; until then fall back to the user's
   // own banking rows so the card is never blank on first paint.

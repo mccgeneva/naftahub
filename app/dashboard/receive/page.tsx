@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import useSWR from "swr"
 import {
   Copy,
@@ -66,8 +66,8 @@ function formatSenderBank(info: BankInfo): string {
   return [info.name, info.bic ? `SWIFT ${info.bic}` : "", where].filter(Boolean).join(" · ")
 }
 
-// MCC Capital master receiving account (matches the Bank Accounts section)
-const receivingAccount = {
+// Fallback only — overridden by the customer's real master banking from /api/my-banking.
+const DEFAULT_RECEIVING_ACCOUNT = {
   accountName: "MCC Capital",
   bankName: "Banking Circle - German Branch",
   iban: "DE73 2022 0800 0029 2908 19",
@@ -85,6 +85,39 @@ export default function ReceiveFundsPage() {
   // entity (their company, else full name) — not the platform label "MCC
   // Capital". Payers must see the account holder as this user's own company.
   const currentUser = useCurrentUser()
+  const [myBanking, setMyBanking] = useState<{ iban?: string; swift?: string; bankName?: string; accountCurrency?: string } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 800))
+        try {
+          const res = await fetch("/api/my-banking", { cache: "no-store", credentials: "same-origin" })
+          if (!res.ok) continue
+          const data = await res.json()
+          if (data?.iban) {
+            if (!cancelled) setMyBanking(data)
+            return
+          }
+        } catch {
+          // retry once
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [currentUser.id])
+  const receivingAccount = myBanking?.iban
+    ? {
+        ...DEFAULT_RECEIVING_ACCOUNT,
+        iban: myBanking.iban,
+        swift: myBanking.swift || "",
+        bankName: myBanking.bankName || "",
+        currency: myBanking.accountCurrency || DEFAULT_RECEIVING_ACCOUNT.currency,
+        bankAddress: myBanking.bankName && myBanking.bankName !== DEFAULT_RECEIVING_ACCOUNT.bankName ? "" : DEFAULT_RECEIVING_ACCOUNT.bankAddress,
+      }
+    : DEFAULT_RECEIVING_ACCOUNT
   const beneficiaryName =
     (currentUser.company && currentUser.company !== "—" ? currentUser.company.trim() : "") ||
     (currentUser.fullName && currentUser.fullName !== "Account" ? currentUser.fullName.trim() : "") ||
