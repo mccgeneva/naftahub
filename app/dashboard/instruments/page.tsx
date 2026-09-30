@@ -182,6 +182,15 @@ const formatCurrency = (value: number, currency: string) => {
   return `${symbol}${value.toLocaleString()}`
 }
 
+const INSTRUMENT_TREASURY_ACCOUNT = {
+  holder: "MCC Treasury — Instruments Account",
+  iban: "GB02BARC20000023385574",
+  ibanDisplay: "GB02 BARC 2000 0023 3855 74",
+  bic: "BARCGB22",
+  bank: "Barclays Bank PLC",
+  address: "1 Churchill Place, London E14 5HP, United Kingdom",
+} as const
+
 export default function InstrumentsPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [filterType, setFilterType] = useState("all")
@@ -1166,6 +1175,34 @@ export default function InstrumentsPage() {
     })()
   }, [monetizationRequests, ledgerEntries, ledgerHydrated, monetizationHydrated, refreshLedger])
 
+  // Beneficiary bank panel (same data as a payment). Instrument transfers are
+  // only accepted into MCC Treasury's designated Barclays instruments account;
+  // Treasury then credits the instrument onward to the FFC platform user.
+  const [benName, setBenName] = useState("")
+  const [benIban, setBenIban] = useState("")
+  const [benBic, setBenBic] = useState("")
+  const [benBank, setBenBank] = useState("")
+  const [benAddress, setBenAddress] = useState("")
+  const normalizedBenIban = benIban.replace(/\s+/g, "").toUpperCase()
+  const benIbanTouched = normalizedBenIban.length > 0
+  const benIbanIsTreasury = normalizedBenIban === INSTRUMENT_TREASURY_ACCOUNT.iban
+  const benBicOk = benBic.replace(/\s+/g, "").toUpperCase().startsWith("BARCGB")
+  const benPanelComplete = benIbanIsTreasury && benBicOk && benName.trim().length > 0 && benBank.trim().length > 0
+  const fillTreasuryAccount = () => {
+    setBenName(INSTRUMENT_TREASURY_ACCOUNT.holder)
+    setBenIban(INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay)
+    setBenBic(INSTRUMENT_TREASURY_ACCOUNT.bic)
+    setBenBank(INSTRUMENT_TREASURY_ACCOUNT.bank)
+    setBenAddress(INSTRUMENT_TREASURY_ACCOUNT.address)
+  }
+  const resetBeneficiaryPanel = () => {
+    setBenName("")
+    setBenIban("")
+    setBenBic("")
+    setBenBank("")
+    setBenAddress("")
+  }
+
   // Step 1 — verify the recipient email resolves to a real, active account and
   // show the holder exactly WHO they are about to transfer to before confirming.
   const verifyRecipient = async () => {
@@ -1206,6 +1243,12 @@ export default function InstrumentsPage() {
       setActionTarget(null)
       return
     }
+    if (!benPanelComplete) {
+      toast.error("Beneficiary bank details not accepted", {
+        description: `Instrument transfers are only accepted into the MCC Treasury instruments account at Barclays (IBAN ${INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay}, BIC ${INSTRUMENT_TREASURY_ACCOUNT.bic}).`,
+      })
+      return
+    }
     if (!instrument.approvalId) {
       toast.error("This instrument can't be transferred", {
         description: "It is still syncing. Please refresh and try again.",
@@ -1239,7 +1282,7 @@ export default function InstrumentsPage() {
         counterparty: `Instrument transfer fee — ${instrument.type} ${instrument.id}`,
         reference: instrument.id,
         category: "Instrument Transfer Fee",
-        comment: `0.2% assign/transfer fee on ${formatCurrency(instrument.faceValue, instrument.currency)} face value, charged upfront on transfer of ${instrument.type} ${instrument.id} to ${res.recipientName} (${recipient.email}).`,
+        comment: `0.2% assign/transfer fee on ${formatCurrency(instrument.faceValue, instrument.currency)} face value, charged upfront on transfer of ${instrument.type} ${instrument.id} via ${benName.trim()} (${benBank.trim()}, IBAN ${INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay}, BIC ${benBic.trim().toUpperCase()}) for further credit to ${res.recipientName} (${recipient.email}).`,
       })
     }
     logActivity({
@@ -1252,6 +1295,11 @@ export default function InstrumentsPage() {
         faceValue: formatCurrency(instrument.faceValue, instrument.currency),
         issuingBank: instrument.issuer,
         recipient: `${res.recipientName} — ${recipient.email}`,
+        beneficiaryAccount: `${benName.trim()} — ${benBank.trim()}`,
+        beneficiaryIban: INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay,
+        beneficiaryBic: benBic.trim().toUpperCase(),
+        beneficiaryAddress: benAddress.trim() || "—",
+        furtherCreditTo: `${res.recipientName} — ${recipient.email}`,
         status: "Transferred",
       },
     })
@@ -1262,6 +1310,7 @@ export default function InstrumentsPage() {
     setActionDestination("")
     setRecipient(null)
     setRecipientStatus("idle")
+    resetBeneficiaryPanel()
   }
 
   const downloadCertificate = (instrument: Instrument) => {
@@ -2604,6 +2653,7 @@ export default function InstrumentsPage() {
             setActionDestination("")
             setRecipient(null)
             setRecipientStatus("idle")
+            resetBeneficiaryPanel()
           }
         }}
       >
@@ -2613,7 +2663,7 @@ export default function InstrumentsPage() {
               <DialogHeader>
                 <DialogTitle>Transfer Instrument</DialogTitle>
                 <DialogDescription>
-                  {`Transfer ${actionTarget.instrument.id} to another account holder. Enter their registered email — we'll confirm who they are before you send. Once confirmed, the instrument moves to their portfolio immediately.`}
+                  {`Transfer ${actionTarget.instrument.id} to MCC Treasury's Barclays instruments account, for further credit to the recipient's platform account. Once confirmed, the instrument moves to their portfolio immediately.`}
                 </DialogDescription>
               </DialogHeader>
               <div className="rounded-lg border border-border bg-secondary/30 p-3">
@@ -2665,8 +2715,74 @@ export default function InstrumentsPage() {
                 )}
               </div>
 
+              {/* Beneficiary bank details — same data as a payment */}
+              <div className="flex flex-col gap-3 rounded-lg border border-border p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-foreground">Beneficiary bank account</p>
+                  <Button type="button" variant="outline" size="sm" className="h-9" onClick={fillTreasuryAccount}>
+                    Use MCC Treasury
+                  </Button>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="ben-name">Account holder name</Label>
+                  <Input id="ben-name" className="text-base" autoComplete="off" value={benName} onChange={(e) => setBenName(e.target.value)} placeholder="Beneficiary name" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="ben-iban">IBAN</Label>
+                  <Input
+                    id="ben-iban"
+                    className="font-mono text-base uppercase"
+                    autoComplete="off"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                    value={benIban}
+                    onChange={(e) => setBenIban(e.target.value)}
+                    placeholder={INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay}
+                  />
+                  {benIbanTouched && !benIbanIsTreasury && (
+                    <p className="flex items-start gap-1.5 text-xs leading-relaxed text-destructive">
+                      <XCircle className="mt-px h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        Instruments can only be transferred to the MCC Treasury Barclays instruments account{" "}
+                        <span className="font-mono">{INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay}</span>.
+                      </span>
+                    </p>
+                  )}
+                  {benIbanIsTreasury && (
+                    <p className="flex items-center gap-1.5 text-xs text-green-600">
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                      MCC Treasury instruments account — Barclays
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="ben-bic">SWIFT / BIC</Label>
+                  <Input
+                    id="ben-bic"
+                    className="font-mono text-base uppercase"
+                    autoComplete="off"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                    value={benBic}
+                    onChange={(e) => setBenBic(e.target.value)}
+                    placeholder={INSTRUMENT_TREASURY_ACCOUNT.bic}
+                  />
+                  {benBic.trim().length > 0 && !benBicOk && (
+                    <p className="text-xs text-destructive">The SWIFT/BIC must be the Barclays code ({INSTRUMENT_TREASURY_ACCOUNT.bic}).</p>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="ben-bank">Bank name</Label>
+                  <Input id="ben-bank" className="text-base" autoComplete="off" value={benBank} onChange={(e) => setBenBank(e.target.value)} placeholder={INSTRUMENT_TREASURY_ACCOUNT.bank} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="ben-address">Bank address</Label>
+                  <Input id="ben-address" className="text-base" autoComplete="off" value={benAddress} onChange={(e) => setBenAddress(e.target.value)} placeholder={INSTRUMENT_TREASURY_ACCOUNT.address} />
+                </div>
+              </div>
+
               <div className="space-y-2">
-                <Label htmlFor="action-destination">Recipient account email</Label>
+                <Label htmlFor="action-destination">For further credit to (recipient account email)</Label>
                 <div className="flex gap-2">
                   <Input
                     id="action-destination"
@@ -2735,13 +2851,17 @@ export default function InstrumentsPage() {
                 </Button>
                 <Button
                   onClick={() => void confirmInstrumentAction()}
-                  disabled={recipientStatus !== "found" || !recipient || transferring || !canCoverTransferFee}
+                  disabled={
+                    recipientStatus !== "found" || !recipient || transferring || !canCoverTransferFee || !benPanelComplete
+                  }
                 >
                   {transferring
                     ? "Transferring…"
                     : !canCoverTransferFee
                       ? "Insufficient balance for fee"
-                      : "Confirm Transfer"}
+                      : !benPanelComplete
+                        ? "Complete beneficiary bank details"
+                        : "Confirm Transfer"}
                 </Button>
               </DialogFooter>
             </>
