@@ -176,6 +176,10 @@ export default function PaymentsPage() {
   const [payCurrency, setPayCurrency] = useState("EUR")
   const [payBeneficiary, setPayBeneficiary] = useState("")
   const [payCountry, setPayCountry] = useState("")
+  // Country of the beneficiary's BANK (from the IBAN/BIC). Kept separate from
+  // payCountry because the beneficiary can live in a different country than
+  // the one where their account is held.
+  const [payBankCountry, setPayBankCountry] = useState("")
   const [paySwift, setPaySwift] = useState("")
   const [payIban, setPayIban] = useState("")
   // Beneficiary postal address (street, city, postal/ZIP). Country is captured
@@ -698,6 +702,7 @@ export default function PaymentsPage() {
     setPayCurrency("EUR")
     setPayBeneficiary("")
     setPayCountry("")
+    setPayBankCountry("")
     setPaySwift("")
     setPayIban("")
     setPayAddress("")
@@ -727,6 +732,7 @@ export default function PaymentsPage() {
     if (value === "manual") {
       setPayBeneficiary("")
       setPayCountry("")
+    setPayBankCountry("")
       setPaySwift("")
       setPayIban("")
       setPayAddress("")
@@ -742,6 +748,7 @@ export default function PaymentsPage() {
     if (payee) {
       setPayBeneficiary(payee.name)
       setPayCountry(payee.beneficiaryCountry || "")
+      setPayBankCountry(payee.bankCountry || "")
       setPaySwift(payee.swiftBic || "")
       setPayIban(payee.iban || payee.accountNumber || "")
       setPayAddress(payee.beneficiaryAddress || "")
@@ -936,7 +943,7 @@ export default function PaymentsPage() {
           swiftBic: paySwift.trim().toUpperCase(),
           bankName: "",
           bankAddress: "",
-          bankCountry: payCountry.trim(),
+          bankCountry: payBankCountry.trim(),
           beneficiaryAddress: payAddress.trim(),
           beneficiaryCity: payCity.trim(),
           beneficiaryPostalCode: payPostal.trim(),
@@ -1286,19 +1293,9 @@ export default function PaymentsPage() {
                     value={paySwift}
                     onChange={setPaySwift}
                     onResolved={(info) => {
-                      if (info?.country && !payCountry.trim()) setPayCountry(info.country)
+                      if (info?.country) setPayBankCountry(info.country)
                     }}
                   />
-                  <div className="grid gap-2">
-                    <Label htmlFor="country">Beneficiary Country</Label>
-                    <CountryCombobox
-                      id="country"
-                      valueMode="name"
-                      value={payCountry}
-                      onChange={setPayCountry}
-                      placeholder="Search and select country"
-                    />
-                  </div>
                 </div>
                 <VerifiedBankField
                   id="iban"
@@ -1310,9 +1307,11 @@ export default function PaymentsPage() {
                   value={payIban}
                   onChange={setPayIban}
                   onResolved={(info) => {
-                    // Auto-fill the SWIFT/BIC and country from the resolved IBAN.
+                    // Auto-fill the SWIFT/BIC and the BANK's country from the
+                    // resolved IBAN. The beneficiary's own country is part of
+                    // their address and is never taken from the IBAN.
                     if (info?.bic && !paySwift.trim()) setPaySwift(info.bic)
-                    if (info?.country && !payCountry.trim()) setPayCountry(info.country)
+                    if (info?.country) setPayBankCountry(info.country)
                   }}
                 />
                 <div className="grid gap-2">
@@ -1343,6 +1342,21 @@ export default function PaymentsPage() {
                       onChange={(e) => setPayPostal(e.target.value)}
                     />
                   </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="country">Beneficiary Country</Label>
+                  <CountryCombobox
+                    id="country"
+                    valueMode="name"
+                    value={payCountry}
+                    onChange={setPayCountry}
+                    placeholder="Country of the beneficiary's address"
+                  />
+                  {payBankCountry && payCountry && payBankCountry !== payCountry && (
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      {`Account held in ${payBankCountry} — that's fine, the beneficiary can reside in a different country.`}
+                    </p>
+                  )}
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="reference">Payment Reference</Label>
