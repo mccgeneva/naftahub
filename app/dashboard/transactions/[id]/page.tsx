@@ -23,6 +23,8 @@ import { generateReceiptPdf } from "@/lib/receipt-pdf"
 import { displayIssuerAccount } from "@/lib/issuer-bank"
 import { useHolderIdentity } from "@/lib/holder-identity"
 import { usePdfViewer } from "@/lib/pdf-viewer"
+import { usePaymentRequests } from "@/lib/payment-requests-store"
+import { findPaymentForEntry, paymentReceiptExtras } from "@/lib/payment-receipt-extras"
 import { toast } from "sonner"
 
 const currencySymbols: Record<string, string> = {
@@ -52,6 +54,7 @@ export default function TransactionDetailPage() {
   const { entries, hydrated } = useLedger()
   const { show } = usePdfViewer()
   const holder = useHolderIdentity()
+  const { requests: payments } = usePaymentRequests()
 
   const id = decodeURIComponent(params.id)
   const entry = useMemo(() => entries.find((e) => e.id === id), [entries, id])
@@ -111,8 +114,9 @@ export default function TransactionDetailPage() {
   const handleDownloadReceipt = () => {
     const bicMatch = entry.bank?.match(/\(?\b(?:BIC|SWIFT)[:\s]+([A-Z0-9]{8,11})\)?/i)
     const bankName = entry.bank?.replace(/\s*\(?\b(?:BIC|SWIFT)[:\s]+[A-Z0-9]{8,11}\)?/i, "").trim()
+    const payment = findPaymentForEntry(payments, entry)
     show(generateReceiptPdf({
-      reference: entry.reference || entry.id,
+      reference: payment?.id || entry.reference || entry.id,
       direction: entry.direction,
       amount: formatAmount(entry.amount, entry.currency),
       currency: entry.currency,
@@ -121,11 +125,12 @@ export default function TransactionDetailPage() {
       category: entry.category,
       counterparty: entry.counterparty,
       bank: bankName || entry.bank,
-      bic: bicMatch?.[1],
-      iban: displayAccount,
+      bic: payment?.swiftCode || bicMatch?.[1],
+      iban: payment?.iban || displayAccount,
       notes: entry.comment,
       accountHolder: holder.holderName,
       accountHolderAddress: holder.holderAddress,
+      ...paymentReceiptExtras(payment),
     }))
   }
 

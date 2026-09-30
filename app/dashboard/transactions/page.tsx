@@ -57,6 +57,8 @@ import { exportToCsv } from "@/lib/export-utils"
 import { generateReceiptPdf } from "@/lib/receipt-pdf"
 import { generateTablePdf, tablePdfFilename } from "@/lib/table-pdf"
 import { usePdfViewer } from "@/lib/pdf-viewer"
+import { usePaymentRequests } from "@/lib/payment-requests-store"
+import { findPaymentForEntry, paymentReceiptExtras } from "@/lib/payment-receipt-extras"
 import { useActivityLog } from "@/components/activity-tracker"
 import { toast } from "sonner"
 import { useLedger, convertCurrency } from "@/lib/ledger-store"
@@ -122,6 +124,7 @@ export default function TransactionsPage() {
   const { entries } = useLedger()
   const { show } = usePdfViewer()
   const holder = useHolderIdentity()
+  const { requests: payments } = usePaymentRequests()
 
   // Account-holder identity + registered address printed at the top of the
   // exported PDF ("PREPARED FOR" block), shared with every other extract page.
@@ -372,8 +375,9 @@ export default function TransactionsPage() {
     const bank = entry?.bank
     const bicMatch = bank?.match(/\(?\b(?:BIC|SWIFT)[:\s]+([A-Z0-9]{8,11})\)?/i)
     const bankName = bank?.replace(/\s*\(?\b(?:BIC|SWIFT)[:\s]+[A-Z0-9]{8,11}\)?/i, "").trim()
+    const payment = findPaymentForEntry(payments, entry)
     show(generateReceiptPdf({
-      reference: entry?.reference || txn.id,
+      reference: payment?.id || entry?.reference || txn.id,
       direction: txn.direction === "incoming" ? "credit" : "debit",
       amount: txn.amount,
       currency: txn.currency,
@@ -382,11 +386,12 @@ export default function TransactionsPage() {
       category: txn.category,
       counterparty: txn.counterparty,
       bank: bankName || bank,
-      bic: bicMatch?.[1],
-      iban: entry?.account || (txn.account !== "MCC Capital" ? txn.account : undefined),
+      bic: payment?.swiftCode || bicMatch?.[1],
+      iban: payment?.iban || entry?.account || (txn.account !== "MCC Capital" ? txn.account : undefined),
       notes: entry?.comment,
       accountHolder: holder.holderName,
       accountHolderAddress: holder.holderAddress,
+      ...paymentReceiptExtras(payment),
     }))
     logActivity({
       action: `Downloaded receipt for ${txn.id}`,

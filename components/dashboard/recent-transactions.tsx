@@ -27,6 +27,8 @@ import { generateReceiptPdf } from "@/lib/receipt-pdf"
 import { displayIssuerAccount } from "@/lib/issuer-bank"
 import { useHolderIdentity } from "@/lib/holder-identity"
 import { usePdfViewer } from "@/lib/pdf-viewer"
+import { usePaymentRequests } from "@/lib/payment-requests-store"
+import { findPaymentForEntry, paymentReceiptExtras } from "@/lib/payment-receipt-extras"
 
 const currencySymbols: Record<string, string> = {
   EUR: "€",
@@ -52,6 +54,7 @@ export function RecentTransactions() {
   const router = useRouter()
   const { show } = usePdfViewer()
   const holder = useHolderIdentity()
+  const { requests: payments } = usePaymentRequests()
   const [selected, setSelected] = useState<LedgerEntry | null>(null)
 
   // Derive the latest activity from the persisted ledger so recorded incoming
@@ -87,8 +90,9 @@ export function RecentTransactions() {
     // Split a combined "BANK NAME (BIC XXXX)" string into name + BIC.
     const bicMatch = e.bank?.match(/\(?\b(?:BIC|SWIFT)[:\s]+([A-Z0-9]{8,11})\)?/i)
     const bankName = e.bank?.replace(/\s*\(?\b(?:BIC|SWIFT)[:\s]+[A-Z0-9]{8,11}\)?/i, "").trim()
+    const payment = findPaymentForEntry(payments, e)
     show(generateReceiptPdf({
-      reference: e.reference || e.id,
+      reference: payment?.id || e.reference || e.id,
       direction: e.direction,
       amount: formatAmount(e.amount, e.currency),
       currency: e.currency,
@@ -97,11 +101,12 @@ export function RecentTransactions() {
       category: e.category,
       counterparty: e.counterparty,
       bank: bankName || e.bank,
-      bic: bicMatch?.[1],
-      iban: e.account,
+      bic: payment?.swiftCode || bicMatch?.[1],
+      iban: payment?.iban || e.account,
       notes: e.comment,
       accountHolder: holder.holderName,
       accountHolderAddress: holder.holderAddress,
+      ...paymentReceiptExtras(payment),
     }))
   }
 
