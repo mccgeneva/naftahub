@@ -190,6 +190,9 @@ export const currencySymbols: Record<string, string> = {
  * "DE69 2022 0800 0044 9852 00" -> "0044 9852 00". Falls back to the provided
  * value when the IBAN is empty or a placeholder.
  */
+/** Shown instead of a fake IBAN when no real banking is on file for the customer. */
+export const PENDING_ACCOUNT_LABEL = "Being assigned by MCC"
+
 export function accountNumberFromIban(iban: string | undefined | null, fallback: string): string {
   const compact = (iban || "").replace(/\s+/g, "").toUpperCase()
   if (compact.length < 8 || compact === "—") return fallback
@@ -463,6 +466,7 @@ export function useBankAccounts(): BankAccount[] {
   // account that happens to be the master.
   const currentUser = useCurrentUser()
   const [resolvedMaster, setResolvedMaster] = useState<MyMasterBanking | null>(null)
+  const [bankingLoaded, setBankingLoaded] = useState(false)
   useEffect(() => {
     let cancelled = false
     // A plain /api route, not the Server Action: on the installed PWA a stale
@@ -482,6 +486,7 @@ export function useBankAccounts(): BankAccount[] {
       }
       if (!hasCoords(b)) b = await getMyMasterBanking().catch(() => null)
       if (!cancelled && b) setResolvedMaster(b)
+      if (!cancelled) setBankingLoaded(true)
     })()
     return () => {
       cancelled = true
@@ -600,7 +605,10 @@ export function useBankAccounts(): BankAccount[] {
     // Overlay the admin-configured banking coordinates. Only the display
     // coordinates are overridden — the currency and live ledger balances are
     // left untouched, so the master settlement balance model is unaffected.
-    const iban = masterBanking.iban || account.iban
+    // Never show the built-in DE73 placeholder as if it were the customer's
+    // account — a customer with no banking on file sees a pending label.
+    const hasRealIban = !!masterBanking.iban
+    const iban = masterBanking.iban || (bankingLoaded ? PENDING_ACCOUNT_LABEL : "Loading…")
     // Keep the country/flag consistent with an admin-set IBAN.
     const ibanCheck = masterBanking.iban ? validateIban(masterBanking.iban) : null
     const country = (ibanCheck?.valid ? ibanCheck.countryName : account.country) || account.country
@@ -615,11 +623,16 @@ export function useBankAccounts(): BankAccount[] {
     // is a confident directory match — a generic IBAN-structure fallback carries
     // no usable name/address and must not be shown.
     const resolvedBank = masterBankInfo && !isGenericBankInfo(masterBankInfo) ? masterBankInfo : null
-    const swift = masterBanking.swift || resolvedBank?.bic || (ibanCountryChanged ? "" : account.swift)
+    const swift =
+      masterBanking.swift || resolvedBank?.bic || (hasRealIban && !ibanCountryChanged ? account.swift : "—")
     const bankName =
       masterBanking.bankName ||
       resolvedBank?.name ||
-      (ibanCountryChanged ? `Master Settlement Account (${country})` : account.bankName)
+      (!hasRealIban
+        ? "Master Settlement Account"
+        : ibanCountryChanged
+          ? `Master Settlement Account (${country})`
+          : account.bankName)
     // Build a branch address consistent with the IBAN. Use the resolved bank's
     // street address when known, otherwise at least the IBAN's country — never
     // the hardcoded München/Germany line on a non-German IBAN.
@@ -628,14 +641,15 @@ export function useBankAccounts(): BankAccount[] {
           .filter((part) => part && part.trim())
           .join(", ")
       : ""
-    const branchAddress = resolvedAddress || (ibanCountryChanged ? country : account.branchAddress)
+    const branchAddress =
+      resolvedAddress || (!hasRealIban ? "—" : ibanCountryChanged ? country : account.branchAddress)
 
     return {
       ...account,
       iban,
       // Keep the Account Number consistent with the (possibly admin-changed)
       // IBAN — derive it from the IBAN rather than the stale ACC-001 default.
-      accountNumber: accountNumberFromIban(iban, account.accountNumber),
+      accountNumber: hasRealIban ? accountNumberFromIban(iban, "—") : "—",
       swift,
       bankName,
       bankLogo: bankName ? bankMonogram(bankName) : account.bankLogo,
@@ -686,7 +700,7 @@ export function useBankAccounts(): BankAccount[] {
         rating: "A",
         // Beneficiary is the account holder's own entity, not "MCC Capital".
         accountName: beneficiaryName || "MCC Capital",
-        accountNumber: accountNumberFromIban(iban, `${cur}-2908 19`),
+        accountNumber: coords?.iban ? accountNumberFromIban(iban, "—") : "—",
         iban,
         swift,
         currency: cur,

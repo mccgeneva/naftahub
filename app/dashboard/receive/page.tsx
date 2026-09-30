@@ -66,14 +66,14 @@ function formatSenderBank(info: BankInfo): string {
   return [info.name, info.bic ? `SWIFT ${info.bic}` : "", where].filter(Boolean).join(" · ")
 }
 
-// Fallback only — overridden by the customer's real master banking from /api/my-banking.
+// Shown only when no real banking is on file — never a fake IBAN a payer could use.
 const DEFAULT_RECEIVING_ACCOUNT = {
   accountName: "MCC Capital",
-  bankName: "Banking Circle - German Branch",
-  iban: "DE73 2022 0800 0029 2908 19",
-  swift: "SXPYDEHHXXX",
+  bankName: "Master Settlement Account",
+  iban: "Being assigned by MCC",
+  swift: "—",
   currency: "EUR",
-  bankAddress: "80333 München, Germany",
+  bankAddress: "—",
   beneficiaryAddress: "Rue du Rhone 14, 1204 Geneva, Switzerland",
   reference: "MCC-INBOUND",
 }
@@ -115,7 +115,7 @@ export default function ReceiveFundsPage() {
         swift: myBanking.swift || "",
         bankName: myBanking.bankName || "",
         currency: myBanking.accountCurrency || DEFAULT_RECEIVING_ACCOUNT.currency,
-        bankAddress: myBanking.bankName && myBanking.bankName !== DEFAULT_RECEIVING_ACCOUNT.bankName ? "" : DEFAULT_RECEIVING_ACCOUNT.bankAddress,
+        bankAddress: "",
       }
     : DEFAULT_RECEIVING_ACCOUNT
   const beneficiaryName =

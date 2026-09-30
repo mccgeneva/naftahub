@@ -10,6 +10,7 @@ import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { useLedger } from "@/lib/ledger-store"
 import { useCurrentUser } from "@/lib/use-current-user"
+import { useBankAccounts, PENDING_ACCOUNT_LABEL } from "@/lib/bank-accounts"
 
 const bankLogos: Record<string, string> = {
   "Banking Circle - German Branch": "BC",
@@ -122,20 +123,27 @@ export function BankAccounts() {
     ...currencies.filter((c) => !CORE_CURRENCIES.includes(c) && currencyAccounts[c]),
   ]
 
+  // Real coordinates come from the customer's (or their master's) banking on
+  // file — the same source as the Bank Accounts page. The metadata above is
+  // only a label/country template; its IBANs are never shown.
+  const realAccounts = useBankAccounts()
+
   // One account card per currency, each reflecting its live ledger balance.
   const accounts = displayCurrencies
     .filter((cur) => currencyAccounts[cur])
     .map((cur, index) => {
       const meta = currencyAccounts[cur]
       const symbol = currencySymbols[cur] || `${cur} `
+      const real = realAccounts.find((a) => a.id === (cur === "EUR" ? "ACC-001" : `ACC-${cur}`))
+      const realIban = real?.iban && real.iban !== "—" && real.iban !== PENDING_ACCOUNT_LABEL ? real.iban : ""
       return {
         id: index + 1,
-        bank: meta.bank,
-        country: meta.country,
+        bank: realIban ? real?.bankName || meta.bank : meta.bank,
+        country: realIban ? real?.countryCode || meta.country : meta.country,
         type: cur === "EUR" ? "Master Settlement Account" : meta.type,
         holder: beneficiaryName,
-        iban: meta.iban,
-        swift: meta.swift,
+        iban: realIban || PENDING_ACCOUNT_LABEL,
+        swift: realIban ? real?.swift || "—" : "—",
         balance: `${symbol}${balanceFor(cur).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
         currency: cur,
         status: "active",
