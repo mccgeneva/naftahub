@@ -199,7 +199,7 @@ export default function PaymentsPage() {
   // debit posts against on approval.
   const [payFrom, setPayFrom] = useState("main")
   const [formError, setFormError] = useState<string | null>(null)
-  const { beneficiaries, addBeneficiary } = useBeneficiaries()
+  const { beneficiaries, addBeneficiary, setBeneficiaries } = useBeneficiaries()
   const logActivity = useActivityLog()
   const { show } = usePdfViewer()
   const holder = useHolderIdentity()
@@ -961,6 +961,33 @@ export default function PaymentsPage() {
       }
     }
 
+    // Keep an already-saved payee complete: write back any beneficiary
+    // address / city / postal code / country the user typed (only non-empty
+    // values, never blanking stored data). Status/KYC stay admin-owned — the
+    // server merge in replaceBeneficiariesForUser preserves them.
+    const normalizedAcct = payIban.trim().toUpperCase().replace(/[\s-]/g, "")
+    const matched = beneficiaries.find(
+      (b) =>
+        (selectedPayeeId !== "manual" && b.id === selectedPayeeId) ||
+        (normalizedAcct !== "" &&
+          (b.iban || b.accountNumber || "").toUpperCase().replace(/[\s-]/g, "") === normalizedAcct),
+    )
+    if (matched) {
+      const patch: Partial<typeof matched> = {}
+      const fill = (key: "beneficiaryAddress" | "beneficiaryCity" | "beneficiaryPostalCode" | "beneficiaryCountry" | "bankCountry", value: string) => {
+        const v = value.trim()
+        if (v && v !== (matched[key] ?? "")) patch[key] = v
+      }
+      fill("beneficiaryAddress", payAddress)
+      fill("beneficiaryCity", payCity)
+      fill("beneficiaryPostalCode", payPostal)
+      fill("beneficiaryCountry", payCountry)
+      fill("bankCountry", payBankCountry)
+      if (Object.keys(patch).length > 0) {
+        setBeneficiaries((prev) => prev.map((b) => (b.id === matched.id ? { ...b, ...patch } : b)))
+      }
+    }
+
     logActivity({
       action: `Submitted outgoing payment of ${formattedAmount} to ${beneficiary} for Administrator approval`,
       category: "Payments",
@@ -1359,8 +1386,23 @@ export default function PaymentsPage() {
                   )}
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="reference">Payment Reference</Label>
-                  <Input id="reference" placeholder="INV-2024-XXX" value={payReference} onChange={(e) => setPayReference(e.target.value)} />
+                  <Label htmlFor="reference">Payment Reference — description of the payment</Label>
+                  <Textarea
+                    id="reference"
+                    rows={4}
+                    maxLength={140}
+                    placeholder={"e.g. Invoice INV-2024-017 — purchase of 30,000 MT EN590 diesel, contract SPA-0425"}
+                    value={payReference}
+                    onChange={(e) => setPayReference(e.target.value)}
+                    className="min-h-24 text-base"
+                  />
+                  <p className="flex justify-between gap-3 text-xs text-muted-foreground text-pretty">
+                    <span>
+                      Sent to the beneficiary bank as SWIFT field 70 (Remittance Information). Describe what the payment
+                      is for: invoice or contract number and the goods or services.
+                    </span>
+                    <span className="shrink-0 tabular-nums">{payReference.length}/140</span>
+                  </p>
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="notes">Notes (Optional)</Label>
