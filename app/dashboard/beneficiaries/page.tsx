@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import {
@@ -251,6 +251,24 @@ export default function BeneficiariesPage() {
     setFormError(null)
     setIsAddDialogOpen(true)
   }
+
+  // Deep-link from the beneficiary detail page: /dashboard/beneficiaries?edit=<id>
+  // opens the edit dialog once the record has loaded.
+  const editDeepLinkDone = useRef(false)
+  useEffect(() => {
+    if (editDeepLinkDone.current || typeof window === "undefined") return
+    const editId = new URLSearchParams(window.location.search).get("edit")
+    if (!editId) {
+      editDeepLinkDone.current = true
+      return
+    }
+    const target = beneficiaries.find((b) => b.id === editId)
+    if (!target) return
+    editDeepLinkDone.current = true
+    editBeneficiary(target)
+    window.history.replaceState(null, "", "/dashboard/beneficiaries")
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [beneficiaries])
 
   // Cancel = deactivate but KEEP the record (audit history), so it can no longer
   // be paid and can be reactivated later. Persist to the server first.

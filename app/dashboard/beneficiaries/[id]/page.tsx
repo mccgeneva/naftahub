@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
 import {
@@ -12,11 +12,22 @@ import {
   Send,
   Copy,
   Users,
+  Pencil,
+  Trash2,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { toast } from "sonner"
+import { useActivityLog } from "@/components/activity-tracker"
 import { useBeneficiaries, type Beneficiary, type BeneficiaryType } from "@/lib/beneficiaries-store"
 
 function statusBadge(status: Beneficiary["status"]) {
@@ -78,7 +89,9 @@ function Field({ label, value, mono }: { label: string; value?: string | number;
 export default function BeneficiaryDetailPage() {
   const params = useParams<{ id: string }>()
   const router = useRouter()
-  const { beneficiaries } = useBeneficiaries()
+  const { beneficiaries, setBeneficiaries } = useBeneficiaries()
+  const logActivity = useActivityLog()
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const id = decodeURIComponent(params.id)
   const ben = useMemo(() => beneficiaries.find((b) => b.id === id), [beneficiaries, id])
@@ -113,18 +126,78 @@ export default function BeneficiaryDetailPage() {
       () => toast.error("Could not copy"),
     )
 
+  const handleDelete = () => {
+    setBeneficiaries((prev) => prev.filter((b) => b.id !== ben.id))
+    logActivity({
+      action: `Deleted beneficiary ${ben.name}`,
+      category: "Beneficiary Management",
+      details: {
+        summary: `Client deleted the beneficiary "${ben.name}" (${ben.id}).`,
+        beneficiaryId: ben.id,
+        name: ben.name,
+      },
+    })
+    toast.success("Beneficiary deleted", { description: `${ben.name} was removed from your list.` })
+    setConfirmDelete(false)
+    router.push("/dashboard/beneficiaries")
+  }
+
   return (
     <div className="mx-auto max-w-3xl space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Button variant="ghost" size="sm" onClick={() => router.back()}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back
-        </Button>
-        <Button onClick={() => router.push("/dashboard/payments")}>
-          <Send className="mr-2 h-4 w-4" />
-          Send Payment
-        </Button>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center justify-between gap-2">
+          <Button variant="ghost" size="sm" onClick={() => router.back()}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back
+          </Button>
+          <Button onClick={() => router.push("/dashboard/payments")} className="sm:hidden">
+            <Send className="mr-2 h-4 w-4" />
+            Send Payment
+          </Button>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:flex">
+          <Button
+            variant="outline"
+            className="h-11 sm:h-10"
+            onClick={() => router.push(`/dashboard/beneficiaries?edit=${encodeURIComponent(ben.id)}`)}
+          >
+            <Pencil className="mr-2 h-4 w-4" />
+            Modify
+          </Button>
+          <Button
+            variant="outline"
+            className="h-11 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive sm:h-10"
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            Delete
+          </Button>
+          <Button onClick={() => router.push("/dashboard/payments")} className="hidden sm:inline-flex">
+            <Send className="mr-2 h-4 w-4" />
+            Send Payment
+          </Button>
+        </div>
       </div>
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete this beneficiary?</DialogTitle>
+            <DialogDescription className="text-pretty">
+              {`"${ben.name}" will be removed from your saved beneficiaries. Past payments and receipts are not affected. This cannot be undone.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" className="h-11 sm:h-10" onClick={() => setConfirmDelete(false)}>
+              Keep
+            </Button>
+            <Button variant="destructive" className="h-11 sm:h-10" onClick={handleDelete}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete beneficiary
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card className="bg-card border-border">
         <CardHeader className="border-b border-border">
