@@ -114,6 +114,12 @@ import {
 import { computeTieredInterest, formatTierBound } from "@/lib/tiered-debit-interest"
 import { generateInstrumentCertificate } from "@/lib/certificate-pdf"
 import { generateMt760, generateMt799 } from "@/lib/swift-mt"
+import { generateSwiftMessagePdf } from "@/lib/swift-message-pdf"
+import {
+  buildInstrumentTransferSwift,
+  defaultTransferMtType,
+  type InstrumentTransferMtType,
+} from "@/lib/instrument-transfer-swift"
 
 const MONETIZATION_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "AED", "SGD"]
 
@@ -1198,6 +1204,14 @@ export default function InstrumentsPage() {
     setBenBank(INSTRUMENT_TREASURY_ACCOUNT.bank)
     setBenAddress(INSTRUMENT_TREASURY_ACCOUNT.address)
   }
+  // SWIFT message type issued at transfer execution (printout downloaded after).
+  const [transferMtType, setTransferMtType] = useState<InstrumentTransferMtType>("MT760")
+  const actionInstrumentId = actionTarget?.instrument.id
+  useEffect(() => {
+    if (!actionTarget) return
+    setTransferMtType(defaultTransferMtType(actionTarget.instrument.type, actionTarget.instrument.isin))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actionInstrumentId])
   const resetBeneficiaryPanel = () => {
     setBenName("")
     setBenIban("")
@@ -1342,8 +1356,45 @@ export default function InstrumentsPage() {
       },
     })
     toast.success("Instrument transferred", {
-      description: `${instrument.id} is now in ${res.recipientName}'s portfolio.`,
+      description: `${instrument.id} is now in ${res.recipientName}'s portfolio. Your SWIFT ${transferMtType} printout is ready to download.`,
     })
+    try {
+      const swift = buildInstrumentTransferSwift({
+        mtType: transferMtType,
+        instrumentId: instrument.id,
+        instrumentType: instrument.type,
+        instrumentTypeFull: instrument.typeFull,
+        issuer: instrument.issuer,
+        issuerBic: instrument.issuerBic,
+        faceValue: instrument.faceValue,
+        currency: instrument.currency,
+        isin: instrument.isin,
+        issuedDate: instrument.issuedDate,
+        expiryDate: instrument.expiryDate,
+        orderingName: instrument.owner || "MCC CAPITAL CLIENT",
+        beneficiaryName: benName.trim(),
+        beneficiaryIban: INSTRUMENT_TREASURY_ACCOUNT.iban,
+        beneficiaryBic: benBic.trim(),
+        beneficiaryBank: benBank.trim(),
+        beneficiaryAddress: benAddress.trim(),
+        furtherCreditName: res.recipientName ?? recipient.displayName ?? recipient.email,
+        furtherCreditEmail: recipient.email,
+      })
+      show(generateSwiftMessagePdf(swift))
+      logActivity({
+        action: `Downloaded SWIFT ${transferMtType} printout for ${instrument.type} ${instrument.id}`,
+        category: "Bank Instruments",
+        details: {
+          summary: `SWIFT ${transferMtType} transmission copy issued for the transfer of ${instrument.id} to ${INSTRUMENT_TREASURY_ACCOUNT.ibanDisplay} for further credit to ${res.recipientName}.`,
+          referenceId: swift.id,
+          messageType: transferMtType,
+          uetr: swift.uetr ?? "—",
+        },
+      })
+    } catch (err) {
+      console.error("SWIFT printout failed", err)
+      toast.error("Transfer completed, but the SWIFT printout couldn't be generated.")
+    }
     setActionTarget(null)
     setActionDestination("")
     setRecipient(null)
@@ -2940,6 +2991,27 @@ export default function InstrumentsPage() {
                     Couldn&apos;t verify the recipient right now. Please try again.
                   </p>
                 )}
+              </div>
+              <div className="space-y-2 rounded-lg border border-border p-4">
+                <Label htmlFor="transfer-mt-type">SWIFT message type</Label>
+                <Select
+                  value={transferMtType}
+                  onValueChange={(v) => setTransferMtType(v as InstrumentTransferMtType)}
+                >
+                  <SelectTrigger id="transfer-mt-type" className="h-11 text-base">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MT760">MT760 — Guarantee / Standby LC assignment</SelectItem>
+                    <SelectItem value="MT542">MT542 — Deliver free (securities)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {transferMtType === "MT760"
+                    ? "For BG, SBLC and other undertakings: the instrument is assigned to the Treasury account for further credit."
+                    : "For MTN, bonds and ISIN-coded instruments: the position is delivered free of payment to the Treasury safekeeping account."}{" "}
+                  The SWIFT printout opens for download as soon as the transfer is executed.
+                </p>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setActionTarget(null)} disabled={transferring}>
