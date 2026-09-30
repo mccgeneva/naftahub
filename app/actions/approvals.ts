@@ -2871,8 +2871,14 @@ function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
 
   const fx = req.ledgerEffect
   if (fx) {
-    const amount = Number(fx.amount)
-    if (!Number.isFinite(amount) || amount <= 0) return null
+    const rawAmount = Number(fx.amount)
+    if (!Number.isFinite(rawAmount) || rawAmount <= 0) return null
+    // An outgoing payment's effect carries the TOTAL (principal + transaction
+    // fee). The principal is posted here; the fee is its own line
+    // (`APPR-<id>-FEE`, see paymentFeeEntryForApproval) so history, statements
+    // and receipts show the payment as it really was.
+    const split = paymentFeeSplit(req)
+    const amount = split ? split.principal : rawAmount
     const baseStatus = fx.status ?? "completed"
     // A held (reserved) effect that has been delivered is now settled.
     const settledByDelivery = baseStatus === "hold" && isDelivered
@@ -2985,6 +2991,44 @@ function ledgerEntryForApproval(req: ApprovalRequest): LedgerEntry | null {
   return null
 }
 
+/**
+ * For an outgoing payment whose ledger effect is principal + fee, return the
+ * two parts. Null for anything else (no fee, or an effect that isn't the total).
+ */
+function paymentFeeSplit(req: ApprovalRequest): { principal: number; fee: number } | null {
+  if (req.kind !== "payment" || !req.ledgerEffect) return null
+  const record = (req.payload?.record ?? {}) as { amount?: unknown; fee?: unknown }
+  const principal = Number(record.amount)
+  const fee = Number(record.fee)
+  const total = Number(req.ledgerEffect.amount)
+  if (!Number.isFinite(principal) || principal <= 0) return null
+  if (!Number.isFinite(fee) || fee <= 0) return null
+  if (!Number.isFinite(total) || Math.abs(total - (principal + fee)) > 0.01) return null
+  return { principal: Math.round(principal * 100) / 100, fee: Math.round(fee * 100) / 100 }
+}
+
+/** The separate transaction-fee debit that accompanies an outgoing payment. */
+function paymentFeeEntryForApproval(req: ApprovalRequest, base: LedgerEntry): LedgerEntry | null {
+  const split = paymentFeeSplit(req)
+  if (!split) return null
+  return {
+    id: `APPR-${req.id}-FEE`,
+    direction: "debit",
+    amount: split.fee,
+    currency: base.currency,
+    status: base.status,
+    date: base.date,
+    counterparty: "MCC Capital — Transaction Fee",
+    account: base.account,
+    receivedAccount: base.receivedAccount,
+    bank: base.bank,
+    reference: base.reference ?? req.id,
+    comment: `Transaction fee for outgoing payment — ${req.title}`,
+    category: "Outgoing Payment — Transaction Fee",
+    subAccountId: base.subAccountId,
+  }
+}
+
 /** Thrown when an approval's reservation cannot be covered by available funds. */
 class InsufficientFundsError extends Error {
   constructor(message: string) {
@@ -3034,13 +3078,14 @@ async function assessReservation(req: ApprovalRequest): Promise<ReservationAsses
   }
   const existing = await readLedgerEntries(ownerId)
   const available = availableExcludingApproval(existing, req.id)
-  const plan = planReservation(available, entry.currency, entry.amount)
+  const need = entry.amount + (paymentFeeSplit(req)?.fee ?? 0)
+  const plan = planReservation(available, entry.currency, need)
   const message = plan.feasible
     ? ""
-    : `Insufficient available funds to reserve ${formatMoney(entry.amount, entry.currency)} for this ` +
+    : `Insufficient available funds to reserve ${formatMoney(need, entry.currency)} for this ` +
       `${KIND_LABELS[req.kind].toLowerCase()}. Total spendable balance is ` +
       `${formatMoney(plan.totalAvailableInNeedCurrency, entry.currency)} (short by ` +
-      `${formatMoney(entry.amount - plan.totalAvailableInNeedCurrency, entry.currency)}).`
+      `${formatMoney(need - plan.totalAvailableInNeedCurrency, entry.currency)}).`
   return { required: true, feasible: plan.feasible, plan, ownerId, message }
 }
 
@@ -3070,14 +3115,16 @@ async function applyLedgerEffect(req: ApprovalRequest): Promise<void> {
   // instrument acquisition fee) the same way: take from the deal/fee currency
   // first, cover any shortfall with capped cross-currency FX, and never overdraw.
   const gatedDebit = entry.direction === "debit" && (entry.status === "hold" || req.ledgerEffect?.gate === true)
+  const feeEntry = paymentFeeEntryForApproval(req, entry)
   if (gatedDebit) {
     const existing = await readLedgerEntries(ownerId)
     const available = availableExcludingApproval(existing, req.id)
-    const plan = planReservation(available, entry.currency, entry.amount)
+    const need = entry.amount + (feeEntry?.amount ?? 0)
+    const plan = planReservation(available, entry.currency, need)
 
     if (!plan.feasible) {
       throw new InsufficientFundsError(
-        `Cannot reserve ${formatMoney(entry.amount, entry.currency)} — only ` +
+        `Cannot reserve ${formatMoney(need, entry.currency)} — only ` +
           `${formatMoney(plan.totalAvailableInNeedCurrency, entry.currency)} available across all currencies.`,
       )
     }
@@ -3128,6 +3175,10 @@ async function applyLedgerEffect(req: ApprovalRequest): Promise<void> {
 
   await upsertLedgerEntry(ownerId, entry)
   postedIds.push(entry.id)
+  if (feeEntry) {
+    await upsertLedgerEntry(ownerId, feeEntry)
+    postedIds.push(feeEntry.id)
+  }
 
   // DB-level non-negativity enforcement (defense in depth). If this posting
   // overdrew ANY currency, roll back every entry we just wrote and surface the
@@ -3181,6 +3232,16 @@ export async function reconcileMyApprovedCredits(): Promise<{ ok: boolean; appli
     for (const req of approved) {
       const entry = ledgerEntryForApproval(req)
       if (!entry) continue
+      // Outgoing payments: keep the principal and the transaction fee as two
+      // separate lines (self-heals payments posted as one combined row).
+      const feeEntry = paymentFeeEntryForApproval(req, entry)
+      if (feeEntry) {
+        const payOwnerId = await resolveDataOwnerIdFor(req.userId)
+        await upsertLedgerEntry(payOwnerId, entry)
+        await upsertLedgerEntry(payOwnerId, feeEntry)
+        applied += 1
+        continue
+      }
       // A DELIVERED commodity deal must settle: its reservation becomes a
       // permanent `completed` debit (funds paid out to the supplier). Without
       // this, a stale `hold` left behind by delivery (e.g. when a post-delivery
