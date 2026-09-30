@@ -17,6 +17,13 @@ export interface ReceiptData {
   /** Sender (for incoming) or beneficiary (for outgoing). */
   counterparty: string
   counterpartyAddress?: string
+  counterpartyCountry?: string
+  /** Free-text payment description / remittance information entered by the client. */
+  description?: string
+  /** Internal transaction id, shown separately from the description. */
+  transactionId?: string
+  /** Principal correspondent bank the payment was routed through. */
+  routedVia?: string
   /** The platform CLIENT / account holder — the beneficiary for an incoming
    *  transfer and the account holder for an outgoing one. MCC Capital is only
    *  the platform/bank (letterhead), never a transacting party. */
@@ -213,6 +220,7 @@ export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
       ? [data.counterpartyAddress || "", ...issuerBankLines()]
       : [
           data.counterpartyAddress || "",
+          data.counterpartyCountry || "",
           data.bank ? `Bank: ${data.bank}` : "",
           data.bic ? `BIC/SWIFT: ${data.bic}` : "",
           data.iban ? `IBAN: ${data.iban}` : "",
@@ -239,34 +247,53 @@ export function generateReceiptPdf(data: ReceiptData): GeneratedPdf {
   doc.text("Transaction Details", margin, y)
   y += 10
 
+  const description = data.description ? stripBrand(data.description) : ""
+  const opt = (label: string, value?: string): [string, string][] =>
+    value && value.trim() ? [[label, value.trim()]] : []
+
   const rows: [string, string][] = [
     ["Reference Number", reference],
-    ...(data.uetr ? [["UETR (SWIFT gpi)", data.uetr] as [string, string]] : []),
+    ...opt("Transaction ID", data.transactionId && data.transactionId !== reference ? data.transactionId : ""),
+    ...opt("Payment Description", description),
+    ...opt("UETR (SWIFT gpi)", data.uetr),
     ["Date & Time", `${formatDate(data.date)}${formatTime(data.date) ? " · " + formatTime(data.date) : ""}`],
     ["Type", isCredit ? "Incoming Transfer (Credit)" : "Outgoing Payment (Debit)"],
-    ["Category", data.category || "—"],
+    ...opt("Category", data.category),
+    ...opt("Beneficiary Country", !isCredit ? data.counterpartyCountry : ""),
+    ...opt("Routed Via", data.routedVia),
     ["Amount", data.amount],
-    ...(data.fee ? [["Platform Fee", data.fee] as [string, string]] : []),
+    ...opt("Platform Fee", data.fee),
     ["Currency", data.currency],
     ["Status", data.status.charAt(0).toUpperCase() + data.status.slice(1)],
   ]
 
+  // Values wrap inside a right-hand column so long text (descriptions, UETRs)
+  // never runs over the label or off the page.
+  const labelColW = 150
+  const valueColW = contentWidth - labelColW - 24
+  const lineH = 12
+  let rowY = y + 8
   rows.forEach((row, i) => {
-    const rowY = y + 12 + i * 24
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(9.5)
+    const valueLines: string[] = doc.splitTextToSize(row[1] || "—", valueColW)
+    const rowH = Math.max(24, valueLines.length * lineH + 12)
     if (i % 2 === 0) {
       doc.setFillColor(248, 249, 250)
-      doc.rect(margin, rowY - 4, contentWidth, 24, "F")
+      doc.rect(margin, rowY, contentWidth, rowH, "F")
     }
     doc.setFont("helvetica", "normal")
-    doc.setFontSize(9.5)
     doc.setTextColor(...BRAND.slate)
-    doc.text(row[0], margin + 12, rowY + 11)
+    doc.text(row[0], margin + 12, rowY + 15)
     doc.setFont("helvetica", "bold")
     doc.setTextColor(...BRAND.ink)
-    doc.text(row[1], pageWidth - margin - 12, rowY + 11, { align: "right" })
+    valueLines.forEach((ln, li) => {
+      doc.text(ln, pageWidth - margin - 12, rowY + 15 + li * lineH, { align: "right" })
+    })
+    rowY += rowH
   })
 
-  y = y + 12 + rows.length * 24 + 16
+  y = rowY + 16
 
   // gpi confirmation line
   if (data.uetr) {

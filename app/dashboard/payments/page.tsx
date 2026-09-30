@@ -557,14 +557,28 @@ export default function PaymentsPage() {
   }
 
   const downloadReceipt = (payment: Payment) => {
+    const beneficiaryAddress = [
+      payment.beneficiaryAddress,
+      [payment.beneficiaryPostalCode, payment.beneficiaryCity].filter(Boolean).join(" "),
+    ]
+      .filter(Boolean)
+      .join(", ")
+    const country = payment.beneficiaryCountry && payment.beneficiaryCountry !== "—" ? payment.beneficiaryCountry : ""
     show(generateReceiptPdf({
-      reference: payment.reference || payment.id,
+      reference: payment.id,
+      transactionId: payment.id,
+      description: payment.reference && payment.reference !== payment.id ? payment.reference : "",
       direction: payment.type === "incoming" ? "credit" : "debit",
       amount: payment.amount,
       currency: payment.currency,
-      status: payment.status,
+      status: payment.type === "incoming" ? "received" : PAYMENT_STAGE_LABEL[payment.stage ?? "review"] || payment.status,
       date: payment.time ? `${payment.date} ${payment.time}` : payment.date,
       counterparty: payment.beneficiary,
+      counterpartyAddress: beneficiaryAddress,
+      counterpartyCountry: country,
+      routedVia: payment.routedBankName
+        ? `${payment.routedBankName}${payment.routedBankBic ? ` (${payment.routedBankBic})` : ""}`
+        : "",
       bic: payment.swiftCode,
       iban: payment.iban,
       fee: payment.fee,
