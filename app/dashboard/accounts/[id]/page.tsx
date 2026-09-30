@@ -19,6 +19,7 @@ import {
   Lock,
   ChevronRight,
   Loader2,
+  AlertTriangle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -111,6 +112,34 @@ export default function AccountDetailPage() {
       })
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .slice(0, 100)
+  }, [account, entries])
+
+  // When a settlement currency account is overdrawn, the card only shows the
+  // net figure after automatic FX cover, and the charges that caused it are
+  // buried among dozens of history rows. Surface the true (pre-cover) balance,
+  // the largest completed debits driving it, and the amount covered from other
+  // currencies so the client can see exactly WHY the account is negative.
+  const overdraftBreakdown = useMemo(() => {
+    if (!account || !account.id.startsWith("ACC-")) return null
+    const own = entries.filter(
+      (e) =>
+        e.currency === account.currency &&
+        e.status === "completed" &&
+        !(e as { subAccountId?: string | null }).subAccountId,
+    )
+    const isCover = (e: LedgerEntry) => e.id.startsWith("FX-COVER-") || e.category === "FX Auto-Cover"
+    const natural = own
+      .filter((e) => !isCover(e))
+      .reduce((sum, e) => sum + (e.direction === "credit" ? e.amount : -e.amount), 0)
+    if (natural >= -0.01) return null
+    const covered = own
+      .filter((e) => isCover(e))
+      .reduce((sum, e) => sum + (e.direction === "credit" ? e.amount : -e.amount), 0)
+    const topDebits = own
+      .filter((e) => e.direction === "debit" && !isCover(e))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 5)
+    return { natural, covered, shown: natural + covered, topDebits }
   }, [account, entries])
 
   const copyToClipboard = (text: string, field: string) => {
@@ -409,6 +438,75 @@ export default function AccountDetailPage() {
                   </div>
                 </CardContent>
               </Card>
+
+              {overdraftBreakdown && account && (
+                <Card className="border-destructive/40 bg-destructive/5">
+                  <CardContent className="flex flex-col gap-3 p-4">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-foreground text-balance">
+                          Why is this balance negative?
+                        </p>
+                        <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
+                          These are the largest charges in {account.currency}. Tap one to open its receipt.
+                        </p>
+                      </div>
+                    </div>
+
+                    <ul className="flex flex-col gap-2">
+                      {overdraftBreakdown.topDebits.map((e) => (
+                        <li key={e.id}>
+                          <button
+                            type="button"
+                            onClick={() => router.push(`/dashboard/transactions/${encodeURIComponent(e.id)}`)}
+                            className="flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-border bg-background/60 px-3 py-2 text-left transition-colors hover:bg-secondary active:bg-secondary"
+                          >
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm font-medium text-foreground">
+                                {e.category || e.counterparty || "Charge"}
+                              </span>
+                              <span className="block text-xs text-muted-foreground">
+                                {new Date(e.date).toLocaleDateString("en-GB", {
+                                  year: "numeric",
+                                  month: "short",
+                                  day: "numeric",
+                                })}
+                              </span>
+                            </span>
+                            <span className="shrink-0 text-sm font-semibold tabular-nums text-destructive">
+                              −{formatCurrency(e.amount, account.currency)}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+
+                    <dl className="flex flex-col gap-1.5 border-t border-border pt-3 text-xs">
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="text-muted-foreground">True {account.currency} balance</dt>
+                        <dd className="font-semibold tabular-nums text-destructive">
+                          {formatCurrency(overdraftBreakdown.natural, account.currency)}
+                        </dd>
+                      </div>
+                      {overdraftBreakdown.covered > 0.01 && (
+                        <div className="flex items-center justify-between gap-3">
+                          <dt className="text-muted-foreground">Covered from your other currencies</dt>
+                          <dd className="font-semibold tabular-nums text-foreground">
+                            +{formatCurrency(overdraftBreakdown.covered, account.currency)}
+                          </dd>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="font-medium text-foreground">Balance shown</dt>
+                        <dd className="font-semibold tabular-nums text-foreground">
+                          {formatCurrency(overdraftBreakdown.shown, account.currency)}
+                        </dd>
+                      </div>
+                    </dl>
+                  </CardContent>
+                </Card>
+              )}
 
               {/* Per-account transaction history — money in and out of THIS
                   account, shown right on the default tab so it's the first thing
