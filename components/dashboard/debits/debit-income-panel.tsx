@@ -81,8 +81,6 @@ export function DebitIncomePanel({
 
   const income = useMemo(() => {
     const now = new Date()
-    const toDisplay = (amt: number, from: string) =>
-      from === currency ? amt : convertCurrency(amt, from, currency)
 
     // ── Treuhand fund positions, grouped by approval id ──────────────────────
     const groups = new Map<string, typeof entries>()
@@ -93,6 +91,38 @@ export function DebitIncomePanel({
       if (list) list.push(e)
       else groups.set(key, [e])
     }
+
+    // Income is reported in the currency the money was actually invested in,
+    // not the financing currency. Pick the dominant investment currency (by
+    // EUR-equivalent capital); fall back to the financing currency if none.
+    const capitalByCcy = new Map<string, number>()
+    const addCapital = (amt: number, ccy: string) => {
+      if (!(amt > 0) || !ccy) return
+      capitalByCcy.set(ccy, (capitalByCcy.get(ccy) ?? 0) + (ccy === "EUR" ? amt : convertCurrency(amt, ccy, "EUR")))
+    }
+    for (const list of groups.values()) {
+      const deployed = list
+        .filter((e) => e.status === "completed" && e.direction === "debit" && e.category === "NAFTAhub Trading — Fund Subscription")
+        .reduce((s, e) => s + e.amount, 0)
+      const returned = list.some(
+        (e) => e.status === "completed" && e.direction === "credit" && e.category === "NAFTAhub Trading — Fund Exit",
+      )
+      if (deployed > 0 && !returned) addCapital(deployed, list[0]?.currency ?? currency)
+    }
+    for (const r of ppp) {
+      if (r.status === "approved" && !r.cancelledAt) addCapital(r.amount, r.currency)
+    }
+    let incomeCurrency = currency
+    let best = 0
+    for (const [ccy, eur] of capitalByCcy) {
+      if (eur > best) {
+        best = eur
+        incomeCurrency = ccy
+      }
+    }
+
+    const toDisplay = (amt: number, from: string) =>
+      from === incomeCurrency ? amt : convertCurrency(amt, from, incomeCurrency)
 
     let projectedMonthly = 0
     let roiReceived = 0
@@ -177,6 +207,7 @@ export function DebitIncomePanel({
     for (const ccy of currencies) locked += toDisplay(lockedCreditsFor(ccy), ccy)
 
     return {
+      incomeCurrency,
       projectedMonthly,
       roiReceived,
       deployedActive,
@@ -186,7 +217,11 @@ export function DebitIncomePanel({
     }
   }, [entries, ppp, currency, currencies, lockedCreditsFor])
 
-  const net = income.projectedMonthly - monthlyInterest
+  const ccy = income.incomeCurrency
+  const crossCurrency = ccy !== currency
+  // Financing cost converted into the investment currency for a like-for-like comparison.
+  const interestInCcy = crossCurrency ? convertCurrency(monthlyInterest, currency, ccy) : monthlyInterest
+  const net = income.projectedMonthly - interestInCcy
   const covers = income.projectedMonthly > 0 && net >= 0
   const hasIncome = income.projectedMonthly > 0 || income.roiReceived > 0 || income.deployedActive > 0
 
@@ -206,9 +241,16 @@ export function DebitIncomePanel({
             {hasIncome ? (
               <>
                 <p className="mt-1 text-2xl font-bold text-emerald-500 tabular-nums break-all">
-                  {formatMoney(income.projectedMonthly, currency)}
-                  <span className="ml-1 text-sm font-medium text-muted-foreground">/ month projected</span>
+                  {formatMoney(income.projectedMonthly, ccy)}
                 </p>
+                <p className="text-xs font-medium text-muted-foreground">per month, projected</p>
+                {crossCurrency && (
+                  <p className="mt-1 text-[11px] text-muted-foreground text-pretty">
+                    Shown in {ccy}, the currency you invested in. Your financing runs in {currency} (
+                    {formatMoney(monthlyInterest, currency)}/mo) and is converted to {ccy} at today&apos;s rate for the
+                    comparison below.
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground text-pretty">
                   Expected monthly ROI from your active deployments — the return the borrowed capital is generating.
                 </p>
@@ -227,22 +269,22 @@ export function DebitIncomePanel({
                     {covers ? (
                       <>
                         Your projected income of{" "}
-                        <span className="font-semibold">{formatMoney(income.projectedMonthly, currency)}/mo</span>{" "}
+                        <span className="font-semibold">{formatMoney(income.projectedMonthly, ccy)}/mo</span>{" "}
                         exceeds the financing cost of{" "}
-                        <span className="font-semibold">{formatMoney(monthlyInterest, currency)}/mo</span> — a net{" "}
+                        <span className="font-semibold">{formatMoney(interestInCcy, ccy)}/mo</span> — a net{" "}
                         <span className="font-semibold text-emerald-500">
-                          +{formatMoney(net, currency)}/mo
+                          +{formatMoney(net, ccy)}/mo
                         </span>{" "}
                         surplus. You are covered.
                       </>
                     ) : (
                       <>
                         Your projected income of{" "}
-                        <span className="font-semibold">{formatMoney(income.projectedMonthly, currency)}/mo</span> is
+                        <span className="font-semibold">{formatMoney(income.projectedMonthly, ccy)}/mo</span> is
                         currently below the financing cost of{" "}
-                        <span className="font-semibold">{formatMoney(monthlyInterest, currency)}/mo</span> by{" "}
+                        <span className="font-semibold">{formatMoney(interestInCcy, ccy)}/mo</span> by{" "}
                         <span className="font-semibold text-amber-500">
-                          {formatMoney(Math.abs(net), currency)}/mo
+                          {formatMoney(Math.abs(net), ccy)}/mo
                         </span>
                         .
                       </>
@@ -257,7 +299,7 @@ export function DebitIncomePanel({
                       <span className="text-[11px] font-medium">ROI credited so far</span>
                     </div>
                     <p className="mt-0.5 text-base font-semibold text-foreground tabular-nums break-all">
-                      {formatMoney(income.roiReceived, currency)}
+                      {formatMoney(income.roiReceived, ccy)}
                     </p>
                   </div>
                   <div className="rounded-lg border border-border bg-secondary/20 p-3">
@@ -266,7 +308,7 @@ export function DebitIncomePanel({
                       <span className="text-[11px] font-medium">Next ROI credit</span>
                     </div>
                     <p className="mt-0.5 text-base font-semibold text-foreground tabular-nums break-all">
-                      {income.nextRoiDate ? formatMoney(income.nextRoiAmount, currency) : "—"}
+                      {income.nextRoiDate ? formatMoney(income.nextRoiAmount, ccy) : "—"}
                     </p>
                     {income.nextRoiDate && (
                       <p className="text-[11px] text-muted-foreground">
@@ -285,7 +327,7 @@ export function DebitIncomePanel({
                   <div className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-secondary/20 p-3">
                     <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <p className="text-[11px] text-muted-foreground text-pretty">
-                      <span className="font-semibold text-foreground">{formatMoney(income.locked, currency)}</span>{" "}
+                      <span className="font-semibold text-foreground">{formatMoney(income.locked, ccy)}</span>{" "}
                       of ROI is already credited but locked until each program matures (leverage-funded returns unlock
                       at maturity).
                     </p>
