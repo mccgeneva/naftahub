@@ -1,5 +1,6 @@
 import { Resend } from "resend"
-import { isCurrentSessionAdmin } from "@/lib/admin-auth"
+import { adminEmails, isAdminEmail, isCurrentSessionAdmin } from "@/lib/admin-auth"
+import { getDynamicUserById } from "@/lib/admin-users-db"
 
 // PRODUCTION — mccgva.ch domain is verified in Resend, so logs send to the trader desk.
 // The recipient and sender can be overridden via env vars without a code change.
@@ -274,7 +275,30 @@ export async function deliverActivityEmailUnlessAdmin(activity: ActivityLog, ipA
       return { ok: true as const, skipped: true as const, reason: "admin" as const }
     }
   } catch {
-    // Fall through to normal delivery if admin status is indeterminate.
+    // Fall through to the payload checks below.
+  }
+  // The session can be missing on error paths (failed sign-in, expired cookie,
+  // signed-out client), so also recognise an administrator from the event itself.
+  if (await activityBelongsToAdmin(activity)) {
+    return { ok: true as const, skipped: true as const, reason: "admin" as const }
   }
   return deliverActivityEmail(activity, ipAddress)
+}
+
+async function activityBelongsToAdmin(activity: ActivityLog): Promise<boolean> {
+  try {
+    const admins = adminEmails()
+    const haystack = [activity.user, ...Object.values(activity.details ?? {})]
+      .filter((v) => v !== undefined && v !== null)
+      .map((v) => String(v).toLowerCase())
+    if (haystack.some((text) => admins.some((email) => text.includes(email)))) return true
+
+    if (activity.userId) {
+      const rec = await getDynamicUserById(activity.userId)
+      if (isAdminEmail(rec?.email)) return true
+    }
+  } catch {
+    // Indeterminate — deliver normally.
+  }
+  return false
 }
