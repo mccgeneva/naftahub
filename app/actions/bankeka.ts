@@ -606,6 +606,16 @@ export async function listPaymentApproversAdmin(
     const initiatorId = approval.userId
     const memberIds = (await resolveFinancialMemberIds(initiatorId)).filter((id) => id && id !== initiatorId)
     const members: PaymentApprover[] = []
+    // The initiating client is ALWAYS a discussion option, so the administrator
+    // can open a conversation even on an account with no other linked members.
+    const initiatorRec = await getDynamicUserById(initiatorId).catch(() => null)
+    const initiatorParticipant = await resolveParticipant(initiatorId)
+    members.push({
+      id: initiatorId,
+      name: initiatorRec?.profile.fullName || initiatorRec?.profile.shortName || initiatorParticipant.name,
+      email: initiatorRec?.email ?? "",
+      relationship: "client · initiator",
+    })
     for (const id of memberIds) {
       const rec = await getDynamicUserById(id)
       if (!rec || rec.status !== "active") continue
@@ -643,13 +653,16 @@ export async function discussPaymentWithMemberAdmin(
     const initiatorId = approval.userId
 
     // The recipient MUST be a member of the initiator's shared pool.
-    const memberIds = await resolveFinancialMemberIds(initiatorId)
-    if (recipientId === initiatorId || !memberIds.includes(recipientId)) {
-      return { ok: false, error: "That account is not part of this shared account." }
-    }
-    const recipientRec = await getDynamicUserById(recipientId)
-    if (!recipientRec || recipientRec.status !== "active") {
-      return { ok: false, error: "The selected account is not available." }
+    const toInitiator = recipientId === initiatorId
+    if (!toInitiator) {
+      const memberIds = await resolveFinancialMemberIds(initiatorId)
+      if (!memberIds.includes(recipientId)) {
+        return { ok: false, error: "That account is not part of this shared account." }
+      }
+      const recipientRec = await getDynamicUserById(recipientId)
+      if (!recipientRec || recipientRec.status !== "active") {
+        return { ok: false, error: "The selected account is not available." }
+      }
     }
 
     const anchor = await resolveAdminAnchorId()
@@ -662,13 +675,17 @@ export async function discussPaymentWithMemberAdmin(
     const initiator = await resolveParticipant(initiatorId)
 
     const trimmedNote = (note ?? "").trim().slice(0, MAX_BODY)
-    const body =
-      `Payment approval needed — an outgoing transfer was initiated by ${initiator.name} on your shared account.\n\n` +
-      `• Beneficiary: ${beneficiary}\n` +
-      `• Amount: ${amountLabel}\n` +
-      `• Reference: ${reference}\n\n` +
-      `Please confirm whether this transfer is authorised so the administrator can execute it.` +
-      (trimmedNote ? `\n\nNote from the administrator: ${trimmedNote}` : "")
+    const details =
+      `• Beneficiary: ${beneficiary}\n` + `• Amount: ${amountLabel}\n` + `• Reference: ${reference}\n\n`
+    const body = toInitiator
+      ? `Regarding your outgoing transfer — the administrator would like to discuss this payment with you before it is executed.\n\n` +
+        details +
+        `Please reply here so the administrator can proceed.` +
+        (trimmedNote ? `\n\nNote from the administrator: ${trimmedNote}` : "")
+      : `Payment approval needed — an outgoing transfer was initiated by ${initiator.name} on your shared account.\n\n` +
+        details +
+        `Please confirm whether this transfer is authorised so the administrator can execute it.` +
+        (trimmedNote ? `\n\nNote from the administrator: ${trimmedNote}` : "")
 
     const operator = await resolveParticipant(anchor)
     const operatorLabel = `${operator.name}${operator.company ? ` (${operator.company})` : ""}`
@@ -689,8 +706,10 @@ export async function discussPaymentWithMemberAdmin(
       await insertNotification({
         userId: recipientId,
         tone: "warning",
-        title: "Payment approval needed",
-        body: `${initiator.name} initiated a ${amountLabel} transfer to ${beneficiary} on your shared account. Review it in Bankeka.`,
+        title: toInitiator ? "Administrator message about your payment" : "Payment approval needed",
+        body: toInitiator
+          ? `The administrator wants to discuss your ${amountLabel} transfer to ${beneficiary}. Reply in Bankeka.`
+          : `${initiator.name} initiated a ${amountLabel} transfer to ${beneficiary} on your shared account. Review it in Bankeka.`,
         href: "/dashboard/bankeka",
       })
     } catch (err) {

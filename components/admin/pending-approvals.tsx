@@ -1547,7 +1547,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
       toast.error(res.error)
       return
     }
-    toast.success("Payment sent to the co-account holder for approval via Bankeka.")
+    toast.success("Discussion opened — the message was sent via Bankeka.")
     setDiscussTarget(null)
     setDiscussMembers([])
     setDiscussRecipient("")
@@ -3818,8 +3818,8 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
               {discussTarget ? (
                 <>
                   This payment was initiated by{" "}
-                  <span className="font-medium text-foreground">{discussTarget.initiator}</span>. Send it directly to the
-                  co-account holder who must authorise it — they&apos;ll receive it in Bankeka and can confirm before you
+                  <span className="font-medium text-foreground">{discussTarget.initiator}</span>. Open a discussion with
+                  the client or any co-account holder — they&apos;ll receive it in Bankeka and can reply before you
                   execute the transfer.
                 </>
               ) : null}
@@ -3841,7 +3841,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                   <label className="text-sm font-medium text-foreground">Discuss with</label>
                   <Select value={discussRecipient} onValueChange={setDiscussRecipient}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select the account that must approve" />
+                      <SelectValue placeholder="Select who to discuss with" />
                     </SelectTrigger>
                     <SelectContent>
                       {discussMembers.map((m) => (
