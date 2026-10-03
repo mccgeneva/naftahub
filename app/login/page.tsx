@@ -1,6 +1,6 @@
 import Link from "next/link"
 import type { Metadata } from "next"
-import { ShieldAlert } from "lucide-react"
+import { ShieldAlert, ShieldCheck } from "lucide-react"
 import { LoginForm } from "@/components/login-form"
 import { DownloadAppButton } from "@/components/download-app-button"
 
@@ -73,6 +73,33 @@ export default async function LoginPage({
             <span className="font-medium text-foreground">MCC Holding (MCC Capital)</span>
           </p>
         </div>
+
+        <section
+          aria-labelledby="licensing-disclaimer-title"
+          className="mt-4 rounded-lg border border-border bg-card p-4"
+        >
+          <div className="flex items-start gap-3">
+            <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+            <div className="flex min-w-0 flex-col gap-2">
+              <h2
+                id="licensing-disclaimer-title"
+                className="text-sm font-semibold text-foreground text-balance"
+              >
+                Banking licences &amp; regulation
+              </h2>
+              <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
+                NAFTAhub is a technology platform, not a bank. Regulated banking and payment services
+                are provided through white-label partnership agreements with licensed partner banks
+                ranked among the world&apos;s top 25 and holding top-tier credit ratings. Under these
+                agreements the platform operates under the banking licences of its partners.
+              </p>
+              <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
+                Your funds and transactions are held and processed by these licensed partner banks,
+                under the supervision of their banking regulators.
+              </p>
+            </div>
+          </div>
+        </section>
 
         <p className="mt-6 text-center text-xs text-muted-foreground">
           {"\u00A9"} 2024 MCC Holding SA. For qualified investors only.
