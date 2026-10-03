@@ -26,6 +26,7 @@ import { DebitIncomePanel } from "@/components/dashboard/debits/debit-income-pan
 import { DebitCalendar } from "@/components/dashboard/debits/debit-calendar"
 import { DebitChargeList } from "@/components/dashboard/debits/debit-charge-list"
 import { DebitScenarios } from "@/components/dashboard/debits/debit-scenarios"
+import { PpiInsuranceCard } from "@/components/dashboard/ppi-insurance-card"
 
 export default function DebitsPage() {
   const { requests: funding, hydrated: fHydrated, refresh: refreshFunding } = useProjectFunding()
@@ -283,6 +284,8 @@ export default function DebitsPage() {
               </div>
             </CardContent>
           </Card>
+
+          <PpiInsuranceCard />
 
           {/* Income side — what ROI is coming in to cover the financing, so the
               customer can weigh incomes against debits at a glance. */}

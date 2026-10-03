@@ -133,6 +133,7 @@ import { OutgoingBlocksManager } from "@/components/admin/outgoing-blocks-manage
 import { FeeTierManager } from "@/components/admin/fee-tier-manager"
 import { FeeCashbackManager } from "@/components/admin/fee-cashback-manager"
   import { GuaranteesManager } from "@/components/admin/guarantees-manager"
+import { PpiInsuranceManager } from "@/components/admin/ppi-insurance-manager"
   import { SectionAccessManager } from "@/components/admin/section-access-manager"
   import { DemoIdLog } from "@/components/admin/demo-id-log"
   import { SubAccountsManager } from "@/components/admin/sub-accounts-manager"
@@ -2464,6 +2465,7 @@ export default function AdminPage() {
         { id: "feetiers", label: "Transaction Fees", description: "Edit the marginal tiered fee brackets applied to incoming, internal and outgoing payments.", icon: Percent, count: 0 },
         { id: "feecashback", label: "Fee Cashback", description: "Authorise a cashback % that reduces platform fees — globally, per product type, or per customer.", icon: HandCoins, count: 0 },
   { id: "guarantees", label: "Guarantees Accumulator", description: "Independent trust/risk scoring. Tune the factor weights and high-risk threshold; high-risk accounts are blocked from opening new financing.", icon: ShieldAlert, count: 0 },
+        { id: "ppi", label: "PPI Insurance", description: "Price full Payment Protection Insurance for a customer's exposure, negotiate with Lloyd's of London, approve and charge.", icon: ShieldAlert, count: 0 },
         { id: "sectionaccess", label: "Section Access", description: "Lock or unlock any dashboard section for an individual user; grant a Visitor full access to a selected section.", icon: Lock, count: 0 },
         { id: "demoid", label: "Demo ID Log", description: "Inspect the ID documents, IP addresses and GPS positions captured from visitors testing the demo account.", icon: Fingerprint, count: 0 },
         { id: "subaccounts", label: "Sub-Accounts", description: "Assign an IBAN/BIC to activate client sub-account requests, or reject them.", icon: Layers, count: pendingSubAccountCount },
@@ -5610,6 +5612,7 @@ export default function AdminPage() {
             {activeView === "feetiers" && <FeeTierManager passcode={ADMIN_PASSCODE} />}
             {activeView === "feecashback" && <FeeCashbackManager passcode={ADMIN_PASSCODE} />}
           {activeView === "guarantees" && <GuaranteesManager passcode={ADMIN_PASSCODE} />}
+          {activeView === "ppi" && <PpiInsuranceManager passcode={ADMIN_PASSCODE} />}
 
             {activeView === "sectionaccess" && <SectionAccessManager passcode={ADMIN_PASSCODE} />}
             {activeView === "demoid" && <DemoIdLog passcode={ADMIN_PASSCODE} />}
