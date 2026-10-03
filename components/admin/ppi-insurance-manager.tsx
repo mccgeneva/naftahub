@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import {
   Loader2,
@@ -15,6 +15,7 @@ import {
   Play,
   Power,
   RotateCcw,
+  MessagesSquare,
 } from "lucide-react"
 import { PpiDiscussion } from "@/components/ppi-discussion"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -182,6 +183,16 @@ export function PpiInsuranceManager({ passcode }: { passcode: string }) {
     }
   }
 
+  useEffect(() => {
+    if (analysis && !reference.trim()) setReference(generateLloydsSlipRef())
+  }, [analysis, reference])
+
+  const discussionRef = useRef<HTMLDivElement>(null)
+  const openDiscussion = () => {
+    discussionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+    discussionRef.current?.querySelector<HTMLTextAreaElement | HTMLInputElement>("textarea, input")?.focus()
+  }
+
   const negotiatedValue = negotiated.trim() ? Number(negotiated) : null
 
   const saveDeal = async (): Promise<PpiPolicy | null> => {
@@ -315,12 +326,14 @@ export function PpiInsuranceManager({ passcode }: { passcode: string }) {
           )}
 
           {userId && (threadPolicy || (analysis && analysis.quote.coverEur > 0)) && (
-            <PpiDiscussion
-              messages={threadPolicy?.messages ?? []}
-              viewer="treasury"
-              onSend={sendTreasuryMessage}
-              placeholder={threadPolicy ? "Message the customer…" : "Message the customer (opens a deal)…"}
-            />
+            <div ref={discussionRef} id="ppi-discussion" className="scroll-mt-24">
+              <PpiDiscussion
+                messages={threadPolicy?.messages ?? []}
+                viewer="treasury"
+                onSend={sendTreasuryMessage}
+                placeholder={threadPolicy ? "Message the customer…" : "Message the customer (opens a deal)…"}
+              />
+            </div>
           )}
 
           {analysis && (
@@ -384,6 +397,11 @@ export function PpiInsuranceManager({ passcode }: { passcode: string }) {
                       </Badge>
                     )}
                   </div>
+                  <Button type="button" variant="outline" onClick={openDiscussion} className="min-h-11 w-full">
+                    <MessagesSquare className="h-4 w-4" />
+                    Discuss with customer
+                    {threadPolicy?.messages?.length ? ` (${threadPolicy.messages.length})` : ""}
+                  </Button>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="ppi-premium">Negotiated premium (EUR) — leave blank to use the calculated premium</Label>
                     <MoneyInput
