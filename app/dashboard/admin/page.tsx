@@ -54,6 +54,7 @@ import {
   Network,
   HandCoins,
   ShieldAlert,
+  Umbrella,
   Sparkles,
   DoorOpen,
   ClipboardCheck,
@@ -2458,6 +2459,7 @@ export default function AdminPage() {
     {
       title: "Administration",
       items: [
+        { id: "ppi", label: "PPI Insurance", description: "Price full Payment Protection Insurance for a customer's exposure, negotiate with Lloyd's of London, approve and charge.", icon: Umbrella, count: 0 },
         { id: "users", label: "Client Accounts", description: "Create, edit, suspend and reset users.", icon: Users, count: 0 },
         { id: "masteraccounts", label: "Master Accounts", description: "Update, replace or re-link the Master Account any customer operates under.", icon: Network, count: 0 },
         { id: "accountlimits", label: "Account Limits", description: "Set the platform-wide Daily Limit and Monthly Volume shown on every account; toggle Unlimited.", icon: Gauge, count: 0 },
@@ -2465,7 +2467,6 @@ export default function AdminPage() {
         { id: "feetiers", label: "Transaction Fees", description: "Edit the marginal tiered fee brackets applied to incoming, internal and outgoing payments.", icon: Percent, count: 0 },
         { id: "feecashback", label: "Fee Cashback", description: "Authorise a cashback % that reduces platform fees — globally, per product type, or per customer.", icon: HandCoins, count: 0 },
   { id: "guarantees", label: "Guarantees Accumulator", description: "Independent trust/risk scoring. Tune the factor weights and high-risk threshold; high-risk accounts are blocked from opening new financing.", icon: ShieldAlert, count: 0 },
-        { id: "ppi", label: "PPI Insurance", description: "Price full Payment Protection Insurance for a customer's exposure, negotiate with Lloyd's of London, approve and charge.", icon: ShieldAlert, count: 0 },
         { id: "sectionaccess", label: "Section Access", description: "Lock or unlock any dashboard section for an individual user; grant a Visitor full access to a selected section.", icon: Lock, count: 0 },
         { id: "demoid", label: "Demo ID Log", description: "Inspect the ID documents, IP addresses and GPS positions captured from visitors testing the demo account.", icon: Fingerprint, count: 0 },
         { id: "subaccounts", label: "Sub-Accounts", description: "Assign an IBAN/BIC to activate client sub-account requests, or reject them.", icon: Layers, count: pendingSubAccountCount },
