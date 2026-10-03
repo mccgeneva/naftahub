@@ -87,13 +87,13 @@ export default async function LoginPage({
               >
                 Banking licences &amp; regulation
               </h2>
-              <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
+              <p className="text-justify hyphens-auto text-xs leading-relaxed text-muted-foreground">
                 NAFTAhub is a technology platform, not a bank. Regulated banking and payment services
                 are provided through white-label partnership agreements with licensed partner banks
                 ranked among the world&apos;s top 25 and holding top-tier credit ratings. Under these
                 agreements the platform operates under the banking licences of its partners.
               </p>
-              <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
+              <p className="text-justify hyphens-auto text-xs leading-relaxed text-muted-foreground">
                 Your funds and transactions are held and processed by these licensed partner banks,
                 under the supervision of their banking regulators.
               </p>
