@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
+import { RegulatoryDisclaimer } from "@/components/regulatory-disclaimer"
 
 const features = [
   {
@@ -430,6 +431,7 @@ export default function LandingPage() {
               <span>AML Compliant</span>
             </div>
           </div>
+          <RegulatoryDisclaimer id="home-regulatory-disclaimer" className="mx-auto mt-8 max-w-3xl" />
           <div className="mt-8 pt-8 border-t border-border text-center text-xs text-muted-foreground">
             © 2024 MCC Holding SA. All rights reserved. This platform is for
             qualified investors only.
