@@ -85,17 +85,34 @@ export default async function LoginPage({
                 id="licensing-disclaimer-title"
                 className="text-sm font-semibold text-foreground text-balance"
               >
-                Banking licences &amp; regulation
+                Regulatory status
               </h2>
               <p className="text-justify hyphens-auto text-xs leading-relaxed text-muted-foreground">
-                NAFTAhub is a technology platform, not a bank. Regulated banking and payment services
-                are provided through white-label partnership agreements with licensed partner banks
-                ranked among the world&apos;s top 25 and holding top-tier credit ratings. Under these
-                agreements the platform operates under the banking licences of its partners.
+                NAFTAhub PLC (Company No. 16421621) is a public limited company registered in England
+                and Wales. Its registered office is 71-75 Shelton Street, Covent Garden, London, WC2H
+                9JQ.
               </p>
               <p className="text-justify hyphens-auto text-xs leading-relaxed text-muted-foreground">
-                Your funds and transactions are held and processed by these licensed partner banks,
-                under the supervision of their banking regulators.
+                NAFTAhub is a software and technology provider. It is not a bank, payment institution,
+                e-money institution or investment firm, and it is not authorised or regulated by the
+                Financial Conduct Authority. NAFTAhub does not hold client money or carry out regulated
+                activities.
+              </p>
+              <p className="text-justify hyphens-auto text-xs leading-relaxed text-muted-foreground">
+                Banking and payment services are provided to clients directly by Barclays, NatWest, UBS
+                and J.P. Morgan, each through the authorised and regulated group entity named in the
+                client&apos;s own agreement with that institution. Availability depends on each
+                institution&apos;s onboarding and eligibility requirements. NAFTAhub&apos;s role is
+                limited to providing technology that connects to those services. Deposit protection,
+                including FSCS where applicable, depends on the institution and account type and
+                applies only as set out by that institution. The banks named do not endorse and are not
+                responsible for NAFTAhub&apos;s platform or content.
+              </p>
+              <p className="text-justify hyphens-auto text-xs leading-relaxed text-muted-foreground">
+                NAFTAhub PLC is a separate legal entity from MCC Holding SA (Switzerland) and from any
+                related companies. References to other companies do not make them parties to your
+                agreement with a bank or with NAFTAhub. NAFTAhub does not give financial, investment or
+                legal advice.
               </p>
             </div>
           </div>
