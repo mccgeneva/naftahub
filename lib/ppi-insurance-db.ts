@@ -1,6 +1,6 @@
 import "server-only"
 import { query } from "@/lib/db"
-import type { PpiPolicy, PpiPolicyStatus } from "@/lib/ppi-insurance"
+import type { PpiMessage, PpiPolicy, PpiPolicyStatus } from "@/lib/ppi-insurance"
 
 let ensured = false
 
@@ -28,6 +28,7 @@ async function ensureTable(): Promise<void> {
      )`,
   )
   await query(`CREATE INDEX IF NOT EXISTS ppi_policies_owner_idx ON ppi_policies (owner_id)`)
+  await query(`ALTER TABLE ppi_policies ADD COLUMN IF NOT EXISTS messages jsonb NOT NULL DEFAULT '[]'::jsonb`)
   ensured = true
 }
 
@@ -51,7 +52,18 @@ function rowToPolicy(r: Record<string, unknown>): PpiPolicy {
     activatedAt: iso(r.activated_at),
     expiresAt: iso(r.expires_at),
     chargeEntryId: (r.charge_entry_id as string) ?? null,
+    messages: Array.isArray(r.messages) ? (r.messages as PpiMessage[]) : [],
   }
+}
+
+export async function appendPpiMessage(id: string, message: PpiMessage): Promise<PpiPolicy | null> {
+  await ensureTable()
+  const { rows } = await query(
+    `UPDATE ppi_policies SET messages = messages || $2::jsonb
+      WHERE id = $1 AND status IN ('negotiating','active','paused','terminated','used') RETURNING *`,
+    [id, JSON.stringify([message])],
+  )
+  return rows[0] ? rowToPolicy(rows[0]) : null
 }
 
 export async function listPpiPolicies(): Promise<PpiPolicy[]> {
@@ -136,6 +148,47 @@ export async function cancelPpiPolicy(id: string): Promise<PpiPolicy | null> {
     [id],
   )
   return rows[0] ? rowToPolicy(rows[0]) : null
+}
+
+/**
+ * Move a paid policy between lifecycle states. Guarded on the current status and
+ * on the policy not having expired, so a stale click can never resurrect cover.
+ */
+export async function setPpiPolicyStatus(
+  id: string,
+  from: PpiPolicyStatus[],
+  to: PpiPolicyStatus,
+): Promise<PpiPolicy | null> {
+  await ensureTable()
+  const { rows } = await query(
+    `UPDATE ppi_policies SET status = $3
+      WHERE id = $1 AND status = ANY($2::text[])
+        AND (expires_at IS NULL OR expires_at > now())
+      RETURNING *`,
+    [id, from, to],
+  )
+  return rows[0] ? rowToPolicy(rows[0]) : null
+}
+
+/**
+ * Mark an active policy as used: PPI pays out once, then the policy terminates.
+ * Guarded on status so a second trigger can never pay out again.
+ */
+export async function consumePpiPolicy(id: string, amountEur: number): Promise<PpiPolicy | null> {
+  await ensureTable()
+  const { rows } = await query(
+    `UPDATE ppi_policies SET status = 'used', claimed_amount = $2
+      WHERE id = $1 AND status = 'active' AND (expires_at IS NULL OR expires_at > now())
+      RETURNING *`,
+    [id, amountEur],
+  )
+  return rows[0] ? rowToPolicy(rows[0]) : null
+}
+
+/** Undo `consumePpiPolicy` when the payout itself failed. */
+export async function restorePpiPolicy(id: string): Promise<void> {
+  await ensureTable()
+  await query(`UPDATE ppi_policies SET status = 'active', claimed_amount = 0 WHERE id = $1 AND status = 'used'`, [id])
 }
 
 /** Atomically record a claim, never exceeding the insured sum. */

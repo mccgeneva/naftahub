@@ -64,7 +64,48 @@ export function computePpiQuote(x: PpiExposure): PpiQuote {
   return { coverEur, baseRate: PPI_BASE_RATE, riskLoading, arrearsLoading, totalRate, premiumEur }
 }
 
-export type PpiPolicyStatus = "negotiating" | "active" | "expired" | "cancelled"
+export type PpiPolicyStatus =
+  | "negotiating"
+  | "active"
+  | "paused"
+  | "terminated"
+  | "used"
+  | "expired"
+  | "cancelled"
+
+export const PPI_STATUS_LABEL: Record<PpiPolicyStatus, string> = {
+  negotiating: "In negotiation",
+  active: "Active",
+  paused: "Paused",
+  terminated: "Deactivated",
+  used: "Used — terminated",
+  expired: "Expired",
+  cancelled: "Cancelled",
+}
+
+/** Statuses in which treasury and the customer can still exchange messages. */
+export const PPI_DISCUSSION_STATUSES: PpiPolicyStatus[] = ["negotiating", "active", "paused", "terminated", "used"]
+
+export type PpiMessage = {
+  id: string
+  author: "treasury" | "client"
+  authorName: string
+  text: string
+  at: string
+}
+
+const SLIP_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+/**
+ * Platform-issued slip reference in Lloyd's Unique Market Reference shape
+ * (B + 4-digit broker code + free text, 17 chars max). It is an internal
+ * placeholder until Lloyd's confirms the real UMR, which the admin can paste over it.
+ */
+export function generateLloydsSlipRef(now = new Date()): string {
+  let suffix = ""
+  for (let i = 0; i < 5; i++) suffix += SLIP_CHARS[Math.floor(Math.random() * SLIP_CHARS.length)]
+  return `B1204NAF${now.getUTCFullYear()}${suffix}`
+}
 
 export type PpiPolicy = {
   id: string
@@ -84,11 +125,17 @@ export type PpiPolicy = {
   activatedAt: string | null
   expiresAt: string | null
   chargeEntryId: string | null
+  messages: PpiMessage[]
 }
 
 /** Effective status: an active policy past its expiry reads as expired. */
 export function effectivePpiStatus(p: Pick<PpiPolicy, "status" | "expiresAt">, now = Date.now()): PpiPolicyStatus {
-  if (p.status === "active" && p.expiresAt && new Date(p.expiresAt).getTime() < now) return "expired"
+  if (
+    (p.status === "active" || p.status === "paused" || p.status === "terminated") &&
+    p.expiresAt &&
+    new Date(p.expiresAt).getTime() < now
+  )
+    return "expired"
   return p.status
 }
 
