@@ -81,6 +81,9 @@ function principalOf(rec: Record<string, unknown> | undefined): number {
       rec.financedAmount ??
       rec.principal ??
       rec.fundingAmount ??
+      // Project funding / private investment (AES + loan facilities) stores
+      // the capital that must be returned as `facility`.
+      rec.facility ??
       rec.amount ??
       0,
   )
