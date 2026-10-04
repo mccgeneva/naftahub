@@ -50,6 +50,8 @@ type Body = {
   note?: string
   text?: string
   action?: LifecycleAction
+  /** Admin override: charge the premium even when it pushes the Master Account into deep debit. */
+  force?: boolean
 }
 
 const LIFECYCLE: Record<
@@ -178,10 +180,14 @@ export async function POST(req: Request) {
       } catch {
         overdraftHeadroom = 0
       }
-      if (premium > available + overdraftHeadroom + 0.01) {
+      const shortfall = Math.round((premium - available - overdraftHeadroom) * 100) / 100
+      const forced = shortfall > 0.01
+      if (forced && body.force !== true) {
         return NextResponse.json({
           ok: false,
-          error: `The customer cannot cover the ${fmt(premium)} premium (available ${fmt(Math.max(0, available))} plus overdraft ${fmt(overdraftHeadroom)}). Ask them to top up first.`,
+          needsForce: true,
+          shortfall,
+          error: `The customer cannot cover the ${fmt(premium)} premium (available ${fmt(Math.max(0, available))} plus overdraft ${fmt(overdraftHeadroom)}). Ask them to top up first, or force approval to charge it into debit.`,
         })
       }
 
@@ -198,7 +204,7 @@ export async function POST(req: Request) {
         category: "PPI Insurance Premium",
         comment: `Annual PPI premium, full cover of ${fmt(policy.coverAmount)}${
           policy.lloydsReference ? ` · Lloyd's ref ${policy.lloydsReference}` : ""
-        }.`,
+        }.${forced ? ` Force-approved by the administrator beyond the available balance and overdraft (shortfall ${fmt(shortfall)}).` : ""}`,
       })
 
       const expiresAt = new Date(Date.now() + PPI_VALIDITY_DAYS * 86_400_000).toISOString()
@@ -212,13 +218,15 @@ export async function POST(req: Request) {
         userId: policy.userId,
         tone: "success",
         title: "PPI insurance is now active",
-        body: `Your Payment Protection Insurance with ${PPI_INSURER} is active until ${new Date(expiresAt).toLocaleDateString("en-GB")}. Full cover of ${fmt(policy.coverAmount)}; premium ${fmt(premium)} charged to your Master Account. If your account goes into debit you can reconcile it with your PPI from the Debits page.`,
+        body: `Your Payment Protection Insurance with ${PPI_INSURER} is active until ${new Date(expiresAt).toLocaleDateString("en-GB")}. Full cover of ${fmt(policy.coverAmount)}; premium ${fmt(premium)} charged to your Master Account${
+          forced ? ` (this places your Master Account in debit by about ${fmt(shortfall)}; please top up)` : ""
+        }. If your account goes into debit you can reconcile it with your PPI from the Debits page.`,
         href: "/dashboard/debits",
       }).catch(() => null)
       await logActivity({
-        action: `Activated PPI policy ${policy.id} for ${policy.holderLabel}`,
+        action: `${forced ? "Force-activated" : "Activated"} PPI policy ${policy.id} for ${policy.holderLabel}`,
         category: "Administration / Insurance",
-        details: { summary: `Premium ${fmt(premium)}, cover ${fmt(policy.coverAmount)}, valid until ${expiresAt.slice(0, 10)}.`, referenceId: policy.id, amount: fmt(premium) },
+        details: { summary: `Premium ${fmt(premium)}, cover ${fmt(policy.coverAmount)}, valid until ${expiresAt.slice(0, 10)}.${forced ? ` FORCED into debit, shortfall ${fmt(shortfall)}.` : ""}`, referenceId: policy.id, amount: fmt(premium) },
       })
       return NextResponse.json({ ok: true, policy: activated })
     }

@@ -225,19 +225,29 @@ export function PpiInsuranceManager({ passcode }: { passcode: string }) {
     }
   }
 
-  const handleActivate = async () => {
+  const [forceShortfall, setForceShortfall] = useState<number | null>(null)
+
+  const handleActivate = async (force = false) => {
     setBusy("activate")
     try {
       const p = await saveDeal()
       if (!p) return
-      const data = await call({ op: "activate", policyId: p.id })
+      const data = await call({ op: "activate", policyId: p.id, force })
       if (data.ok) {
-        toast.success("PPI approved, premium charged and policy active.")
+        toast.success(
+          force
+            ? "PPI force-approved. Premium charged into the customer's debit; policy active."
+            : "PPI approved, premium charged and policy active.",
+        )
+        setForceShortfall(null)
         setPolicyId(null)
         setNegotiated("")
         setReference("")
         setNote("")
         await load()
+      } else if (data.needsForce) {
+        setForceShortfall(Number(data.shortfall) || 0)
+        toast.error(data.error ?? "The customer cannot cover the premium.")
       } else toast.error(data.error ?? "Activation failed.")
     } finally {
       setBusy(null)
@@ -467,7 +477,7 @@ export function PpiInsuranceManager({ passcode }: { passcode: string }) {
                       {busy === "save" && <Loader2 className="h-4 w-4 animate-spin" />}
                       Save deal
                     </Button>
-                    <Button onClick={handleActivate} disabled={busy !== null} className="min-h-11">
+                    <Button onClick={() => handleActivate(false)} disabled={busy !== null} className="min-h-11">
                       {busy === "activate" ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
                       ) : (
@@ -476,6 +486,34 @@ export function PpiInsuranceManager({ passcode }: { passcode: string }) {
                       Approve, charge &amp; activate
                     </Button>
                   </div>
+                  {forceShortfall != null && (
+                    <div className="flex flex-col gap-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+                      <p className="text-pretty leading-relaxed">
+                        The customer can&apos;t cover {eur(finalPremium)}. Forcing approval charges the full premium and
+                        pushes the Master Account about <b>{eur(forceShortfall)}</b> further into debit, beyond the
+                        authorized overdraft. The customer is notified to top up.
+                      </p>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                        <Button
+                          variant="outline"
+                          onClick={() => setForceShortfall(null)}
+                          disabled={busy !== null}
+                          className="min-h-11"
+                        >
+                          Keep it pending
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          onClick={() => handleActivate(true)}
+                          disabled={busy !== null}
+                          className="min-h-11"
+                        >
+                          {busy === "activate" && <Loader2 className="h-4 w-4 animate-spin" />}
+                          Force approve &amp; charge into debit
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
