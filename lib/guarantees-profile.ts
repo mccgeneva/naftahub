@@ -7,6 +7,7 @@ import { getDynamicUserById } from "@/lib/admin-users-db"
 import { convertCurrency } from "@/lib/fx"
 import { readEquitySavingsEur } from "@/lib/equity-savings"
 import { outstandingInternalLoan } from "@/lib/internal-loan"
+import { borrowedFundsFor } from "@/lib/leverage-rates"
 import type { ApprovalRequest } from "@/lib/approvals-db"
 import {
   computeGuaranteeScore,
@@ -161,7 +162,23 @@ export async function gatherGuaranteeProfile(
           const outstanding = outstandingInternalLoan(row as ApprovalRequest, ledgerEntries)
           exposureEur = toEur(outstanding, currencyOf(rec))
         } else {
-          exposureEur = toEur(principalOf(rec), currencyOf(rec))
+          // Older / differently-shaped records may not carry a principal field
+          // inside the record. Fall back to the approval row's own amount (and,
+          // for leverage, derive the borrowed funds from equity × ratio) so no
+          // live financing is ever silently counted as zero exposure.
+          let principal = principalOf(rec)
+          const rowCurrency = (row as { currency?: string | null }).currency
+          const ccy = String(rec.proceedsCurrency || rec.currency || rowCurrency || BASE)
+          if (principal <= 0) {
+            const rowAmount = num((row as { amount?: unknown }).amount)
+            if (kind === "leverage") {
+              const ratio = num(rec.leverageRatio)
+              principal = ratio > 1 ? borrowedFundsFor(rowAmount, ratio, String(rec.account ?? "")) : rowAmount
+            } else {
+              principal = rowAmount
+            }
+          }
+          exposureEur = toEur(principal, ccy)
         }
         if (exposureEur <= 0) continue
         totalExposure += exposureEur
