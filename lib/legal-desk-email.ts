@@ -84,13 +84,13 @@ function buildHtml(m: LegalMt799, mt: string, sender: LegalDeskSender): string {
     <div style="padding:24px 28px;font-size:14px;line-height:1.6;">
       <p style="margin:0 0 4px;"><strong>To:</strong> ${esc(m.recipientName || "To whom it may concern")}</p>
       <p style="margin:0 0 16px;"><strong>Subject:</strong> ${esc(m.subject)}</p>
-      <p style="margin:0 0 8px;font-size:12px;color:#5b5b5b;">The following is transmitted in SWIFT MT799 free-format layout.</p>
+      <p style="margin:0 0 8px;font-size:12px;color:#5b5b5b;">${esc(sender.intro)}</p>
       <pre style="margin:0;padding:16px;background:#f7f7f5;border:1px solid #e3e1da;font-family:'Courier New',Courier,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word;">${esc(mt)}</pre>
       <p style="margin:20px 0 0;">Yours faithfully,</p>
       <p style="margin:4px 0 0;"><strong>${esc(sender.organisation)}</strong><br/>${esc(sender.department)}</p>
     </div>
     <div style="padding:14px 28px;border-top:1px solid #e3e1da;font-size:11px;color:#7a7a7a;line-height:1.5;">
-      This message is confidential and intended solely for the addressee. If you received it in error, please notify the sender at ${esc(sender.address)} and delete it.
+      ${esc(sender.footer)} Contact: ${esc(sender.address)}
     </div>
   </div></body></html>`
 }
