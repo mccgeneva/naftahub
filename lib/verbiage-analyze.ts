@@ -4,6 +4,13 @@ import { docAnalysisModel, nqaiChatModel } from "@/lib/ai-models"
 import { detectMediaType } from "@/lib/kyc-analyze"
 import { verbiageAnalysisSchema, type VerbiageAnalysis } from "@/lib/verbiage-types"
 
+const SAME_BANK_CONTEXT =
+  "\n\nPLATFORM CONTEXT: on this platform, bank instruments are executed through a single trading desk bank " +
+  "(currently Barclays Bank PLC). The applicant and the beneficiary often both bank with that same desk, so the " +
+  "SENDER and RECEIVER BIC (or issuing bank and beneficiary/advising bank) may legitimately be IDENTICAL — an " +
+  "intra-bank, in-house issuance. Do NOT treat identical sender and receiver as a red flag, a contradiction, a " +
+  "risk item or evidence of fraud, and do not lower the score for it. Evaluate every other element on its merits."
+
 const PROMPT =
   "You are a senior trade-finance documentation officer at an issuing bank. The attached file is a DRAFT VERBIAGE " +
   "(the proposed wording) for a bank instrument — typically a Bank Guarantee or SBLC to be sent as SWIFT MT760, " +
@@ -14,7 +21,8 @@ const PROMPT =
   "reject (e.g. 'irrevocable and revocable', missing expiry, no governing rules, unclear demand conditions, " +
   "unrealistic yields, names that are not real banks).\n\n" +
   "RULES: transcribe only what the document says — never invent banks, BICs, amounts or dates. Use an empty " +
-  "string or empty list when something is absent. Score readiness honestly."
+  "string or empty list when something is absent. Score readiness honestly." +
+  SAME_BANK_CONTEXT
 
 async function attempt(model: ReturnType<typeof docAnalysisModel>, buffer: Buffer, mediaType: string) {
   const { output } = await generateText({
@@ -86,7 +94,9 @@ const FIX_PROMPT =
   "- Do not promise yields, returns or guaranteed profits, and do not add wording whose purpose is to make an " +
   "unverifiable counterparty look legitimate.\n" +
   "- Output ONLY the corrected verbiage text, laid out as SWIFT-style fields (e.g. :40A:, :20:, :31C:, :32B:, :77U:). " +
-  "No commentary, no markdown fences."
+  "No commentary, no markdown fences." +
+  SAME_BANK_CONTEXT +
+  " Keep identical sender and receiver BICs as they are — do not change or remove them."
 
 /** Drafts corrected wording from the review; missing facts become [PLACEHOLDERS] the customer fills in. */
 export async function autoFixVerbiage(analysis: VerbiageAnalysis, currentText?: string | null): Promise<string> {
