@@ -446,29 +446,6 @@ export function VerbiageReviewDialog() {
                     </Button>
                   </section>
                 )}
-                {false && (
-                  <div className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm">
-                    <div className="flex gap-2">
-                      <ShieldAlert className="h-4 w-4 shrink-0 text-destructive" />
-                      <span className="leading-relaxed">
-                        {current.analysis.verdict === "not_issuable"
-                          ? "This wording can't be issued as it stands."
-                          : "This wording needs revision before a bank will issue it."}{" "}
-                        Auto-fix rewrites it to bank standard and checks it again. Anything we can&apos;t know, like
-                        the issuing bank, is left as a [PLACEHOLDER] for you to fill in.
-                      </span>
-                    </div>
-                    <Button className="min-h-11 w-full" disabled={working} onClick={() => revise("autofix")}>
-                      {busy === "fixing" ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <Wand2 className="mr-2 h-4 w-4" />
-                      )}
-                      {busy === "fixing" ? "Correcting and re-checking…" : "Auto-fix wording"}
-                    </Button>
-                  </div>
-                )}
-
                 {current.correctedText && (
                   <section className="flex flex-col gap-2">
                     <div className="flex items-center justify-between gap-2">
