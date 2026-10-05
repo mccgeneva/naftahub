@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { useInstrumentRequests, type Instrument } from "@/lib/instrument-requests-store"
 import { generateInstrumentCertificate } from "@/lib/certificate-pdf"
+import { usePdfViewer } from "@/lib/pdf-viewer"
 import { riskScoreTone } from "@/lib/instrument-audit"
 
 const typeColors: Record<string, string> = {
@@ -36,6 +37,7 @@ export default function InstrumentDetailPage() {
   const params = useParams<{ id: string }>()
   const router = useRouter()
   const { instruments, hydrated } = useInstrumentRequests()
+  const { show } = usePdfViewer()
 
   const id = decodeURIComponent(params.id)
   const instrument = useMemo(() => instruments.find((i) => i.id === id), [instruments, id])
@@ -74,7 +76,7 @@ export default function InstrumentDetailPage() {
   }
 
   const downloadCertificate = (inst: Instrument) => {
-    generateInstrumentCertificate({
+    show(generateInstrumentCertificate({
       id: inst.id,
       type: inst.type,
       typeFull: inst.typeFull,
@@ -99,9 +101,9 @@ export default function InstrumentDetailPage() {
       governingLaw: inst.governingLaw,
       deliveryMethod: inst.deliveryMethod,
       form: inst.form,
-    })
-    toast.success("Certificate downloaded", {
-      description: `The certificate for ${inst.id} has been generated as a PDF.`,
+    }))
+    toast.success("Certificate ready", {
+      description: `The certificate for ${inst.id} is open — use Download or Share to save it.`,
     })
   }
 
