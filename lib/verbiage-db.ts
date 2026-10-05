@@ -119,7 +119,7 @@ export async function insertVerbiage(input: {
   analysis: VerbiageAnalysis
 }): Promise<VerbiageSubmission> {
   await ensureTables()
-  const rows = await query<Row>(
+  const { rows } = await query<Row>(
     `INSERT INTO instrument_verbiage_submissions (id, user_id, holder_label, file_name, blob_pathname, analysis)
      VALUES ($1,$2,$3,$4,$5,$6::jsonb) RETURNING *`,
     [input.id, input.userId, input.holderLabel, input.fileName, input.blobPathname, JSON.stringify(input.analysis)],
@@ -129,13 +129,13 @@ export async function insertVerbiage(input: {
 
 export async function getVerbiage(id: string): Promise<VerbiageSubmission | null> {
   await ensureTables()
-  const rows = await query<Row>(`SELECT * FROM instrument_verbiage_submissions WHERE id = $1`, [id])
+  const { rows } = await query<Row>(`SELECT * FROM instrument_verbiage_submissions WHERE id = $1`, [id])
   return rows[0] ? toSubmission(rows[0]) : null
 }
 
 export async function listVerbiageForUser(userId: string): Promise<VerbiageSubmission[]> {
   await ensureTables()
-  const rows = await query<Row>(
+  const { rows } = await query<Row>(
     `SELECT * FROM instrument_verbiage_submissions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
     [userId],
   )
@@ -144,7 +144,7 @@ export async function listVerbiageForUser(userId: string): Promise<VerbiageSubmi
 
 export async function listAllVerbiage(): Promise<VerbiageSubmission[]> {
   await ensureTables()
-  const rows = await query<Row>(
+  const { rows } = await query<Row>(
     `SELECT * FROM instrument_verbiage_submissions WHERE status <> 'withdrawn' ORDER BY created_at DESC LIMIT 200`,
   )
   return rows.map(toSubmission)
@@ -152,7 +152,7 @@ export async function listAllVerbiage(): Promise<VerbiageSubmission[]> {
 
 export async function countVerbiageAwaitingAdmin(): Promise<number> {
   await ensureTables()
-  const rows = await query<{ n: string }>(
+  const { rows } = await query<{ n: string }>(
     `SELECT COUNT(*)::text AS n FROM instrument_verbiage_submissions WHERE status IN ('awaiting_transmission','transmitted')`,
   )
   return Number(rows[0]?.n ?? 0)
@@ -191,7 +191,7 @@ export async function updateVerbiage(
   }
   if (!sets.length) return getVerbiage(id)
   vals.push(id)
-  const rows = await query<Row>(
+  const { rows } = await query<Row>(
     `UPDATE instrument_verbiage_submissions SET ${sets.join(", ")} WHERE id = $${vals.length} RETURNING *`,
     vals,
   )
@@ -201,7 +201,7 @@ export async function updateVerbiage(
 export async function getBarclaysExecutionEmail(): Promise<string> {
   try {
     await ensureTables()
-    const rows = await query<{ barclays_email: string }>(
+    const { rows } = await query<{ barclays_email: string }>(
       `SELECT barclays_email FROM instrument_verbiage_settings WHERE id = 'global'`,
     )
     return rows[0]?.barclays_email?.trim() ?? ""
