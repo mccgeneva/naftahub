@@ -60,10 +60,12 @@ export async function analyzeVerbiageDocument(buffer: Buffer, declaredType: stri
 /** Re-runs the same review on plain-text wording (the auto-fixed or edited draft). */
 export async function analyzeVerbiageText(text: string): Promise<VerbiageAnalysis> {
   const errors: string[] = []
-  for (const model of [docAnalysisModel(), nqaiChatModel()]) {
+  // Text-only re-check: the faster chat model first, each attempt time-boxed so it can't hang.
+  for (const model of [nqaiChatModel(), docAnalysisModel()]) {
     try {
       const { output } = await generateText({
         model,
+        abortSignal: AbortSignal.timeout(70000),
         output: Output.object({ schema: verbiageAnalysisSchema }),
         prompt:
           PROMPT.replace("The attached file is", "The text below is") +

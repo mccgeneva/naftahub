@@ -8,6 +8,7 @@ import {
 } from "@/lib/verbiage-analyze"
 import { getVerbiage, insertVerbiage, listVerbiageForUser, newVerbiageId, updateVerbiage } from "@/lib/verbiage-db"
 import { transmitVerbiageToBarclays } from "@/lib/verbiage-transmit"
+import { VERBIAGE_FIELDS, buildVerbiageText, missingFieldKeys, type VerbiageFieldValues } from "@/lib/verbiage-fields"
 import { notifyAllAdminsOfClientRequest } from "@/lib/notify-admins"
 import { logActivity } from "@/app/actions/log-activity"
 
@@ -78,7 +79,12 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   const session = await resolveCurrentSession()
   if (!session) return NextResponse.json({ ok: false, error: "Not authorized." }, { status: 401 })
-  const body = (await request.json().catch(() => ({}))) as { id?: string; op?: string; text?: string }
+  const body = (await request.json().catch(() => ({}))) as {
+    id?: string
+    op?: string
+    text?: string
+    fields?: Record<string, unknown>
+  }
   const sub = body.id ? await getVerbiage(body.id) : null
   if (!sub || sub.userId !== session.id) {
     return NextResponse.json({ ok: false, error: "Submission not found." }, { status: 404 })
@@ -132,6 +138,56 @@ export async function PATCH(request: NextRequest) {
     }
     const updated = await updateVerbiage(sub.id, { status: "analyzed", overrideReason: null, overrideRequestedAt: null })
     return NextResponse.json({ ok: true, submission: updated })
+  }
+
+  if (body.op === "complete") {
+    if (sub.status !== "analyzed") {
+      return NextResponse.json({ ok: false, error: "This submission can no longer be changed." }, { status: 400 })
+    }
+    if (sub.revision >= MAX_REVISIONS) {
+      return NextResponse.json(
+        { ok: false, error: "Revision limit reached for this submission. Upload a new document." },
+        { status: 400 },
+      )
+    }
+    const raw = (body.fields ?? {}) as Record<string, unknown>
+    const values = Object.fromEntries(
+      VERBIAGE_FIELDS.map((f) => [f.key, String(raw[f.key] ?? "").trim().slice(0, 500)]),
+    ) as VerbiageFieldValues
+    const missing = missingFieldKeys(values)
+    if (missing.length) {
+      const labels = VERBIAGE_FIELDS.filter((f) => missing.includes(f.key)).map((f) => f.label)
+      return NextResponse.json({ ok: false, error: `Fill in: ${labels.join(", ")}.` }, { status: 400 })
+    }
+    if (!Number.isFinite(Number(values.faceValue.replace(/,/g, ""))) || Number(values.faceValue.replace(/,/g, "")) <= 0) {
+      return NextResponse.json({ ok: false, error: "Enter the amount as a number." }, { status: 400 })
+    }
+    if (!/^[A-Z]{3}$/i.test(values.currency)) {
+      return NextResponse.json({ ok: false, error: "Currency must be a 3-letter code, e.g. EUR." }, { status: 400 })
+    }
+    for (const k of ["issuingBankBic", "beneficiaryBankBic"] as const) {
+      if (!/^[A-Z0-9]{8}([A-Z0-9]{3})?$/i.test(values[k])) {
+        return NextResponse.json({ ok: false, error: "A BIC must be 8 or 11 letters/digits." }, { status: 400 })
+      }
+    }
+    const text = buildVerbiageText(values, sub.id)
+    try {
+      const analysis = await analyzeVerbiageText(text)
+      const updated = await updateVerbiage(sub.id, { correctedText: text, analysis, revision: sub.revision + 1 })
+      return NextResponse.json({ ok: true, submission: updated, placeholders: [] })
+    } catch (err) {
+      console.log("[v0] verbiage complete failed:", err instanceof Error ? err.message : String(err))
+      // Save the completed wording even if the re-check timed out, so nothing typed is lost.
+      const updated = await updateVerbiage(sub.id, { correctedText: text }).catch(() => null)
+      return NextResponse.json(
+        {
+          ok: false,
+          submission: updated,
+          error: "Your details were saved but the check didn't finish. Tap Re-check wording.",
+        },
+        { status: 500 },
+      )
+    }
   }
 
   if (body.op === "autofix" || body.op === "recheck") {

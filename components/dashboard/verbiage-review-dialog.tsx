@@ -7,6 +7,14 @@ import { toast } from "sonner"
 import { CheckCircle2, FileSearch, Loader2, RefreshCw, Send, ShieldAlert, Upload, Wand2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  VERBIAGE_FIELDS,
+  fieldsFromAnalysis,
+  missingFieldKeys,
+  type VerbiageFieldValues,
+} from "@/lib/verbiage-fields"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
@@ -122,9 +130,15 @@ export function VerbiageReviewDialog() {
   const [current, setCurrentState] = useState<Submission | null>(null)
   const [draft, setDraft] = useState("")
   const [overrideReason, setOverrideReason] = useState("")
+  const [fieldValues, setFieldValues] = useState<VerbiageFieldValues>(() =>
+    Object.fromEntries(VERBIAGE_FIELDS.map((f) => [f.key, ""])) as VerbiageFieldValues,
+  )
+  const [showMissing, setShowMissing] = useState(false)
   const setCurrent = (s: Submission | null) => {
     setCurrentState(s)
     setDraft(s?.correctedText ?? "")
+    if (s) setFieldValues(fieldsFromAnalysis(s.analysis))
+    setShowMissing(false)
   }
   const fileRef = useRef<HTMLInputElement>(null)
   const { data: history = [], mutate } = useSWR(open ? "/api/instruments/verbiage" : null, fetcher)
@@ -254,6 +268,41 @@ export function VerbiageReviewDialog() {
     }
   }
 
+  async function completeFields() {
+    if (!current) return
+    const missing = missingFieldKeys(fieldValues)
+    if (missing.length) {
+      setShowMissing(true)
+      toast.error(`Fill in ${missing.length} missing detail${missing.length > 1 ? "s" : ""} first.`)
+      return
+    }
+    setBusy("fixing")
+    try {
+      const res = await fetch("/api/instruments/verbiage", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: current.id, op: "complete", fields: fieldValues }),
+        signal: AbortSignal.timeout(170000),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (json.submission) {
+        setCurrentState(json.submission)
+        setDraft(json.submission.correctedText ?? "")
+        mutate()
+      }
+      if (!res.ok || !json.ok) throw new Error(json.error || "Could not apply the details.")
+      const verdict = json.submission?.analysis?.verdict as VerbiageAnalysis["verdict"] | undefined
+      toast.success("Document completed and re-checked", {
+        description: verdict ? `New verdict: ${VERBIAGE_VERDICT_LABELS[verdict]}.` : undefined,
+      })
+    } catch (err) {
+      const timedOut = err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError")
+      toast.error(timedOut ? "The check took too long. Please try again." : err instanceof Error ? err.message : "Failed.")
+    } finally {
+      setBusy("idle")
+    }
+  }
+
   const working = busy !== "idle"
   const editing = current?.status === "analyzed"
   const pendingPlaceholders = placeholdersIn(draft)
@@ -323,7 +372,63 @@ export function VerbiageReviewDialog() {
                   <Badge variant="secondary">{VERBIAGE_STATUS_LABELS[current.status] ?? current.status}</Badge>
                 </div>
                 <Report a={current.analysis} />
-                {editing && current.analysis.verdict !== "ready" && !current.correctedText && (
+                {editing && current.analysis.verdict !== "ready" && (
+                  <section className="flex flex-col gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
+                    <div className="flex flex-col gap-1">
+                      <h4 className="text-sm font-medium">Complete the missing details</h4>
+                      <p className="text-sm leading-relaxed text-muted-foreground">
+                        We prefilled what we found. Fill in each empty field, then tap Apply — we build the
+                        bank-standard wording from your details and check it again.
+                      </p>
+                      {missingFieldKeys(fieldValues).length > 0 && (
+                        <p className="text-sm font-medium text-amber-600">
+                          {missingFieldKeys(fieldValues).length} field
+                          {missingFieldKeys(fieldValues).length > 1 ? "s" : ""} still missing
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-3">
+                      {VERBIAGE_FIELDS.map((f) => {
+                        const empty = !fieldValues[f.key].trim()
+                        const id = `vf-${f.key}`
+                        return (
+                          <div key={f.key} className="flex flex-col gap-1.5">
+                            <Label htmlFor={id} className="flex items-center justify-between gap-2 text-sm">
+                              <span>{f.label}</span>
+                              {empty && (
+                                <span className="text-xs font-medium text-amber-600">Missing</span>
+                              )}
+                            </Label>
+                            <Input
+                              id={id}
+                              value={fieldValues[f.key]}
+                              placeholder={f.placeholder}
+                              inputMode={f.inputMode ?? "text"}
+                              disabled={working}
+                              aria-invalid={showMissing && empty}
+                              onChange={(e) => setFieldValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                              className={`min-h-11 text-base ${showMissing && empty ? "border-amber-500" : ""}`}
+                              autoComplete="off"
+                              autoCorrect="off"
+                              spellCheck={false}
+                              data-1p-ignore
+                              data-lpignore="true"
+                            />
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <Button className="min-h-11 w-full" disabled={working} onClick={completeFields}>
+                      {busy === "fixing" ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Wand2 className="mr-2 h-4 w-4" />
+                      )}
+                      <span>{busy === "fixing" ? "Applying & checking…" : "Apply details & re-check"}</span>
+                    </Button>
+                  </section>
+                )}
+                {false && (
                   <div className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm">
                     <div className="flex gap-2">
                       <ShieldAlert className="h-4 w-4 shrink-0 text-destructive" />
@@ -391,21 +496,7 @@ export function VerbiageReviewDialog() {
                           )}
                           Re-check wording
                         </Button>
-                        {current.analysis.verdict !== "ready" && (
-                          <Button
-                            variant="outline"
-                            className="min-h-11 flex-1"
-                            disabled={working}
-                            onClick={() => revise("autofix")}
-                          >
-                            {busy === "fixing" ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                              <Wand2 className="mr-2 h-4 w-4" />
-                            )}
-                            Auto-fix again
-                          </Button>
-                        )}
+
                       </div>
                     )}
                     {editing && draftChanged && (
