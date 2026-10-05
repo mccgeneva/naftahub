@@ -138,6 +138,7 @@ import { FeeCashbackManager } from "@/components/admin/fee-cashback-manager"
 import { PpiInsuranceManager } from "@/components/admin/ppi-insurance-manager"
 import { AmlCasesManager } from "@/components/admin/aml-cases-manager"
 import { AmlInstrumentsPanel } from "@/components/admin/aml-instruments-panel"
+import { LegalDeskManager } from "@/components/admin/legal-desk-manager"
   import { SectionAccessManager } from "@/components/admin/section-access-manager"
   import { DemoIdLog } from "@/components/admin/demo-id-log"
   import { SubAccountsManager } from "@/components/admin/sub-accounts-manager"
@@ -2483,6 +2484,7 @@ export default function AdminPage() {
       title: "Administration",
       items: [
         { id: "aml", label: "AML Compliance", description: "Upload auditor and compliance-office letters about a customer, and track the actions and measures to undertake on that account.", icon: Scale, count: openAmlCaseCount },
+        { id: "legaldesk", label: "Legal Desk", description: "Write legal notices about a client, instrument or transaction and send them as an MT799 by email from lawfirm@juristreuhand.com.", icon: Scale, count: 0 },
         { id: "ppi", label: "PPI Insurance", description: "Price full Payment Protection Insurance for a customer's exposure, negotiate with Lloyd's of London, approve and charge.", icon: Umbrella, count: 0 },
         { id: "users", label: "Client Accounts", description: "Create, edit, suspend and reset users.", icon: Users, count: 0 },
         { id: "masteraccounts", label: "Master Accounts", description: "Update, replace or re-link the Master Account any customer operates under.", icon: Network, count: 0 },
@@ -5638,6 +5640,7 @@ export default function AdminPage() {
             {activeView === "feecashback" && <FeeCashbackManager passcode={ADMIN_PASSCODE} />}
           {activeView === "guarantees" && <GuaranteesManager passcode={ADMIN_PASSCODE} />}
           {activeView === "ppi" && <PpiInsuranceManager passcode={ADMIN_PASSCODE} />}
+          {activeView === "legaldesk" && <LegalDeskManager passcode={ADMIN_PASSCODE} />}
           {activeView === "aml" && (
             <div className="flex flex-col gap-6">
               <AmlCasesManager passcode={ADMIN_PASSCODE} />
