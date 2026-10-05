@@ -172,7 +172,16 @@ export async function PATCH(request: NextRequest) {
     }
     const text = buildVerbiageText(values, sub.id)
     try {
-      const analysis = await analyzeVerbiageText(text)
+      // Time-box the re-check: if it doesn't finish quickly, keep the completed wording and the previous
+      // verdict so the user is never left on a spinner (a blocked verdict routes the send to the administrator).
+      const analysis = await Promise.race([
+        analyzeVerbiageText(text),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 35000)),
+      ])
+      if (!analysis) {
+        const updated = await updateVerbiage(sub.id, { correctedText: text, revision: sub.revision + 1 })
+        return NextResponse.json({ ok: true, submission: updated, placeholders: [], checked: false })
+      }
       const updated = await updateVerbiage(sub.id, { correctedText: text, analysis, revision: sub.revision + 1 })
       return NextResponse.json({ ok: true, submission: updated, placeholders: [] })
     } catch (err) {

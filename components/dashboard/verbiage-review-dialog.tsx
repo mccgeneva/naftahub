@@ -287,7 +287,7 @@ export function VerbiageReviewDialog() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: current.id, op: "complete", fields: fieldValues }),
-        signal: AbortSignal.timeout(170000),
+        signal: AbortSignal.timeout(60000),
       })
       const json = await res.json().catch(() => ({}))
       if (json.submission) {
@@ -297,9 +297,15 @@ export function VerbiageReviewDialog() {
       }
       if (!res.ok || !json.ok) throw new Error(json.error || "Could not apply the details.")
       const verdict = json.submission?.analysis?.verdict as VerbiageAnalysis["verdict"] | undefined
-      toast.success("Document completed and re-checked", {
-        description: verdict ? `New verdict: ${VERBIAGE_VERDICT_LABELS[verdict]}.` : undefined,
-      })
+      if (json.checked === false) {
+        toast.success("Document completed", {
+          description: "Details applied. Tap the send button below to continue.",
+        })
+      } else {
+        toast.success("Document completed and re-checked", {
+          description: verdict ? `New verdict: ${VERBIAGE_VERDICT_LABELS[verdict]}.` : undefined,
+        })
+      }
     } catch (err) {
       const timedOut = err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError")
       toast.error(timedOut ? "The check took too long. Please try again." : err instanceof Error ? err.message : "Failed.")
@@ -436,13 +442,18 @@ export function VerbiageReviewDialog() {
                         )
                       })}
                     </div>
-                    <Button className="min-h-11 w-full" disabled={working} onClick={completeFields}>
+                    <Button className="min-h-11 w-full" disabled={working} onClick={completeFields} translate="no">
                       {busy === "fixing" ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <span key="fixing" className="flex items-center">
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Applying details…
+                        </span>
                       ) : (
-                        <Wand2 className="mr-2 h-4 w-4" />
+                        <span key="idle" className="flex items-center">
+                          <Wand2 className="mr-2 h-4 w-4" />
+                          Apply details & re-check
+                        </span>
                       )}
-                      <span>{busy === "fixing" ? "Applying & checking…" : "Apply details & re-check"}</span>
                     </Button>
                   </section>
                 )}
@@ -590,13 +601,18 @@ export function VerbiageReviewDialog() {
                   <X className="mr-2 h-4 w-4" />
                   Discard
                 </Button>
-                <Button disabled={working || sendBlocked} onClick={sendPrimary}>
+                <Button disabled={working || sendBlocked} onClick={sendPrimary} translate="no">
                   {busy === "approving" ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <span key="approving" className="flex items-center">
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Sending…
+                    </span>
                   ) : (
-                    <Send className="mr-2 h-4 w-4" />
+                    <span key={needsAdmin ? "admin" : "bank"} className="flex items-center">
+                      <Send className="mr-2 h-4 w-4" />
+                      {needsAdmin ? "Send to administrator for approval" : "Approve & send to Barclays"}
+                    </span>
                   )}
-                  {needsAdmin ? "Send to administrator for approval" : "Approve & send to Barclays"}
                 </Button>
               </>
             ) : current ? (
