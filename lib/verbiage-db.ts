@@ -181,7 +181,7 @@ export async function listAllVerbiage(): Promise<VerbiageSubmission[]> {
 export async function countVerbiageAwaitingAdmin(): Promise<number> {
   await ensureTables()
   const { rows } = await query<{ n: string }>(
-    `SELECT COUNT(*)::text AS n FROM instrument_verbiage_submissions WHERE status IN ('override_requested','awaiting_transmission','transmitted')`,
+    `SELECT COUNT(*)::text AS n FROM instrument_verbiage_submissions WHERE status IN ('override_requested','awaiting_transmission')`,
   )
   return Number(rows[0]?.n ?? 0)
 }

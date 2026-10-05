@@ -60,7 +60,9 @@ export function VerbiageDeskManager({ passcode }: { passcode: string }) {
     setLoading(true)
     try {
       const json = await call({ op: "list" })
-      setSubs(json.submissions)
+      const rank = (s: Submission) =>
+        s.status === "override_requested" ? 0 : s.status === "awaiting_transmission" ? 1 : 2
+      setSubs([...(json.submissions as Submission[])].sort((a, b) => rank(a) - rank(b)))
       setEmail(json.barclaysEmail ?? "")
       setSavedEmail(json.barclaysEmail ?? "")
     } catch (err) {

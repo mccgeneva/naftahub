@@ -2425,6 +2425,7 @@ export default function AdminPage() {
     { id: "section-instruments", view: "approvals", kind: "instrument", label: "Bank Instruments", count: dbPending.instrument ?? 0, icon: FileText },
     { id: "section-instrument-upgrade", view: "instruments", label: "Instrument Upgrade Requests", count: instrumentUpgradeRequests, icon: Sparkles },
     { id: "section-instrument-exit", view: "instrumentexit", label: "Instrument Exit Requests", count: instrumentExitRequests, icon: DoorOpen },
+    { id: "section-verbiage", view: "verbiage", label: "Verbiage Force Approvals", count: verbiageQueueCount, icon: ScrollText },
     { id: "section-ppp", view: "approvals", kind: "ppp", label: "Yield / PPP", count: (dbPending.ppp ?? 0) + yieldTerminationRequests, icon: TrendingUp },
     { id: "section-trading-fund", view: "approvals", kind: "trading_fund", label: "Treuhand Trading Fund", count: dbPending.trading_fund ?? 0, icon: Coins },
     { id: "section-treuhand-termination", view: "treuhand", label: "Treuhand Early Exit", count: treuhandTerminationRequests, icon: Coins },

@@ -10,6 +10,7 @@ import {
 import { listCreditableIncomingSwift } from "@/lib/incoming-swift-db"
 import { countPendingEquityReleases } from "@/lib/equity-release-db"
 import { listAllSwiftRoutingRequests } from "@/lib/swift-routing-db"
+import { countVerbiageAwaitingAdmin } from "@/lib/verbiage-db"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -49,6 +50,7 @@ export async function GET() {
     equityReleases,
     swiftRouting,
     instrumentExits,
+    verbiageQueue,
   ] = await Promise.allSettled([
     countPendingByKind(),
     listCreditableIncomingSwift(),
@@ -58,6 +60,7 @@ export async function GET() {
     countPendingEquityReleases(),
     listAllSwiftRoutingRequests(),
     countInstrumentExitRequests(),
+    countVerbiageAwaitingAdmin(),
   ])
 
   const approvals =
@@ -75,11 +78,13 @@ export async function GET() {
       : 0
   const instrumentExit = instrumentExits.status === "fulfilled" ? instrumentExits.value : 0
 
-  const total = approvals + incomingSwift + delivery + yields + treuhand + equity + routing + instrumentExit
+  const verbiage = verbiageQueue.status === "fulfilled" ? verbiageQueue.value : 0
+
+  const total = approvals + incomingSwift + delivery + yields + treuhand + equity + routing + instrumentExit + verbiage
 
   return NextResponse.json({
     ok: true,
     total,
-    breakdown: { approvals, incomingSwift, delivery, yields, treuhand, equity, routing, instrumentExit },
+    breakdown: { approvals, incomingSwift, delivery, yields, treuhand, equity, routing, instrumentExit, verbiage },
   })
 }
