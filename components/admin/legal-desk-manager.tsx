@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { LEGAL_DESK_SENDERS } from "@/lib/legal-desk-senders"
 
 type Client = { id: string; label: string; email: string }
 type Option = { id: string; label: string; detail: string }
@@ -71,7 +72,6 @@ export function LegalDeskManager({ passcode }: { passcode: string }) {
     if (data.ok) {
       setClients((data.clients as Client[]) ?? [])
       setMessages((data.messages as Message[]) ?? [])
-      if (typeof data.fromEmail === "string") setFromEmail(data.fromEmail)
       setReference((r) => r || String(data.nextReference ?? ""))
     } else toast.error(String(data.error ?? "Could not load the Legal Desk."))
     setLoading(false)
@@ -128,6 +128,7 @@ export function LegalDeskManager({ passcode }: { passcode: string }) {
     setSending(true)
     const data = await call({
       op: "send",
+      fromEmail,
       to,
       cc,
       recipientName,
@@ -170,10 +171,31 @@ export function LegalDeskManager({ passcode }: { passcode: string }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
-          <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
-            <Mail className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-            <span className="text-muted-foreground">From</span>
-            <span className="min-w-0 truncate font-mono font-medium">{fromEmail}</span>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="legal-from" className="flex items-center gap-2">
+              <Mail className="size-4 text-muted-foreground" aria-hidden="true" />
+              Send from
+            </Label>
+            <Select value={fromEmail} onValueChange={setFromEmail}>
+              <SelectTrigger id="legal-from" className="h-auto min-h-11 text-left text-base">
+                <SelectValue placeholder="Choose a sender" />
+              </SelectTrigger>
+              <SelectContent>
+                {LEGAL_DESK_SENDERS.map((s) => (
+                  <SelectItem key={s.address} value={s.address}>
+                    <span className="flex flex-col">
+                      <span className="font-mono text-sm">{s.address}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {s.organisation} · {s.department}
+                      </span>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              The email, signature and replies all use this sender. Its domain must be verified in Resend.
+            </p>
           </div>
 
           <div className="flex flex-col gap-2">

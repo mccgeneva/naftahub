@@ -7,6 +7,7 @@ import { resolveDataOwnerIdFor } from "@/lib/session-user"
 import { listLegalMessages, newLegalReference, saveLegalMessage } from "@/lib/legal-desk-db"
 import { LEGAL_DESK_FROM_ADDRESS, buildMt799Text, sendLegalMt799 } from "@/lib/legal-desk-email"
 import { logActivity } from "@/app/actions/log-activity"
+import { DEFAULT_LEGAL_DESK_SENDER, findLegalDeskSender } from "@/lib/legal-desk-senders"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -116,7 +117,8 @@ export async function POST(req: Request) {
         dateIso: createdAt,
       }
 
-      const result = await sendLegalMt799({ to, cc, message })
+      const sender = findLegalDeskSender(str(body.fromEmail, 120)) ?? DEFAULT_LEGAL_DESK_SENDER
+      const result = await sendLegalMt799({ to, cc, message, sender })
       const id = `LGL-${Date.now().toString(36).toUpperCase()}`
       await saveLegalMessage({
         id,
@@ -130,8 +132,8 @@ export async function POST(req: Request) {
         subject,
         transactionReference: reference,
         relatedReference,
-        narrative: buildMt799Text(message),
-        fromEmail: LEGAL_DESK_FROM_ADDRESS,
+        narrative: buildMt799Text(message, sender),
+        fromEmail: sender.address,
         status: result.ok ? "sent" : "failed",
         providerId: result.ok ? result.id : null,
         error: result.ok ? null : result.error,
@@ -142,7 +144,7 @@ export async function POST(req: Request) {
       await logActivity({
         action: `Legal Desk MT799 ${reference} ${result.ok ? "sent" : "failed"} to ${to.join(", ")}`,
         category: "Administration / Legal Desk",
-        details: { reference, subject, client: clientLabel || "—", from: LEGAL_DESK_FROM_ADDRESS },
+        details: { reference, subject, client: clientLabel || "—", from: sender.address },
       }).catch(() => {})
 
       if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: 502 })

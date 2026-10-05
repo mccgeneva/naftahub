@@ -1,9 +1,8 @@
 import "server-only"
 import { Resend } from "resend"
+import { DEFAULT_LEGAL_DESK_SENDER, type LegalDeskSender } from "@/lib/legal-desk-senders"
 
-/** The Legal Desk always sends from the law firm, never the trading desk. */
-export const LEGAL_DESK_FROM_ADDRESS = "lawfirm@juristreuhand.com"
-export const LEGAL_DESK_FROM = `JURIS TREUHAND AG — Legal Desk <${LEGAL_DESK_FROM_ADDRESS}>`
+export const LEGAL_DESK_FROM_ADDRESS = DEFAULT_LEGAL_DESK_SENDER.address
 
 const SEND_TIMEOUT_MS = 12000
 
@@ -51,7 +50,8 @@ function wrap50(text: string): string[] {
 }
 
 /** Plain-text MT799 free-format message, as shown in the email and the preview. */
-export function buildMt799Text(m: LegalMt799): string {
+export function buildMt799Text(m: LegalMt799, sender: LegalDeskSender = DEFAULT_LEGAL_DESK_SENDER): string {
+  const city = sender.location.split(",")[0].trim()
   const d = new Date(m.dateIso)
   const yymmdd = `${String(d.getUTCFullYear()).slice(2)}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`
   const narrativeLines = [
@@ -63,7 +63,7 @@ export function buildMt799Text(m: LegalMt799): string {
   return [
     "MT799 FREE FORMAT MESSAGE",
     `DATE: ${yymmdd}`,
-    `SENDER: JURIS TREUHAND AG, ZURICH - LEGAL DESK`,
+    `SENDER: ${sender.organisation}, ${city} - ${sender.department}`.toUpperCase(),
     `RECEIVER: ${m.recipientName.toUpperCase() || "TO WHOM IT MAY CONCERN"}`,
     "",
     `:20:${m.transactionReference}`,
@@ -74,12 +74,12 @@ export function buildMt799Text(m: LegalMt799): string {
   ].join("\n")
 }
 
-function buildHtml(m: LegalMt799, mt: string): string {
+function buildHtml(m: LegalMt799, mt: string, sender: LegalDeskSender): string {
   return `<!doctype html><html><body style="margin:0;background:#f4f4f2;padding:24px;font-family:Georgia,'Times New Roman',serif;color:#1c1c1c;">
   <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #d9d7d0;">
     <div style="padding:20px 28px;border-bottom:2px solid #1c1c1c;">
-      <div style="font-size:18px;font-weight:700;letter-spacing:.04em;">JURIS TREUHAND AG</div>
-      <div style="font-size:12px;color:#5b5b5b;margin-top:2px;">Legal Desk · Zurich, Switzerland · ${esc(LEGAL_DESK_FROM_ADDRESS)}</div>
+      <div style="font-size:18px;font-weight:700;letter-spacing:.04em;">${esc(sender.organisation)}</div>
+      <div style="font-size:12px;color:#5b5b5b;margin-top:2px;">${esc(sender.department)} · ${esc(sender.location)} · ${esc(sender.address)}</div>
     </div>
     <div style="padding:24px 28px;font-size:14px;line-height:1.6;">
       <p style="margin:0 0 4px;"><strong>To:</strong> ${esc(m.recipientName || "To whom it may concern")}</p>
@@ -87,10 +87,10 @@ function buildHtml(m: LegalMt799, mt: string): string {
       <p style="margin:0 0 8px;font-size:12px;color:#5b5b5b;">The following is transmitted in SWIFT MT799 free-format layout.</p>
       <pre style="margin:0;padding:16px;background:#f7f7f5;border:1px solid #e3e1da;font-family:'Courier New',Courier,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word;">${esc(mt)}</pre>
       <p style="margin:20px 0 0;">Yours faithfully,</p>
-      <p style="margin:4px 0 0;"><strong>JURIS TREUHAND AG</strong><br/>Legal Desk</p>
+      <p style="margin:4px 0 0;"><strong>${esc(sender.organisation)}</strong><br/>${esc(sender.department)}</p>
     </div>
     <div style="padding:14px 28px;border-top:1px solid #e3e1da;font-size:11px;color:#7a7a7a;line-height:1.5;">
-      This message is confidential and intended solely for the addressee. If you received it in error, please notify the sender at ${esc(LEGAL_DESK_FROM_ADDRESS)} and delete it.
+      This message is confidential and intended solely for the addressee. If you received it in error, please notify the sender at ${esc(sender.address)} and delete it.
     </div>
   </div></body></html>`
 }
@@ -101,21 +101,24 @@ export async function sendLegalMt799(input: {
   to: string[]
   cc: string[]
   message: LegalMt799
+  sender?: LegalDeskSender
 }): Promise<LegalSendResult> {
   const apiKey = process.env.RESEND_API_KEY
   if (!apiKey) return { ok: false, error: "Email service is not configured (RESEND_API_KEY missing)." }
-  const mt = buildMt799Text(input.message)
+  const sender = input.sender ?? DEFAULT_LEGAL_DESK_SENDER
+  const mt = buildMt799Text(input.message, sender)
+  const domain = sender.address.split("@")[1]
   try {
     const resend = new Resend(apiKey)
     const { data, error } = await Promise.race([
       resend.emails.send({
-        from: LEGAL_DESK_FROM,
+        from: `${sender.organisation} — ${sender.department} <${sender.address}>`,
         to: input.to,
         cc: input.cc.length ? input.cc : undefined,
-        replyTo: LEGAL_DESK_FROM_ADDRESS,
+        replyTo: sender.address,
         subject: `MT799 ${input.message.transactionReference} — ${input.message.subject}`,
-        html: buildHtml(input.message, mt),
-        text: `${mt}\n\nYours faithfully,\nJURIS TREUHAND AG — Legal Desk\n${LEGAL_DESK_FROM_ADDRESS}`,
+        html: buildHtml(input.message, mt, sender),
+        text: `${mt}\n\nYours faithfully,\n${sender.organisation} — ${sender.department}\n${sender.address}`,
       }),
       new Promise<{ data: null; error: { message: string } }>((resolve) =>
         setTimeout(() => resolve({ data: null, error: { message: "The email service timed out." } }), SEND_TIMEOUT_MS),
@@ -124,7 +127,7 @@ export async function sendLegalMt799(input: {
     if (error) {
       const msg = (error as { message?: string }).message ?? "send failed"
       const domainHint = /domain|verif|not allowed|403/i.test(msg)
-        ? " The juristreuhand.com domain must be verified in the Resend account before it can send."
+        ? ` The ${domain} domain must be verified in the Resend account before it can send.`
         : ""
       return { ok: false, error: `${msg}.${domainHint}` }
     }
