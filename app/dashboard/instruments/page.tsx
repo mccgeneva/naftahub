@@ -116,6 +116,7 @@ import {
 import { computeTieredInterest, formatTierBound } from "@/lib/tiered-debit-interest"
 import { generateInstrumentCertificate } from "@/lib/certificate-pdf"
 import { generateMt760, generateMt799 } from "@/lib/swift-mt"
+import { VerbiageReviewDialog } from "@/components/dashboard/verbiage-review-dialog"
 import { generateSwiftMessagePdf } from "@/lib/swift-message-pdf"
 import {
   buildInstrumentTransferSwift,
@@ -1747,7 +1748,8 @@ export default function InstrumentsPage() {
             Trade SBLC, MTN, and Bank Guarantees
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+            <VerbiageReviewDialog />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm">
