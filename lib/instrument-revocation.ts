@@ -169,9 +169,35 @@ export async function setInstrumentFlag(approvalId: string, flag: AmlFlag | null
   const row = await getApprovalById(approvalId)
   if (!row || row.kind !== "instrument") return false
   const payload = { ...((row.payload ?? {}) as Rec) }
+  const wasFlagged = Boolean(payload.amlFlag)
   if (flag) payload.amlFlag = flag
   else delete payload.amlFlag
-  return Boolean(await updateApprovalPayload(approvalId, payload))
+  const saved = Boolean(await updateApprovalPayload(approvalId, payload))
+  if (!saved) return false
+  const inst = ((payload.issuedByAdmin ? payload.instrument : (payload.record ?? payload.instrument)) ?? {}) as Rec
+  const label = [inst.type, inst.id].filter(Boolean).join(" ") || "your bank instrument"
+  try {
+    if (flag && !wasFlagged) {
+      await insertNotification({
+        userId: row.userId,
+        tone: "warning",
+        title: `Bank instrument blocked — ${label}`,
+        body: `${label} has been placed under a compliance review hold and is blocked. It cannot be pledged, transferred, monetized or returned until the review is completed. Please contact the administrator if you have questions.`,
+        href: "/dashboard/instruments",
+      })
+    } else if (!flag && wasFlagged) {
+      await insertNotification({
+        userId: row.userId,
+        tone: "success",
+        title: `Bank instrument released — ${label}`,
+        body: `The compliance review hold on ${label} has been lifted. The instrument is available again.`,
+        href: "/dashboard/instruments",
+      })
+    }
+  } catch (err) {
+    console.log("[v0] compliance hold notification failed:", err)
+  }
+  return true
 }
 
 export type RevocationOutcome = {

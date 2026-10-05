@@ -96,6 +96,12 @@ export interface Instrument {
   /** The pending/decided transformation-upgrade deal, if any. */
   upgrade?: InstrumentUpgrade
   /**
+   * Set while the administrator has placed the instrument under a compliance
+   * review hold. The instrument is blocked (no pledge, transfer, monetize or
+   * delete) until the hold is lifted. The internal reason is never exposed.
+   */
+  complianceHold?: { since: string | null }
+  /**
    * Published independent audit & valuation report, if any. Only a PUBLISHED
    * audit is ever surfaced to the client (drafts / rejected audits are held
    * back server-side by the materializer).
@@ -134,6 +140,7 @@ function instrumentFromApproval(rec: ApprovalRecord): Instrument | null {
         upgrade?: InstrumentUpgrade
         audit?: InstrumentAudit
         exitRequest?: Instrument["exitRequest"]
+        amlFlag?: { flaggedAt?: string }
       }
     | undefined
   const base = p?.issuedByAdmin ? p?.instrument : (p?.record ?? p?.instrument)
@@ -159,7 +166,8 @@ function instrumentFromApproval(rec: ApprovalRecord): Instrument | null {
     upgrade,
     audit,
     exitRequest: p?.exitRequest,
-    blocked: upgradeBlocksInstrument(upgrade) || base.blocked || undefined,
+    complianceHold: p?.amlFlag ? { since: p.amlFlag.flaggedAt ?? null } : undefined,
+    blocked: upgradeBlocksInstrument(upgrade) || base.blocked || Boolean(p?.amlFlag) || undefined,
   })
 }
 

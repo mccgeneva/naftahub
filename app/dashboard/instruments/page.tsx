@@ -331,7 +331,9 @@ export default function InstrumentsPage() {
   // to revoke first. Empty = free to return.
   const usageReasons = (inst: Instrument): string[] => {
     const reasons: string[] = []
-    if (inst.blocked) {
+    if (inst.complianceHold) {
+      reasons.push("a compliance review hold — it is blocked until the review is completed")
+    } else if (inst.blocked) {
       reasons.push("an Administrator transformation upgrade — respond to the offer first")
     }
     if (monetizationRequests.some((r) => r.instrumentId === inst.id && isLiveRequest(r))) {
@@ -772,7 +774,9 @@ export default function InstrumentsPage() {
     // upgrade completes (new instrument issued) or is declined.
     if (instrument.blocked) {
       toast.error("Instrument blocked", {
-        description: `${instrument.id} is locked while a transformation upgrade is in progress. Respond to the upgrade offer first.`,
+        description: instrument.complianceHold
+          ? `${instrument.id} is under a compliance review hold and cannot be used until the review is completed.`
+          : `${instrument.id} is locked while a transformation upgrade is in progress. Respond to the upgrade offer first.`,
       })
       return
     }
@@ -2032,7 +2036,12 @@ export default function InstrumentsPage() {
                                 Owned by {MCC_HOLDING_OWNER} · you keep 25%
                               </span>
                             ) : null}
-                            {isUpgradeOpen(instrument.upgrade) ? (
+                            {instrument.complianceHold ? (
+                              <span className="mt-1.5 flex w-fit items-center gap-1 rounded-md border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-destructive">
+                                <Ban className="h-2.5 w-2.5" />
+                                Blocked — compliance review
+                              </span>
+                            ) : isUpgradeOpen(instrument.upgrade) ? (
                               <button
                                 type="button"
                                 onClick={(e) => {

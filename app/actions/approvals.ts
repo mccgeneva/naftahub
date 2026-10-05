@@ -2234,6 +2234,16 @@ async function instrumentPledgedElsewhere(instrumentId: string, userId: string):
   } catch {
     ids = [userId]
   }
+  try {
+    const instrumentRows = await listApprovalsForUsers(ids, "instrument")
+    for (const row of instrumentRows) {
+      const p = (row.payload ?? {}) as { instrument?: { id?: string }; record?: { id?: string }; amlFlag?: unknown }
+      const id = p.instrument?.id ?? p.record?.id
+      if (id === instrumentId && p.amlFlag) return "a compliance review hold — it cannot be pledged until the hold is lifted"
+    }
+  } catch {
+    return "its compliance status could not be verified — please try again shortly"
+  }
   const checks: Array<{ kind: ApprovalKind; field: string; label: string }> = [
     { kind: "leverage", field: "pledgedInstrumentId", label: "another leverage line" },
     { kind: "internal_loan", field: "collateralInstrumentId", label: "an internal loan" },
@@ -2384,7 +2394,7 @@ export async function deleteMyInstrument(
   }
 }
 
-// ─────────────────────────────────��───────────────────────────────────────
+// ─────────────────────────────────���───────────────────────────────────────
 // Instrument EXIT ("settle out") — admin-negotiated with a cashback %.
 //
 // Unlike `deleteMyInstrument` (instant, applies only the customer's PRESET
