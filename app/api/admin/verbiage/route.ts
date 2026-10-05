@@ -50,7 +50,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ ok: false, error: "This submission is not awaiting approval." }, { status: 400 })
       }
       const justification = String(body.note ?? "").trim().slice(0, 1000)
-      if (justification.length < 10) {
+      if (justification.length < 3) {
         return NextResponse.json(
           { ok: false, error: "Enter a justification for forcing the approval (it is kept in the audit trail)." },
           { status: 400 },

@@ -213,7 +213,7 @@ export function VerbiageDeskManager({ passcode }: { passcode: string }) {
                     <p className="break-words text-sm leading-relaxed">Reason: {s.overrideReason}</p>
                   )}
                   <Label htmlFor={`just-${s.id}`} className="text-xs">
-                    Your justification (kept in the audit trail)
+                    Your justification (kept in the audit trail, at least 3 characters)
                   </Label>
                   <Input
                     id={`just-${s.id}`}
@@ -225,7 +225,7 @@ export function VerbiageDeskManager({ passcode }: { passcode: string }) {
                   <Button
                     size="sm"
                     className="min-h-11"
-                    disabled={busy || (justify[s.id] ?? "").trim().length < 10}
+                    disabled={busy || (justify[s.id] ?? "").trim().length < 3}
                     onClick={() =>
                       run(s.id, { op: "force-approve", note: justify[s.id] }, "Force-approved and sent to Barclays")
                     }
