@@ -1711,8 +1711,32 @@ export default function InstrumentsPage() {
     },
   ]
 
+  const heldForCompliance = instruments.filter((i) => i.complianceHold)
+
   return (
     <div className="space-y-6">
+      {heldForCompliance.length > 0 && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
+        >
+          <Ban className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+          <div className="min-w-0 text-sm">
+            <p className="font-semibold text-destructive">
+              {heldForCompliance.length === 1
+                ? "1 bank instrument is blocked for compliance review"
+                : `${heldForCompliance.length} bank instruments are blocked for compliance review`}
+            </p>
+            <p className="mt-1 leading-relaxed text-foreground">
+              While under review{" "}
+              <span className="font-mono break-all">
+                {heldForCompliance.map((i) => i.id).join(", ")}
+              </span>{" "}
+              cannot be pledged, transferred, monetized or returned. Please contact the administrator.
+            </p>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -2448,6 +2472,12 @@ export default function InstrumentsPage() {
                             <span className="mt-1 inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
                               <Lock className="h-2.5 w-2.5" />
                               Owned by {MCC_HOLDING_OWNER} · you keep 25%
+                            </span>
+                          ) : null}
+                          {instrument.complianceHold ? (
+                            <span className="mt-1 flex w-fit items-center gap-1 rounded-md border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-destructive">
+                              <Ban className="h-2.5 w-2.5" />
+                              Blocked — compliance review
                             </span>
                           ) : null}
                         </div>

@@ -174,6 +174,21 @@ export default function InstrumentDetailPage() {
         </CardHeader>
 
         <CardContent className="space-y-4 pt-6">
+          {instrument.complianceHold && (
+            <div
+              role="alert"
+              className="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
+            >
+              <Ban className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+              <div className="text-sm">
+                <p className="font-semibold text-destructive">Blocked — compliance review</p>
+                <p className="mt-1 leading-relaxed text-foreground">
+                  This instrument is on hold and cannot be pledged, transferred, monetized or returned until the review is
+                  complete. Please contact the administrator.
+                </p>
+              </div>
+            </div>
+          )}
           <div className="rounded-lg border border-border bg-secondary/30 p-4 text-center">
             <p className="text-xs text-muted-foreground">Face Value</p>
             <p className="mt-1 text-3xl font-bold text-foreground">
