@@ -38,6 +38,7 @@ export async function transmitVerbiageToBarclays(
     "OPERATIVE CLAUSES:",
     ...(a.keyClauses.length ? a.keyClauses.map((c, i) => `${i + 1}. ${c}`) : ["- AS PER ATTACHED VERBIAGE"]),
     "",
+    ...(sub.correctedText ? ["APPROVED VERBIAGE (FULL TEXT):", sub.correctedText, ""] : []),
     "PLEASE CONFIRM RECEIPT, ADVISE ANY AMENDMENTS REQUIRED, AND PROCEED",
     "WITH ISSUANCE UPON COMPLETION OF YOUR COMPLIANCE REVIEW.",
   ].join("\n")

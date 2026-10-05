@@ -1,6 +1,11 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { resolveAccountProfileById, resolveCurrentSession } from "@/lib/session-user"
-import { analyzeVerbiageDocument } from "@/lib/verbiage-analyze"
+import {
+  analyzeVerbiageDocument,
+  analyzeVerbiageText,
+  autoFixVerbiage,
+  unfilledPlaceholders,
+} from "@/lib/verbiage-analyze"
 import { getVerbiage, insertVerbiage, listVerbiageForUser, newVerbiageId, updateVerbiage } from "@/lib/verbiage-db"
 import { transmitVerbiageToBarclays } from "@/lib/verbiage-transmit"
 import { notifyAllAdminsOfClientRequest } from "@/lib/notify-admins"
@@ -8,8 +13,9 @@ import { logActivity } from "@/app/actions/log-activity"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
-export const maxDuration = 90
+export const maxDuration = 180
 
+const MAX_REVISIONS = 8
 const MAX_BYTES = 15 * 1024 * 1024
 const ALLOWED = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp"])
 
@@ -72,7 +78,7 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   const session = await resolveCurrentSession()
   if (!session) return NextResponse.json({ ok: false, error: "Not authorized." }, { status: 401 })
-  const body = (await request.json().catch(() => ({}))) as { id?: string; op?: string }
+  const body = (await request.json().catch(() => ({}))) as { id?: string; op?: string; text?: string }
   const sub = body.id ? await getVerbiage(body.id) : null
   if (!sub || sub.userId !== session.id) {
     return NextResponse.json({ ok: false, error: "Submission not found." }, { status: 404 })
@@ -86,7 +92,55 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ ok: true, submission: updated })
   }
 
+  if (body.op === "autofix" || body.op === "recheck") {
+    if (sub.status !== "analyzed") {
+      return NextResponse.json({ ok: false, error: "This submission can no longer be changed." }, { status: 400 })
+    }
+    if (sub.revision >= MAX_REVISIONS) {
+      return NextResponse.json(
+        { ok: false, error: "Revision limit reached for this submission. Upload a new document." },
+        { status: 400 },
+      )
+    }
+    try {
+      let text: string
+      if (body.op === "autofix") {
+        text = await autoFixVerbiage(sub.analysis, sub.correctedText)
+      } else {
+        text = (body.text ?? "").trim().slice(0, 20000)
+        if (text.length < 40) {
+          return NextResponse.json({ ok: false, error: "The wording is too short to check." }, { status: 400 })
+        }
+      }
+      const analysis = await analyzeVerbiageText(text)
+      const updated = await updateVerbiage(sub.id, {
+        correctedText: text,
+        analysis,
+        revision: sub.revision + 1,
+      })
+      return NextResponse.json({ ok: true, submission: updated, placeholders: unfilledPlaceholders(text) })
+    } catch (err) {
+      console.log("[v0] verbiage", body.op, "failed:", err instanceof Error ? err.message : String(err))
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            body.op === "autofix"
+              ? "The wording could not be corrected automatically. Please try again."
+              : "The edited wording could not be checked. Please try again.",
+        },
+        { status: 500 },
+      )
+    }
+  }
+
   if (body.op !== "approve") return NextResponse.json({ ok: false, error: "Unknown action." }, { status: 400 })
+  if (sub.correctedText && unfilledPlaceholders(sub.correctedText).length) {
+    return NextResponse.json(
+      { ok: false, error: "Fill in every [PLACEHOLDER] in the corrected wording and re-check it first." },
+      { status: 400 },
+    )
+  }
   if (sub.status !== "analyzed") {
     return NextResponse.json({ ok: false, error: "This submission was already approved." }, { status: 400 })
   }

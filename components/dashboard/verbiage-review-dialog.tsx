@@ -4,8 +4,9 @@ import { useRef, useState } from "react"
 import useSWR from "swr"
 import { upload } from "@vercel/blob/client"
 import { toast } from "sonner"
-import { CheckCircle2, FileSearch, Loader2, Send, ShieldAlert, Upload, X } from "lucide-react"
+import { CheckCircle2, FileSearch, Loader2, RefreshCw, Send, ShieldAlert, Upload, Wand2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
@@ -22,8 +23,12 @@ type Submission = {
   transmittedAt: string | null
   issuedInstrumentRef: string | null
   adminNote: string | null
+  correctedText?: string | null
+  revision?: number
   createdAt: string
 }
+
+const placeholdersIn = (t: string) => Array.from(new Set(t.match(/\[[A-Z0-9][A-Z0-9 /&.,'()-]{1,60}\]/g) ?? []))
 
 const fetcher = async (url: string) => {
   const res = await fetch(url, { cache: "no-store" })
@@ -110,8 +115,15 @@ function Report({ a }: { a: VerbiageAnalysis }) {
 
 export function VerbiageReviewDialog() {
   const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState<"idle" | "uploading" | "analysing" | "approving">("idle")
-  const [current, setCurrent] = useState<Submission | null>(null)
+  const [busy, setBusy] = useState<"idle" | "uploading" | "analysing" | "approving" | "fixing" | "rechecking">(
+    "idle",
+  )
+  const [current, setCurrentState] = useState<Submission | null>(null)
+  const [draft, setDraft] = useState("")
+  const setCurrent = (s: Submission | null) => {
+    setCurrentState(s)
+    setDraft(s?.correctedText ?? "")
+  }
   const fileRef = useRef<HTMLInputElement>(null)
   const { data: history = [], mutate } = useSWR(open ? "/api/instruments/verbiage" : null, fetcher)
 
@@ -183,7 +195,44 @@ export function VerbiageReviewDialog() {
     }
   }
 
+  async function revise(op: "autofix" | "recheck") {
+    if (!current) return
+    setBusy(op === "autofix" ? "fixing" : "rechecking")
+    try {
+      const res = await fetch("/api/instruments/verbiage", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: current.id, op, text: op === "recheck" ? draft : undefined }),
+        signal: AbortSignal.timeout(175000),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.ok) throw new Error(json.error || "Action failed.")
+      setCurrent(json.submission)
+      mutate()
+      const left: string[] = json.placeholders ?? []
+      const verdict = json.submission?.analysis?.verdict as VerbiageAnalysis["verdict"] | undefined
+      toast.success(op === "autofix" ? "Corrected wording drafted" : "Wording re-checked", {
+        description: left.length
+          ? `Fill in ${left.length} missing detail${left.length > 1 ? "s" : ""} below, then tap Re-check.`
+          : verdict
+            ? `New verdict: ${VERBIAGE_VERDICT_LABELS[verdict]}.`
+            : undefined,
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Action failed.")
+    } finally {
+      setBusy("idle")
+    }
+  }
+
   const working = busy !== "idle"
+  const editing = current?.status === "analyzed"
+  const pendingPlaceholders = placeholdersIn(draft)
+  const draftChanged = !!current && draft.trim() !== (current.correctedText ?? "").trim()
+  const approveBlocked =
+    !current ||
+    current.analysis.verdict === "not_issuable" ||
+    (!!current.correctedText && (pendingPlaceholders.length > 0 || draftChanged))
 
   return (
     <>
@@ -245,11 +294,97 @@ export function VerbiageReviewDialog() {
                   <Badge variant="secondary">{VERBIAGE_STATUS_LABELS[current.status] ?? current.status}</Badge>
                 </div>
                 <Report a={current.analysis} />
-                {current.analysis.verdict === "not_issuable" && current.status === "analyzed" && (
-                  <div className="flex gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm">
-                    <ShieldAlert className="h-4 w-4 shrink-0 text-destructive" />
-                    <span>This wording can&apos;t be issued as it stands. Fix the points above and upload a new version.</span>
+                {editing && current.analysis.verdict !== "ready" && !current.correctedText && (
+                  <div className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm">
+                    <div className="flex gap-2">
+                      <ShieldAlert className="h-4 w-4 shrink-0 text-destructive" />
+                      <span className="leading-relaxed">
+                        {current.analysis.verdict === "not_issuable"
+                          ? "This wording can't be issued as it stands."
+                          : "This wording needs revision before a bank will issue it."}{" "}
+                        Auto-fix rewrites it to bank standard and checks it again. Anything we can&apos;t know, like
+                        the issuing bank, is left as a [PLACEHOLDER] for you to fill in.
+                      </span>
+                    </div>
+                    <Button className="min-h-11 w-full" disabled={working} onClick={() => revise("autofix")}>
+                      {busy === "fixing" ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Wand2 className="mr-2 h-4 w-4" />
+                      )}
+                      {busy === "fixing" ? "Correcting and re-checking…" : "Auto-fix wording"}
+                    </Button>
                   </div>
+                )}
+
+                {current.correctedText && (
+                  <section className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-sm font-medium">Corrected wording</h4>
+                      {current.revision ? (
+                        <Badge variant="outline" className="shrink-0">
+                          Revision {current.revision}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    {editing && pendingPlaceholders.length > 0 && (
+                      <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm leading-relaxed">
+                        <p className="font-medium text-amber-600">
+                          Replace {pendingPlaceholders.length} placeholder
+                          {pendingPlaceholders.length > 1 ? "s" : ""} with the real details:
+                        </p>
+                        <p className="mt-1 break-words font-mono text-xs">{pendingPlaceholders.join("  ")}</p>
+                      </div>
+                    )}
+                    <Textarea
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      readOnly={!editing || working}
+                      rows={12}
+                      className="min-h-64 font-mono text-base leading-relaxed sm:text-sm"
+                      aria-label="Corrected verbiage wording"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      spellCheck={false}
+                    />
+                    {editing && (
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <Button
+                          variant="outline"
+                          className="min-h-11 flex-1"
+                          disabled={working || draft.trim().length < 40}
+                          onClick={() => revise("recheck")}
+                        >
+                          {busy === "rechecking" ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <RefreshCw className="mr-2 h-4 w-4" />
+                          )}
+                          Re-check wording
+                        </Button>
+                        {current.analysis.verdict !== "ready" && (
+                          <Button
+                            variant="outline"
+                            className="min-h-11 flex-1"
+                            disabled={working}
+                            onClick={() => revise("autofix")}
+                          >
+                            {busy === "fixing" ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                              <Wand2 className="mr-2 h-4 w-4" />
+                            )}
+                            Auto-fix again
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {editing && draftChanged && (
+                      <p className="text-xs text-muted-foreground">
+                        You edited the wording. Tap Re-check before approving.
+                      </p>
+                    )}
+                  </section>
                 )}
               </div>
             )}
@@ -292,10 +427,7 @@ export function VerbiageReviewDialog() {
                   <X className="mr-2 h-4 w-4" />
                   Discard
                 </Button>
-                <Button
-                  disabled={working || current.analysis.verdict === "not_issuable"}
-                  onClick={() => decide("approve")}
-                >
+                <Button disabled={working || approveBlocked} onClick={() => decide("approve")}>
                   {busy === "approving" ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (

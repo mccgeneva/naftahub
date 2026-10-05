@@ -25,6 +25,9 @@ export interface VerbiageSubmission {
   issuedInstrumentRef: string | null
   issuedAt: string | null
   adminNote: string | null
+  /** Auto-fixed / edited wording; when set it supersedes the uploaded document. */
+  correctedText: string | null
+  revision: number
   createdAt: string
 }
 
@@ -50,6 +53,10 @@ function ensureTables(): Promise<void> {
         admin_note text,
         created_at timestamptz NOT NULL DEFAULT now()
       )`)
+      await query(`ALTER TABLE instrument_verbiage_submissions ADD COLUMN IF NOT EXISTS corrected_text text`)
+      await query(
+        `ALTER TABLE instrument_verbiage_submissions ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 0`,
+      )
       await query(
         `CREATE INDEX IF NOT EXISTS instrument_verbiage_user_idx ON instrument_verbiage_submissions (user_id, created_at DESC)`,
       )
@@ -81,6 +88,8 @@ type Row = {
   issued_instrument_ref: string | null
   issued_at: string | Date | null
   admin_note: string | null
+  corrected_text: string | null
+  revision: number | null
   created_at: string | Date
 }
 
@@ -102,6 +111,8 @@ function toSubmission(r: Row): VerbiageSubmission {
     issuedInstrumentRef: r.issued_instrument_ref,
     issuedAt: iso(r.issued_at),
     adminNote: r.admin_note,
+    correctedText: r.corrected_text ?? null,
+    revision: Number(r.revision ?? 0),
     createdAt: iso(r.created_at) as string,
   }
 }
@@ -169,10 +180,16 @@ export async function updateVerbiage(
     issuedInstrumentRef: string | null
     issuedAt: string | null
     adminNote: string | null
+    correctedText: string | null
+    revision: number
+    analysis: VerbiageAnalysis
   }>,
 ): Promise<VerbiageSubmission | null> {
   await ensureTables()
   const map: Record<string, string> = {
+    correctedText: "corrected_text",
+    revision: "revision",
+    analysis: "analysis",
     status: "status",
     approvedAt: "approved_at",
     transmittedAt: "transmitted_at",
@@ -186,6 +203,11 @@ export async function updateVerbiage(
   const vals: unknown[] = []
   for (const [k, v] of Object.entries(patch)) {
     if (!(k in map)) continue
+    if (k === "analysis") {
+      vals.push(JSON.stringify(v))
+      sets.push(`analysis = $${vals.length}::jsonb`)
+      continue
+    }
     vals.push(v)
     sets.push(`${map[k]} = $${vals.length}`)
   }
