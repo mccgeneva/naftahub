@@ -55,6 +55,7 @@ import {
   HandCoins,
   ShieldAlert,
   Umbrella,
+  Scale,
   Sparkles,
   DoorOpen,
   ClipboardCheck,
@@ -135,6 +136,7 @@ import { FeeTierManager } from "@/components/admin/fee-tier-manager"
 import { FeeCashbackManager } from "@/components/admin/fee-cashback-manager"
   import { GuaranteesManager } from "@/components/admin/guarantees-manager"
 import { PpiInsuranceManager } from "@/components/admin/ppi-insurance-manager"
+import { AmlCasesManager } from "@/components/admin/aml-cases-manager"
   import { SectionAccessManager } from "@/components/admin/section-access-manager"
   import { DemoIdLog } from "@/components/admin/demo-id-log"
   import { SubAccountsManager } from "@/components/admin/sub-accounts-manager"
@@ -460,7 +462,7 @@ export default function AdminPage() {
   // Count of Payment Gateway account requests awaiting an administrator decision
   // (across EVERY client). Gateway requests live in their own DB table, separate
   // from the approvals backbone, so without this the command center and the
-  // Payment Gateway tile would never surface them ��� the admin would see
+  // Payment Gateway tile would never surface them — the admin would see
   // "nothing to approve" even while clients have pending requests. Refetched on
   // unlock so the figure is current.
   const [pendingGatewayCount, setPendingGatewayCount] = useState(0)
@@ -481,6 +483,26 @@ export default function AdminPage() {
       cancelled = true
     }
   }, [unlocked])
+
+  const [openAmlCaseCount, setOpenAmlCaseCount] = useState(0)
+  useEffect(() => {
+    if (!unlocked) return
+    let cancelled = false
+    fetch("/api/admin/aml", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ passcode: ADMIN_PASSCODE, op: "count" }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled && d?.ok) setOpenAmlCaseCount(Number(d.count) || 0)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [unlocked, activeView])
+
 
   // Pending client sub-account requests awaiting IBAN assignment/activation.
   // Sub-accounts live in their own DB table (via the /api/admin/sub-accounts
@@ -2459,6 +2481,7 @@ export default function AdminPage() {
     {
       title: "Administration",
       items: [
+        { id: "aml", label: "AML Compliance", description: "Upload auditor and compliance-office letters about a customer, and track the actions and measures to undertake on that account.", icon: Scale, count: openAmlCaseCount },
         { id: "ppi", label: "PPI Insurance", description: "Price full Payment Protection Insurance for a customer's exposure, negotiate with Lloyd's of London, approve and charge.", icon: Umbrella, count: 0 },
         { id: "users", label: "Client Accounts", description: "Create, edit, suspend and reset users.", icon: Users, count: 0 },
         { id: "masteraccounts", label: "Master Accounts", description: "Update, replace or re-link the Master Account any customer operates under.", icon: Network, count: 0 },
@@ -5614,6 +5637,7 @@ export default function AdminPage() {
             {activeView === "feecashback" && <FeeCashbackManager passcode={ADMIN_PASSCODE} />}
           {activeView === "guarantees" && <GuaranteesManager passcode={ADMIN_PASSCODE} />}
           {activeView === "ppi" && <PpiInsuranceManager passcode={ADMIN_PASSCODE} />}
+          {activeView === "aml" && <AmlCasesManager passcode={ADMIN_PASSCODE} />}
 
             {activeView === "sectionaccess" && <SectionAccessManager passcode={ADMIN_PASSCODE} />}
             {activeView === "demoid" && <DemoIdLog passcode={ADMIN_PASSCODE} />}
