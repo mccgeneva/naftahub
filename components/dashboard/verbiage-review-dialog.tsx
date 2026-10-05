@@ -211,14 +211,19 @@ export function VerbiageReviewDialog() {
     }
   }
 
-  async function override(op: "request-override" | "cancel-override") {
+  async function override(op: "request-override" | "cancel-override", reasonOverride?: string) {
     if (!current) return
+    const reason = (reasonOverride ?? overrideReason).trim()
+    if (op === "request-override" && reason.length < 10) {
+      toast.error("Please write a short reason (at least 10 characters) for the administrator.")
+      return
+    }
     setBusy("approving")
     try {
       const res = await fetch("/api/instruments/verbiage", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: current.id, op, text: op === "request-override" ? overrideReason : undefined }),
+        body: JSON.stringify({ id: current.id, op, text: op === "request-override" ? reason : undefined }),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.ok) throw new Error(json.error || "Action failed.")
@@ -307,10 +312,23 @@ export function VerbiageReviewDialog() {
   const editing = current?.status === "analyzed"
   const pendingPlaceholders = placeholdersIn(draft)
   const draftChanged = !!current && draft.trim() !== (current.correctedText ?? "").trim()
-  const approveBlocked =
-    !current ||
-    current.analysis.verdict === "not_issuable" ||
-    (!!current.correctedText && (pendingPlaceholders.length > 0 || draftChanged))
+  const draftIncomplete = !!current?.correctedText && (pendingPlaceholders.length > 0 || draftChanged)
+  const needsAdmin = current?.analysis.verdict === "not_issuable"
+  const approveBlocked = !current || needsAdmin || draftIncomplete
+  const sendBlocked = !current || draftIncomplete
+
+  function sendPrimary() {
+    if (!current) return
+    if (needsAdmin) {
+      const reason =
+        overrideReason.trim().length >= 10
+          ? overrideReason.trim()
+          : "Customer completed all instrument details and requests administrator approval to transmit this wording to Barclays."
+      void override("request-override", reason)
+      return
+    }
+    void decide("approve")
+  }
 
   return (
     <>
@@ -526,7 +544,7 @@ export function VerbiageReviewDialog() {
                     <Button
                       variant="secondary"
                       className="min-h-11 w-full"
-                      disabled={working || overrideReason.trim().length < 10}
+                      disabled={working}
                       onClick={() => override("request-override")}
                     >
                       <ShieldAlert className="mr-2 h-4 w-4" />
@@ -595,13 +613,13 @@ export function VerbiageReviewDialog() {
                   <X className="mr-2 h-4 w-4" />
                   Discard
                 </Button>
-                <Button disabled={working || approveBlocked} onClick={() => decide("approve")}>
+                <Button disabled={working || sendBlocked} onClick={sendPrimary}>
                   {busy === "approving" ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (
                     <Send className="mr-2 h-4 w-4" />
                   )}
-                  Approve &amp; send to Barclays
+                  {needsAdmin ? "Send to administrator for approval" : "Approve & send to Barclays"}
                 </Button>
               </>
             ) : current ? (
