@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
-import { Gavel, Loader2, Mail, RefreshCw, Send, Eye } from "lucide-react"
+import { Gavel, Loader2, Mail, RefreshCw, Send, Eye, ShieldCheck } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -121,6 +121,24 @@ export function LegalDeskManager({ passcode }: { passcode: string }) {
     return lines.filter((l) => l !== null).join("\n")
   }, [reference, related, subject, client, instrument, transaction, narrative])
 
+  const [checking, setChecking] = useState(false)
+  const [checkError, setCheckError] = useState<string | null>(null)
+  const [domainStatus, setDomainStatus] = useState<Array<{ address: string; domain: string; status: string }> | null>(
+    null,
+  )
+
+  async function checkDomains() {
+    setChecking(true)
+    setCheckError(null)
+    const data = await call({ op: "check-domains" })
+    setChecking(false)
+    if (data.ok) setDomainStatus((data.senders as Array<{ address: string; domain: string; status: string }>) ?? [])
+    else {
+      setDomainStatus(null)
+      setCheckError(String(data.error ?? "Could not reach Resend."))
+    }
+  }
+
   async function send() {
     if (!to.trim()) return toast.error("Add at least one recipient email.")
     if (!subject.trim()) return toast.error("Add a subject.")
@@ -196,6 +214,44 @@ export function LegalDeskManager({ passcode }: { passcode: string }) {
             <p className="text-xs leading-relaxed text-muted-foreground">
               The email, signature and replies all use this sender. Its domain must be verified in Resend.
             </p>
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11 w-full sm:w-auto"
+              onClick={checkDomains}
+              disabled={checking}
+            >
+              {checking ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <ShieldCheck className="size-4" aria-hidden="true" />
+              )}
+              Check sending domains
+            </Button>
+            {checkError && <p className="text-sm text-destructive">{checkError}</p>}
+            {domainStatus && (
+              <ul className="flex flex-col gap-2 rounded-lg border border-border p-3">
+                {domainStatus.map((d) => (
+                  <li key={d.address} className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 truncate font-mono text-sm">{d.address}</span>
+                    <Badge
+                      variant={d.status === "verified" ? "default" : d.status === "not_added" ? "destructive" : "secondary"}
+                      className="shrink-0"
+                    >
+                      {d.status === "verified"
+                        ? "Verified"
+                        : d.status === "not_added"
+                          ? "Not added"
+                          : d.status === "pending"
+                            ? "Pending DNS"
+                            : d.status === "failed"
+                              ? "DNS failed"
+                              : d.status}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
 
           <div className="flex flex-col gap-2">

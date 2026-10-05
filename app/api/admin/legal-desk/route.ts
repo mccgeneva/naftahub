@@ -47,6 +47,32 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, clients, messages, fromEmail: LEGAL_DESK_FROM_ADDRESS, nextReference: newLegalReference() })
     }
 
+    if (op === "check-domains") {
+      const key = process.env.RESEND_API_KEY
+      if (!key) return NextResponse.json({ ok: false, error: "RESEND_API_KEY is not set on this deployment." })
+      const res = await fetch("https://api.resend.com/domains", {
+        headers: { Authorization: `Bearer ${key}` },
+        cache: "no-store",
+      })
+      const json = (await res.json().catch(() => null)) as
+        | { data?: Array<{ name: string; status: string }>; message?: string }
+        | null
+      if (!res.ok || !json?.data) {
+        return NextResponse.json({
+          ok: false,
+          error: `Resend rejected the API key: ${json?.message ?? `HTTP ${res.status}`}`,
+        })
+      }
+      const domains = json.data
+      const { LEGAL_DESK_SENDERS } = await import("@/lib/legal-desk-senders")
+      const senders = LEGAL_DESK_SENDERS.map((s) => {
+        const domain = s.address.split("@")[1]
+        const found = domains.find((d) => d.name.toLowerCase() === domain)
+        return { address: s.address, domain, status: found ? found.status : "not_added" }
+      })
+      return NextResponse.json({ ok: true, senders })
+    }
+
     if (op === "context") {
       const userId = str(body.userId, 120)
       if (!userId) return NextResponse.json({ ok: false, error: "Choose a client." }, { status: 400 })
