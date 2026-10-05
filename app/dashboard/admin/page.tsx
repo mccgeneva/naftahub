@@ -137,6 +137,7 @@ import { FeeCashbackManager } from "@/components/admin/fee-cashback-manager"
   import { GuaranteesManager } from "@/components/admin/guarantees-manager"
 import { PpiInsuranceManager } from "@/components/admin/ppi-insurance-manager"
 import { AmlCasesManager } from "@/components/admin/aml-cases-manager"
+import { AmlInstrumentsPanel } from "@/components/admin/aml-instruments-panel"
   import { SectionAccessManager } from "@/components/admin/section-access-manager"
   import { DemoIdLog } from "@/components/admin/demo-id-log"
   import { SubAccountsManager } from "@/components/admin/sub-accounts-manager"
@@ -5637,7 +5638,12 @@ export default function AdminPage() {
             {activeView === "feecashback" && <FeeCashbackManager passcode={ADMIN_PASSCODE} />}
           {activeView === "guarantees" && <GuaranteesManager passcode={ADMIN_PASSCODE} />}
           {activeView === "ppi" && <PpiInsuranceManager passcode={ADMIN_PASSCODE} />}
-          {activeView === "aml" && <AmlCasesManager passcode={ADMIN_PASSCODE} />}
+          {activeView === "aml" && (
+            <div className="flex flex-col gap-6">
+              <AmlCasesManager passcode={ADMIN_PASSCODE} />
+              <AmlInstrumentsPanel passcode={ADMIN_PASSCODE} />
+            </div>
+          )}
 
             {activeView === "sectionaccess" && <SectionAccessManager passcode={ADMIN_PASSCODE} />}
             {activeView === "demoid" && <DemoIdLog passcode={ADMIN_PASSCODE} />}

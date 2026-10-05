@@ -19,6 +19,7 @@ import {
   saveAmlCase,
 } from "@/lib/aml-cases-db"
 import { extractAmlLetter } from "@/lib/aml-letter-extract"
+import { listInstrumentsForAml, revokeInstrument, setInstrumentFlag } from "@/lib/instrument-revocation"
 import { logActivity } from "@/app/actions/log-activity"
 
 export const runtime = "nodejs"
@@ -115,6 +116,56 @@ export async function POST(req: Request) {
         .map((u) => ({ id: u.id, label: holderLabelFor(u), email: u.email }))
         .sort((a, b) => a.label.localeCompare(b.label))
       return NextResponse.json({ ok: true, clients, cases })
+    }
+
+    if (op === "instruments") {
+      const [users, rows] = await Promise.all([listDynamicUsers(), listInstrumentsForAml()])
+      const labels = new Map(users.map((u) => [u.id, holderLabelFor(u)]))
+      return NextResponse.json({
+        ok: true,
+        instruments: rows.map((r) => ({ ...r, holderLabel: labels.get(r.userId) ?? r.userId })),
+      })
+    }
+
+    if (op === "flag-instrument" || op === "unflag-instrument") {
+      const approvalId = str(body.approvalId, 120)
+      const reason = str(body.reason, 1000)
+      if (op === "flag-instrument" && !reason) {
+        return NextResponse.json({ ok: false, error: "Describe why the instrument is irregular." }, { status: 400 })
+      }
+      const done = await setInstrumentFlag(
+        approvalId,
+        op === "flag-instrument" ? { flaggedAt: new Date().toISOString(), flaggedBy: ADMIN_LABEL, reason } : null,
+      )
+      if (!done) return NextResponse.json({ ok: false, error: "Instrument not found." }, { status: 404 })
+      void logActivity({
+        action: `${op === "flag-instrument" ? "Flagged" : "Cleared flag on"} bank instrument ${approvalId}`,
+        category: "Administration / AML",
+        details: { approvalId, reason },
+      }).catch(() => {})
+      return NextResponse.json({ ok: true })
+    }
+
+    if (op === "revoke-instrument") {
+      const approvalId = str(body.approvalId, 120)
+      const reason = str(body.reason, 1000)
+      if (!reason) {
+        return NextResponse.json({ ok: false, error: "A reason is required to revoke an instrument." }, { status: 400 })
+      }
+      const res = await revokeInstrument(approvalId, reason, ADMIN_LABEL)
+      if (!res.ok) return NextResponse.json(res, { status: 400 })
+      void logActivity({
+        action: `Force-revoked bank instrument ${res.outcome.instrumentId} (${res.outcome.mode === "ppi_replacement" ? "replaced by Lloyds Bank BG under PPI" : "facilities collapsed into master account"})`,
+        category: "Administration / AML",
+        details: {
+          approvalId,
+          reason,
+          mode: res.outcome.mode,
+          replacement: res.outcome.replacementInstrumentId ?? "",
+          facilities: res.outcome.engagements.map((e) => `${e.label}: ${e.result}${e.debited ? ` (${e.currency} ${e.debited})` : ""}`).join("; "),
+        },
+      }).catch(() => {})
+      return NextResponse.json(res)
     }
 
     if (op === "analyze") {
