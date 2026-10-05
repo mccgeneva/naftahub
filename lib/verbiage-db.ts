@@ -4,6 +4,7 @@ import type { VerbiageAnalysis } from "@/lib/verbiage-types"
 
 export type VerbiageStatus =
   | "analyzed" // report shown to the customer, awaiting their approval
+  | "override_requested" // customer asked the administrator to force-approve a blocked verbiage
   | "awaiting_transmission" // customer approved; waiting for the Barclays execution address
   | "transmitted" // sent to Barclays for execution
   | "issued" // the instrument has been received and booked
@@ -28,6 +29,11 @@ export interface VerbiageSubmission {
   /** Auto-fixed / edited wording; when set it supersedes the uploaded document. */
   correctedText: string | null
   revision: number
+  /** Customer's reason when asking the administrator to force-approve. */
+  overrideReason: string | null
+  overrideRequestedAt: string | null
+  /** Administrator's justification when force-approving a blocked verbiage. */
+  forcedBy: string | null
   createdAt: string
 }
 
@@ -57,6 +63,11 @@ function ensureTables(): Promise<void> {
       await query(
         `ALTER TABLE instrument_verbiage_submissions ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 0`,
       )
+      await query(`ALTER TABLE instrument_verbiage_submissions ADD COLUMN IF NOT EXISTS override_reason text`)
+      await query(
+        `ALTER TABLE instrument_verbiage_submissions ADD COLUMN IF NOT EXISTS override_requested_at timestamptz`,
+      )
+      await query(`ALTER TABLE instrument_verbiage_submissions ADD COLUMN IF NOT EXISTS forced_by text`)
       await query(
         `CREATE INDEX IF NOT EXISTS instrument_verbiage_user_idx ON instrument_verbiage_submissions (user_id, created_at DESC)`,
       )
@@ -90,6 +101,9 @@ type Row = {
   admin_note: string | null
   corrected_text: string | null
   revision: number | null
+  override_reason: string | null
+  override_requested_at: string | Date | null
+  forced_by: string | null
   created_at: string | Date
 }
 
@@ -113,6 +127,9 @@ function toSubmission(r: Row): VerbiageSubmission {
     adminNote: r.admin_note,
     correctedText: r.corrected_text ?? null,
     revision: Number(r.revision ?? 0),
+    overrideReason: r.override_reason ?? null,
+    overrideRequestedAt: iso(r.override_requested_at ?? null),
+    forcedBy: r.forced_by ?? null,
     createdAt: iso(r.created_at) as string,
   }
 }
@@ -164,7 +181,7 @@ export async function listAllVerbiage(): Promise<VerbiageSubmission[]> {
 export async function countVerbiageAwaitingAdmin(): Promise<number> {
   await ensureTables()
   const { rows } = await query<{ n: string }>(
-    `SELECT COUNT(*)::text AS n FROM instrument_verbiage_submissions WHERE status IN ('awaiting_transmission','transmitted')`,
+    `SELECT COUNT(*)::text AS n FROM instrument_verbiage_submissions WHERE status IN ('override_requested','awaiting_transmission','transmitted')`,
   )
   return Number(rows[0]?.n ?? 0)
 }
@@ -183,6 +200,9 @@ export async function updateVerbiage(
     correctedText: string | null
     revision: number
     analysis: VerbiageAnalysis
+    overrideReason: string | null
+    overrideRequestedAt: string | null
+    forcedBy: string | null
   }>,
 ): Promise<VerbiageSubmission | null> {
   await ensureTables()
@@ -198,6 +218,9 @@ export async function updateVerbiage(
     issuedInstrumentRef: "issued_instrument_ref",
     issuedAt: "issued_at",
     adminNote: "admin_note",
+    overrideReason: "override_reason",
+    overrideRequestedAt: "override_requested_at",
+    forcedBy: "forced_by",
   }
   const sets: string[] = []
   const vals: unknown[] = []

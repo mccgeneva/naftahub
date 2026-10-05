@@ -22,6 +22,8 @@ type Submission = {
   transmittedTo: string | null
   transmissionError: string | null
   issuedInstrumentRef: string | null
+  overrideReason?: string | null
+  forcedBy?: string | null
   createdAt: string
 }
 
@@ -38,6 +40,7 @@ export function VerbiageDeskManager({ passcode }: { passcode: string }) {
   const [savedEmail, setSavedEmail] = useState("")
   const [busyId, setBusyId] = useState<string | null>(null)
   const [refs, setRefs] = useState<Record<string, string>>({})
+  const [justify, setJustify] = useState<Record<string, string>>({})
 
   const call = useCallback(
     async (payload: Record<string, unknown>) => {
@@ -196,6 +199,40 @@ export function VerbiageDeskManager({ passcode }: { passcode: string }) {
                   </Button>
                 )}
               </div>
+              {s.forcedBy && (
+                <p className="break-words text-xs text-muted-foreground">Force-approved: {s.forcedBy}</p>
+              )}
+              {(s.status === "override_requested" || s.status === "analyzed") && (
+                <div className="flex flex-col gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+                  <p className="text-sm font-medium">
+                    {s.status === "override_requested" ? "Customer requests force approval" : "Not yet approved by the customer"}
+                  </p>
+                  {s.overrideReason && (
+                    <p className="break-words text-sm leading-relaxed">Reason: {s.overrideReason}</p>
+                  )}
+                  <Label htmlFor={`just-${s.id}`} className="text-xs">
+                    Your justification (kept in the audit trail)
+                  </Label>
+                  <Input
+                    id={`just-${s.id}`}
+                    value={justify[s.id] ?? ""}
+                    onChange={(e) => setJustify((p) => ({ ...p, [s.id]: e.target.value }))}
+                    placeholder="e.g. Wording confirmed directly with the issuing bank"
+                    className="text-base sm:text-sm"
+                  />
+                  <Button
+                    size="sm"
+                    className="min-h-11"
+                    disabled={busy || (justify[s.id] ?? "").trim().length < 10}
+                    onClick={() =>
+                      run(s.id, { op: "force-approve", note: justify[s.id] }, "Force-approved and sent to Barclays")
+                    }
+                  >
+                    {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Stamp className="mr-2 h-4 w-4" />}
+                    Force approve &amp; transmit to Barclays
+                  </Button>
+                </div>
+              )}
               {s.status === "transmitted" && (
                 <div className="flex flex-col gap-2 rounded-lg border border-border p-3 sm:flex-row sm:items-end">
                   <div className="flex flex-1 flex-col gap-1">

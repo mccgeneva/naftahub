@@ -45,6 +45,48 @@ export async function POST(request: Request) {
     const sub = await getVerbiage(String(body.id ?? ""))
     if (!sub) return NextResponse.json({ ok: false, error: "Submission not found." }, { status: 404 })
 
+    if (op === "force-approve") {
+      if (sub.status !== "override_requested" && sub.status !== "analyzed") {
+        return NextResponse.json({ ok: false, error: "This submission is not awaiting approval." }, { status: 400 })
+      }
+      const justification = String(body.note ?? "").trim().slice(0, 1000)
+      if (justification.length < 10) {
+        return NextResponse.json(
+          { ok: false, error: "Enter a justification for forcing the approval (it is kept in the audit trail)." },
+          { status: 400 },
+        )
+      }
+      const approved = await updateVerbiage(sub.id, {
+        status: "awaiting_transmission",
+        approvedAt: new Date().toISOString(),
+        forcedBy: justification,
+      })
+      if (!approved) return NextResponse.json({ ok: false, error: "Could not save approval." }, { status: 500 })
+      const res = await transmitVerbiageToBarclays(approved, String(body.email ?? "").trim() || undefined)
+      await logActivity({
+        action: `Verbiage ${sub.id} FORCE-APPROVED by administrator${res.ok ? " and transmitted" : " (transmission failed)"}`,
+        category: "Administration / Verbiage",
+        details: {
+          verdict: sub.analysis.verdict,
+          score: sub.analysis.complianceScore,
+          justification,
+          customerReason: sub.overrideReason,
+          to: res.ok ? res.to : null,
+          error: res.ok ? null : res.error,
+        },
+      }).catch(() => undefined)
+      await insertNotification({
+        userId: sub.userId,
+        tone: res.ok ? "success" : "warning",
+        title: res.ok ? "Verbiage force-approved & sent to Barclays" : "Verbiage force-approved",
+        body: res.ok
+          ? `The administrator approved your ${sub.analysis.instrumentType || "instrument"} verbiage and transmitted it to Barclays for execution.`
+          : `The administrator approved your verbiage. It is queued and will be transmitted to Barclays shortly.`,
+        href: "/dashboard/instruments",
+      }).catch(() => undefined)
+      return NextResponse.json({ ok: true, submission: await getVerbiage(sub.id), transmitted: res.ok, error: res.ok ? null : res.error })
+    }
+
     if (op === "transmit") {
       if (sub.status !== "awaiting_transmission" && sub.status !== "transmitted") {
         return NextResponse.json({ ok: false, error: "The client hasn't approved this verbiage yet." }, { status: 400 })

@@ -25,6 +25,7 @@ type Submission = {
   adminNote: string | null
   correctedText?: string | null
   revision?: number
+  overrideReason?: string | null
   createdAt: string
 }
 
@@ -120,6 +121,7 @@ export function VerbiageReviewDialog() {
   )
   const [current, setCurrentState] = useState<Submission | null>(null)
   const [draft, setDraft] = useState("")
+  const [overrideReason, setOverrideReason] = useState("")
   const setCurrent = (s: Submission | null) => {
     setCurrentState(s)
     setDraft(s?.correctedText ?? "")
@@ -188,6 +190,33 @@ export function VerbiageReviewDialog() {
       } else {
         toast.success("Submission withdrawn")
       }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Action failed.")
+    } finally {
+      setBusy("idle")
+    }
+  }
+
+  async function override(op: "request-override" | "cancel-override") {
+    if (!current) return
+    setBusy("approving")
+    try {
+      const res = await fetch("/api/instruments/verbiage", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: current.id, op, text: op === "request-override" ? overrideReason : undefined }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.ok) throw new Error(json.error || "Action failed.")
+      setCurrent(json.submission)
+      mutate()
+      setOverrideReason("")
+      toast.success(op === "request-override" ? "Force approval requested" : "Request cancelled", {
+        description:
+          op === "request-override"
+            ? "The administrator will review it. If approved, it's sent to Barclays and you'll be notified."
+            : undefined,
+      })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Action failed.")
     } finally {
@@ -385,6 +414,54 @@ export function VerbiageReviewDialog() {
                       </p>
                     )}
                   </section>
+                )}
+
+                {editing && approveBlocked && (
+                  <section className="flex flex-col gap-2 rounded-lg border border-border p-3">
+                    <h4 className="text-sm font-medium">Ask the administrator to force-approve</h4>
+                    <p className="text-sm leading-relaxed text-muted-foreground">
+                      If you believe this wording should go to Barclays as it is, explain why. The administrator
+                      reviews the report and decides. Nothing is sent until they approve it.
+                    </p>
+                    <Textarea
+                      value={overrideReason}
+                      onChange={(e) => setOverrideReason(e.target.value)}
+                      rows={3}
+                      maxLength={1500}
+                      placeholder="e.g. The issuing bank has pre-approved this wording; details agreed by phone."
+                      className="text-base sm:text-sm"
+                      aria-label="Reason for force approval"
+                    />
+                    <Button
+                      variant="secondary"
+                      className="min-h-11 w-full"
+                      disabled={working || overrideReason.trim().length < 10}
+                      onClick={() => override("request-override")}
+                    >
+                      <ShieldAlert className="mr-2 h-4 w-4" />
+                      Request force approval
+                    </Button>
+                  </section>
+                )}
+
+                {current.status === "override_requested" && (
+                  <div className="flex flex-col gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+                    <p className="leading-relaxed">
+                      <span className="font-medium">Awaiting the administrator.</span> If they approve it, it&apos;s
+                      sent to Barclays automatically and you&apos;ll be notified.
+                    </p>
+                    {current.overrideReason && (
+                      <p className="break-words text-muted-foreground">Your reason: {current.overrideReason}</p>
+                    )}
+                    <Button
+                      variant="outline"
+                      className="min-h-11 w-full"
+                      disabled={working}
+                      onClick={() => override("cancel-override")}
+                    >
+                      Cancel request
+                    </Button>
+                  </div>
                 )}
               </div>
             )}

@@ -85,10 +85,52 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (body.op === "withdraw") {
-    if (sub.status !== "analyzed" && sub.status !== "awaiting_transmission") {
+    if (sub.status !== "analyzed" && sub.status !== "awaiting_transmission" && sub.status !== "override_requested") {
       return NextResponse.json({ ok: false, error: "This submission has already been sent." }, { status: 400 })
     }
     const updated = await updateVerbiage(sub.id, { status: "withdrawn" })
+    return NextResponse.json({ ok: true, submission: updated })
+  }
+
+  if (body.op === "request-override") {
+    if (sub.status !== "analyzed") {
+      return NextResponse.json({ ok: false, error: "This submission can no longer be changed." }, { status: 400 })
+    }
+    const reason = (body.text ?? "").trim().slice(0, 1500)
+    if (reason.length < 10) {
+      return NextResponse.json(
+        { ok: false, error: "Explain why the administrator should approve it (at least a short sentence)." },
+        { status: 400 },
+      )
+    }
+    const updated = await updateVerbiage(sub.id, {
+      status: "override_requested",
+      overrideReason: reason,
+      overrideRequestedAt: new Date().toISOString(),
+    })
+    const amount = sub.analysis.faceValue
+      ? ` ${sub.analysis.currency} ${Number(sub.analysis.faceValue).toLocaleString("en-US")}`
+      : ""
+    await notifyAllAdminsOfClientRequest({
+      customerName: sub.holderLabel,
+      title: "Force approval requested — verbiage",
+      body: `${sub.holderLabel} asks you to force-approve a ${sub.analysis.instrumentType || "bank instrument"} verbiage${amount} (verdict: ${sub.analysis.verdict}, score ${sub.analysis.complianceScore}/100). Reason: ${reason}`,
+      href: "/dashboard/admin?view=verbiage",
+      excludeIds: [session.id],
+    })
+    await logActivity({
+      action: "Verbiage force approval requested",
+      category: "Bank Instruments",
+      details: { submission: sub.id, verdict: sub.analysis.verdict, score: sub.analysis.complianceScore },
+    }).catch(() => undefined)
+    return NextResponse.json({ ok: true, submission: updated })
+  }
+
+  if (body.op === "cancel-override") {
+    if (sub.status !== "override_requested") {
+      return NextResponse.json({ ok: false, error: "There is no pending request to cancel." }, { status: 400 })
+    }
+    const updated = await updateVerbiage(sub.id, { status: "analyzed", overrideReason: null, overrideRequestedAt: null })
     return NextResponse.json({ ok: true, submission: updated })
   }
 

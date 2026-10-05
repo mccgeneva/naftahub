@@ -36,6 +36,7 @@ export type VerbiageAnalysis = z.infer<typeof verbiageAnalysisSchema>
 
 export const VERBIAGE_STATUS_LABELS: Record<string, string> = {
   analyzed: "Awaiting your approval",
+  override_requested: "Force approval requested — awaiting administrator",
   awaiting_transmission: "Approved — queued for Barclays",
   transmitted: "Sent to Barclays for execution",
   issued: "Instrument issued",
