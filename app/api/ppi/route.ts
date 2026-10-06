@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { resolveCurrentSession, resolveDataOwnerIdFor } from "@/lib/session-user"
 import { insertNotification } from "@/lib/notifications-db"
+import { mirrorPpiMessageToBankeka } from "@/lib/ppi-bankeka-mirror"
 import { notifyAllAdminsOfClientRequest } from "@/lib/notify-admins"
 import { logActivity } from "@/app/actions/log-activity"
 import { listPpiPoliciesForOwner, appendPpiMessage } from "@/lib/ppi-insurance-db"
@@ -70,6 +71,7 @@ export async function POST(req: Request) {
       at: new Date().toISOString(),
     })
     if (!updated) return NextResponse.json({ ok: false, error: "This policy is closed to messages." })
+    await mirrorPpiMessageToBankeka({ direction: "client-to-treasury", clientId: policy.userId, text })
     await notifyAllAdminsOfClientRequest({
       customerName: policy.holderLabel,
       title: `PPI message from ${policy.holderLabel}`,

@@ -6,6 +6,7 @@ import { readLedgerEntries, availableByCurrency, upsertLedgerEntry, deleteLedger
 import { getOverdraftStatusForOwner } from "@/lib/overdraft"
 import { convertCurrency } from "@/lib/fx"
 import { insertNotification } from "@/lib/notifications-db"
+import { mirrorPpiMessageToBankeka } from "@/lib/ppi-bankeka-mirror"
 import { logActivity } from "@/app/actions/log-activity"
 import { analyzePpiProfile } from "@/lib/ppi-profile"
 import { consolidateDebitWithPpi, readPpiDeficits, deficitsTotalEur } from "@/lib/ppi-claim"
@@ -250,6 +251,7 @@ export async function POST(req: Request) {
         at: new Date().toISOString(),
       })
       if (!updated) return NextResponse.json({ ok: false, error: "This policy is closed to messages." })
+      await mirrorPpiMessageToBankeka({ direction: "treasury-to-client", clientId: policy.userId, text })
       await insertNotification({
         userId: policy.userId,
         tone: "info",
