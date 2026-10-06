@@ -67,6 +67,21 @@ export interface AmlCase {
   updatedAt: string
   closedAt: string | null
   createdBy: string
+  /** Opt-in per case: when true the customer sees `clientMessage` (and the letters if `clientShareDocuments`). */
+  clientShared: boolean
+  clientMessage: string
+  clientShareDocuments: boolean
+  clientSharedAt: string | null
+}
+
+/** What the customer is allowed to see of a shared case — never findings, measures, risk or timeline. */
+export interface ClientComplianceNotice {
+  id: string
+  subject: string
+  message: string
+  sharedAt: string | null
+  closed: boolean
+  documents: Array<{ pathname: string; name: string; contentType: string }>
 }
 
 let ready: Promise<void> | null = null
@@ -99,6 +114,10 @@ function ensureTable(): Promise<void> {
       `)
       await query(`CREATE INDEX IF NOT EXISTS aml_cases_user_idx ON aml_cases (user_id)`)
       await query(`CREATE INDEX IF NOT EXISTS aml_cases_status_idx ON aml_cases (status)`)
+      await query(`ALTER TABLE aml_cases ADD COLUMN IF NOT EXISTS client_shared boolean NOT NULL DEFAULT false`)
+      await query(`ALTER TABLE aml_cases ADD COLUMN IF NOT EXISTS client_message text NOT NULL DEFAULT ''`)
+      await query(`ALTER TABLE aml_cases ADD COLUMN IF NOT EXISTS client_share_documents boolean NOT NULL DEFAULT false`)
+      await query(`ALTER TABLE aml_cases ADD COLUMN IF NOT EXISTS client_shared_at timestamptz`)
     })().catch((err) => {
       ready = null
       throw err
@@ -133,7 +152,31 @@ function rowToCase(r: Record<string, unknown>): AmlCase {
     updatedAt: iso(r.updated_at),
     closedAt: r.closed_at ? iso(r.closed_at) : null,
     createdBy: String(r.created_by ?? ""),
+    clientShared: r.client_shared === true,
+    clientMessage: String(r.client_message ?? ""),
+    clientShareDocuments: r.client_share_documents === true,
+    clientSharedAt: r.client_shared_at ? iso(r.client_shared_at) : null,
   }
+}
+
+/** Shared cases for the given customer ids, reduced to the client-safe fields. */
+export async function listClientComplianceNotices(userIds: string[]): Promise<ClientComplianceNotice[]> {
+  if (!userIds.length) return []
+  await ensureTable()
+  const { rows } = await query(
+    `SELECT * FROM aml_cases WHERE user_id = ANY($1) AND client_shared = true ORDER BY client_shared_at DESC NULLS LAST`,
+    [userIds],
+  )
+  return rows.map(rowToCase).map((c) => ({
+    id: c.id,
+    subject: c.subject,
+    message: c.clientMessage,
+    sharedAt: c.clientSharedAt,
+    closed: c.status === "closed",
+    documents: c.clientShareDocuments
+      ? c.documents.map((d) => ({ pathname: d.pathname, name: d.name, contentType: d.contentType }))
+      : [],
+  }))
 }
 
 export function newAmlId(prefix = "AML"): string {
@@ -164,15 +207,19 @@ export async function saveAmlCase(c: AmlCase): Promise<AmlCase> {
   await ensureTable()
   const { rows } = await query(
     `INSERT INTO aml_cases (id, user_id, holder_label, subject, source, author_name, letter_reference, letter_date,
-       risk_level, status, summary, findings, documents, measures, timeline, created_at, updated_at, closed_at, created_by)
+       risk_level, status, summary, findings, documents, measures, timeline, created_at, updated_at, closed_at, created_by,
+       client_shared, client_message, client_share_documents, client_shared_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15::jsonb,
-       COALESCE(NULLIF($16,'')::timestamptz, now()), now(), NULLIF($17,'')::timestamptz, $18)
+       COALESCE(NULLIF($16,'')::timestamptz, now()), now(), NULLIF($17,'')::timestamptz, $18,
+       $19, $20, $21, NULLIF($22,'')::timestamptz)
      ON CONFLICT (id) DO UPDATE SET
        user_id = EXCLUDED.user_id, holder_label = EXCLUDED.holder_label, subject = EXCLUDED.subject,
        source = EXCLUDED.source, author_name = EXCLUDED.author_name, letter_reference = EXCLUDED.letter_reference,
        letter_date = EXCLUDED.letter_date, risk_level = EXCLUDED.risk_level, status = EXCLUDED.status,
        summary = EXCLUDED.summary, findings = EXCLUDED.findings, documents = EXCLUDED.documents,
-       measures = EXCLUDED.measures, timeline = EXCLUDED.timeline, updated_at = now(), closed_at = EXCLUDED.closed_at
+       measures = EXCLUDED.measures, timeline = EXCLUDED.timeline, updated_at = now(), closed_at = EXCLUDED.closed_at,
+       client_shared = EXCLUDED.client_shared, client_message = EXCLUDED.client_message,
+       client_share_documents = EXCLUDED.client_share_documents, client_shared_at = EXCLUDED.client_shared_at
      RETURNING *`,
     [
       c.id,
@@ -193,6 +240,10 @@ export async function saveAmlCase(c: AmlCase): Promise<AmlCase> {
       c.createdAt || "",
       c.closedAt || "",
       c.createdBy,
+      c.clientShared,
+      c.clientMessage,
+      c.clientShareDocuments,
+      c.clientSharedAt || "",
     ],
   )
   return rowToCase(rows[0])

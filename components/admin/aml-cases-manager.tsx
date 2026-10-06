@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
+import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { blobFileUrl } from "@/lib/kyc-types"
 import { downloadFile } from "@/lib/download-file"
@@ -89,6 +90,9 @@ type Draft = {
   findings: string
   documents: AmlDocument[]
   measures: Array<Partial<AmlMeasure> & { key: string }>
+  clientShared: boolean
+  clientMessage: string
+  clientShareDocuments: boolean
 }
 
 let keySeq = 0
@@ -108,6 +112,9 @@ function emptyDraft(): Draft {
     findings: "",
     documents: [],
     measures: [],
+    clientShared: false,
+    clientMessage: "",
+    clientShareDocuments: false,
   }
 }
 
@@ -126,6 +133,9 @@ function draftFromCase(c: AmlCase): Draft {
     findings: c.findings,
     documents: c.documents,
     measures: c.measures.map((m) => ({ ...m, key: m.id })),
+    clientShared: c.clientShared ?? false,
+    clientMessage: c.clientMessage ?? "",
+    clientShareDocuments: c.clientShareDocuments ?? false,
   }
 }
 
@@ -509,6 +519,61 @@ export function AmlCasesManager({ passcode }: { passcode: string }) {
                 placeholder="- One concern per line"
               />
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className={draft.clientShared ? "border-amber-500/50" : undefined}>
+          <CardHeader>
+            <CardTitle className="text-base">Share with the customer</CardTitle>
+            <CardDescription className="text-pretty">
+              Off by default. When on, the customer sees only the message below (and the letters, if you allow it) on
+              their dashboard and gets a notification. Findings, measures, risk level and the timeline stay internal.
+              Do not share a case where a suspicious-activity report is filed or planned.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <label className="flex min-h-11 items-center justify-between gap-3">
+              <span className="text-sm font-medium">Visible to the customer</span>
+              <Switch checked={draft.clientShared} onCheckedChange={(v) => set("clientShared", v)} />
+            </label>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="aml-client-msg">Message the customer will see</Label>
+              <Textarea
+                id="aml-client-msg"
+                rows={6}
+                className="text-base"
+                value={draft.clientMessage}
+                onChange={(e) => set("clientMessage", e.target.value)}
+                placeholder="e.g. Your funding request has been declined. To reconsider it we need the following documents…"
+              />
+              {draft.clientShared && !draft.clientMessage.trim() && (
+                <p className="text-sm text-destructive">Write the message before saving a shared case.</p>
+              )}
+              {!draft.clientMessage && draft.summary && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 self-start"
+                  onClick={() => set("clientMessage", draft.summary)}
+                >
+                  Use the case summary as the message
+                </Button>
+              )}
+            </div>
+            <label className="flex min-h-11 items-center justify-between gap-3">
+              <span className="text-sm">
+                Also let the customer open the uploaded letters
+                <span className="block text-xs text-muted-foreground">
+                  {draft.documents.length} letter{draft.documents.length === 1 ? "" : "s"} attached
+                </span>
+              </span>
+              <Switch
+                checked={draft.clientShareDocuments}
+                onCheckedChange={(v) => set("clientShareDocuments", v)}
+                disabled={draft.documents.length === 0}
+              />
+            </label>
+            <p className="text-xs text-muted-foreground">Changes apply when you tap Save.</p>
           </CardContent>
         </Card>
 

@@ -21,6 +21,7 @@ import {
 import { extractAmlLetter } from "@/lib/aml-letter-extract"
 import { listInstrumentsForAml, revokeInstrument, setInstrumentFlag } from "@/lib/instrument-revocation"
 import { logActivity } from "@/app/actions/log-activity"
+import { insertNotification } from "@/lib/notifications-db"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -210,6 +211,26 @@ export async function POST(req: Request) {
       const note = str(body.note, 2000)
       if (note) timeline.push({ at: now, by: ADMIN_LABEL, text: note })
 
+      const clientShared = input.clientShared === undefined ? (existing?.clientShared ?? false) : input.clientShared === true
+      const clientMessage =
+        input.clientMessage === undefined ? (existing?.clientMessage ?? "") : str(input.clientMessage, 8000)
+      const clientShareDocuments =
+        input.clientShareDocuments === undefined
+          ? (existing?.clientShareDocuments ?? false)
+          : input.clientShareDocuments === true
+      if (clientShared && !clientMessage) {
+        return NextResponse.json(
+          { ok: false, error: "Write the message the customer will see before sharing this case." },
+          { status: 400 },
+        )
+      }
+      const newlyShared = clientShared && !existing?.clientShared
+      const messageChanged = clientShared && !!existing?.clientShared && existing.clientMessage !== clientMessage
+      if (newlyShared) timeline.push({ at: now, by: ADMIN_LABEL, text: "Shared with the customer." })
+      else if (!clientShared && existing?.clientShared) {
+        timeline.push({ at: now, by: ADMIN_LABEL, text: "Withdrawn from the customer's view." })
+      } else if (messageChanged) timeline.push({ at: now, by: ADMIN_LABEL, text: "Customer message updated." })
+
       const saved = await saveAmlCase({
         id: existing?.id ?? newAmlId(),
         userId,
@@ -231,7 +252,21 @@ export async function POST(req: Request) {
         updatedAt: now,
         closedAt: status === "closed" ? (existing?.closedAt ?? now) : null,
         createdBy: existing?.createdBy ?? ADMIN_LABEL,
+        clientShared,
+        clientMessage,
+        clientShareDocuments,
+        clientSharedAt: clientShared ? (newlyShared || messageChanged ? now : (existing?.clientSharedAt ?? now)) : null,
       })
+
+      if (newlyShared || messageChanged) {
+        await insertNotification({
+          userId: saved.userId,
+          tone: "warning",
+          title: newlyShared ? `Compliance notice: ${saved.subject}` : `Compliance notice updated: ${saved.subject}`,
+          body: "The compliance office has sent you a notice about your account. Open it from your dashboard.",
+          href: "/dashboard#compliance-notices",
+        }).catch(() => {})
+      }
 
       await logActivity({
         action: `${existing ? "Updated" : "Opened"} AML case ${saved.id} for ${saved.holderLabel}`,

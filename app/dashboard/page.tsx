@@ -10,6 +10,7 @@ import { WelcomeHeader } from "@/components/dashboard/welcome-header"
 import { PlatformTierBanner } from "@/components/dashboard/platform-tier-banner"
 import { BankekaCard } from "@/components/dashboard/bankeka-card"
 import { SpotDealsHighlight } from "@/components/dashboard/spot-deals-highlight"
+import { ComplianceNotices } from "@/components/dashboard/compliance-notices"
 
 export default function DashboardPage() {
   return (
@@ -19,6 +20,9 @@ export default function DashboardPage() {
 
       {/* Welcome Section */}
       <WelcomeHeader />
+
+      {/* Compliance notices the administrator chose to share (hidden when none) */}
+      <ComplianceNotices />
 
       {/* Portfolio Stats */}
       <PortfolioOverview />
