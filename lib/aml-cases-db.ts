@@ -198,7 +198,20 @@ export async function getAmlCase(id: string): Promise<AmlCase | null> {
 
 export async function countOpenAmlCases(): Promise<number> {
   await ensureTable()
-  const { rows } = await query(`SELECT COUNT(*)::int AS n FROM aml_cases WHERE status <> 'closed'`)
+  // Only cases that still need the administrator: not closed AND either no
+  // measures decided yet, or at least one measure still planned / in progress.
+  // A case whose measures are all done or cancelled is waiting on nothing.
+  const { rows } = await query(
+    `SELECT COUNT(*)::int AS n FROM aml_cases c
+      WHERE c.status <> 'closed'
+        AND (
+          COALESCE(jsonb_array_length(c.measures::jsonb), 0) = 0
+          OR EXISTS (
+            SELECT 1 FROM jsonb_array_elements(c.measures::jsonb) m
+             WHERE m->>'status' IN ('planned', 'in_progress')
+          )
+        )`,
+  )
   return Number(rows[0]?.n ?? 0)
 }
 
