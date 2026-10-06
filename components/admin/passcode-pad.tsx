@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import { Delete } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -23,29 +23,40 @@ export function PasscodePad({
   disabled = false,
   label = "Administrator Passcode",
 }: PasscodePadProps) {
+  // Rapid taps can land before React re-renders, so each tap must build on the
+  // latest typed value rather than the value captured by the last render.
+  const valueRef = useRef(value)
+  useEffect(() => {
+    valueRef.current = value
+  }, [value])
+
   const press = (digit: string) => {
-    if (disabled || value.length >= length) return
-    onChange(value + digit)
+    if (disabled || valueRef.current.length >= length) return
+    const next = valueRef.current + digit
+    valueRef.current = next
+    onChange(next)
   }
   const backspace = () => {
     if (disabled) return
-    onChange(value.slice(0, -1))
+    const next = valueRef.current.slice(0, -1)
+    valueRef.current = next
+    onChange(next)
   }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (disabled) return
       if (/^\d$/.test(e.key)) {
-        if (value.length < length) onChange(value + e.key)
+        press(e.key)
       } else if (e.key === "Backspace") {
-        onChange(value.slice(0, -1))
+        backspace()
       } else if (e.key === "Enter") {
         onSubmit()
       }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [value, length, disabled, onChange, onSubmit])
+  })
 
   return (
     <div className="flex flex-col items-center gap-6">
@@ -92,11 +103,28 @@ function PadKey({
   children,
   variant = "solid",
   className,
+  onClick,
+  disabled,
   ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "solid" | "ghost" }) {
+}: Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "onClick"> & {
+  variant?: "solid" | "ghost"
+  onClick: () => void
+}) {
+  // iOS Safari swallows or delays `click` on quick consecutive taps (treated as a
+  // double-tap), so register each press on pointer down. A keyboard-activated
+  // click (detail 0) still works for accessibility.
   return (
     <button
       type="button"
+      disabled={disabled}
+      onPointerDown={(e) => {
+        if (disabled) return
+        e.preventDefault()
+        onClick()
+      }}
+      onClick={(e) => {
+        if (e.detail === 0) onClick()
+      }}
       className={cn(
         "flex h-16 select-none items-center justify-center rounded-2xl text-2xl font-medium tabular-nums transition-colors active:scale-95 disabled:opacity-40 touch-manipulation",
         variant === "solid"
