@@ -1,5 +1,6 @@
 "use client"
 
+import { PasscodePad } from "@/components/admin/passcode-pad"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ShieldCheck,
@@ -2577,26 +2578,23 @@ export default function AdminPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="admin-passcode">Administrator Passcode</Label>
-              <Input
-                id="admin-passcode"
-                type="password"
+              <p className="text-center text-sm font-medium">Administrator Passcode</p>
+              <PasscodePad
                 value={passcode}
-                onChange={(e) => {
-                  setPasscode(e.target.value)
+                onChange={(v) => {
+                  setPasscode(v)
                   setGateError(null)
                 }}
-                onKeyDown={(e) => e.key === "Enter" && handleUnlock()}
-                placeholder="Enter passcode"
-                autoComplete="off"
+                onSubmit={handleUnlock}
+                disabled={gateChecking}
               />
               {gateError && (
-                <p className="text-sm text-destructive" role="alert">
+                <p className="text-center text-sm text-destructive" role="alert">
                   {gateError}
                 </p>
               )}
             </div>
-            <Button className="w-full" onClick={handleUnlock}>
+            <Button className="h-12 w-full" onClick={handleUnlock} disabled={gateChecking || passcode.length === 0}>
               <ShieldCheck className="mr-2 h-4 w-4" />
               Unlock Administrator Panel
             </Button>
