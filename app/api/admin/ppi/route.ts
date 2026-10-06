@@ -145,6 +145,8 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: false, error: "The negotiated premium must be above zero." })
       }
       const ownerId = await resolveDataOwnerIdFor(body.userId)
+      const previous = body.policyId ? await getPpiPolicy(body.policyId).catch(() => null) : null
+      const newNote = (body.note ?? "").trim().slice(0, 1000)
       const policy = await upsertPpiDeal({
         id: body.policyId || `PPI-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
         userId: body.userId,
@@ -154,8 +156,20 @@ export async function POST(req: Request) {
         computedPremium: analysis.quote.premiumEur,
         negotiatedPremium: negotiated,
         lloydsReference: (body.lloydsReference ?? "").trim().slice(0, 80) || generateLloydsSlipRef(),
-        note: (body.note ?? "").trim().slice(0, 1000),
+        note: newNote,
       })
+      // The deal note is the admin's message to the customer — deliver it to
+      // their Bankeka + bell whenever it is new or changed.
+      if (newNote && newNote !== (previous?.note ?? "").trim()) {
+        await mirrorPpiMessageToBankeka({ direction: "treasury-to-client", clientId: body.userId, text: newNote })
+        await insertNotification({
+          userId: body.userId,
+          tone: "info",
+          title: "Treasury message about your PPI insurance",
+          body: newNote.slice(0, 200),
+          href: "/dashboard/bankeka",
+        }).catch(() => null)
+      }
       return NextResponse.json({ ok: true, policy })
     }
 

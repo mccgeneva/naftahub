@@ -451,7 +451,7 @@ export function PpiInsuranceManager({ passcode }: { passcode: string }) {
                     </p>
                   </div>
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="ppi-note">Deal notes</Label>
+                    <Label htmlFor="ppi-note">Message to the customer</Label>
                     <Textarea
                       id="ppi-note"
                       value={note}
@@ -459,6 +459,9 @@ export function PpiInsuranceManager({ passcode }: { passcode: string }) {
                       rows={3}
                       className="text-base"
                     />
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      Sent to the customer&apos;s Bankeka and bell when you save the deal.
+                    </p>
                   </div>
                   <div className="flex flex-col gap-1 rounded-md bg-background p-3 text-sm">
                     <div className="flex justify-between gap-3">
