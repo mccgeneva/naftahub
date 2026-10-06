@@ -71,7 +71,7 @@ export default function InstrumentDocumentPage() {
       {/* Toolbar */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <Button variant="ghost" size="sm" asChild>
-          <Link href={`/dashboard/instruments/${encodeURIComponent(instrument.id)}`}>
+          <Link href={`/dashboard/instruments/${encodeURIComponent(instrument.id)}`} replace>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Instrument
           </Link>

@@ -142,7 +142,7 @@ export default function InstrumentDetailPage() {
   return (
     <div className="mx-auto max-w-2xl">
       <div className="mb-4 flex items-center justify-between gap-2">
-        <Button variant="ghost" size="sm" onClick={() => router.back()}>
+        <Button variant="ghost" size="sm" onClick={() => router.push("/dashboard/instruments")}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
