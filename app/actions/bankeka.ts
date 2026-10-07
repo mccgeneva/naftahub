@@ -451,8 +451,42 @@ export async function getSupportContact(): Promise<BankekaParticipant | null> {
 }
 
 export type FindRecipientResult =
-  | { ok: true; participant: BankekaParticipant }
+  | { ok: true; participant: BankekaParticipant; matches?: BankekaParticipant[] }
   | { ok: false; error: string }
+
+/**
+ * Administrator-only partial search: a few letters of a name, company or email
+ * return every matching client account. Clients never reach this path — they
+ * keep the exact-email lookup so the client base can't be enumerated.
+ */
+async function adminPartialSearch(me: string, query: string): Promise<FindRecipientResult> {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  if (words.length === 0 || query.trim().length < 2) {
+    return { ok: false, error: "Type at least 2 letters of a name, company or email." }
+  }
+  const users = await listDynamicUsers()
+  const matches = users
+    .filter((u) => u.id !== me && u.status === "active")
+    .filter((u) => {
+      const hay = `${u.profile?.fullName ?? ""} ${u.profile?.company ?? ""} ${u.email ?? ""}`.toLowerCase()
+      return words.every((w) => hay.includes(w))
+    })
+    .slice(0, 12)
+    .map<BankekaParticipant>((u) => {
+      const name = (u.profile?.fullName || "").trim() || u.email
+      const company = [(u.profile?.company || "").trim(), u.email].filter(Boolean).join(" · ")
+      const initials =
+        name
+          .split(/\s+/)
+          .map((p) => p[0])
+          .join("")
+          .slice(0, 2)
+          .toUpperCase() || u.email.slice(0, 2).toUpperCase()
+      return { id: u.id, name, company, initials, isAdmin: false }
+    })
+  if (matches.length === 0) return { ok: false, error: "No client account matches that search." }
+  return { ok: true, participant: matches[0], matches }
+}
 
 /**
  * Look up a single recipient by their EXACT email address.
@@ -466,6 +500,15 @@ export type FindRecipientResult =
 export async function findRecipientByEmail(email: string): Promise<FindRecipientResult> {
   const me = await requireSessionId()
   if (!me) return { ok: false, error: "Your session has expired. Please sign in again." }
+
+  try {
+    const meRec = await getDynamicUserById(me)
+    if (meRec && isAdminEmail(meRec.email)) {
+      return await adminPartialSearch(me, email ?? "")
+    }
+  } catch {
+    // fall through to the exact-email lookup
+  }
 
   const normalized = (email ?? "").trim().toLowerCase()
   if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {

@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useIsAdmin } from "@/lib/use-current-user"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -51,7 +52,7 @@ interface ThreadResult {
 type SendResult = { ok: true; message: BankekaMessage } | { ok: false; error: string }
 type DeleteResult = { ok: true } | { ok: false; error: string }
 type FindRecipientResult =
-  | { ok: true; participant: BankekaParticipant }
+  | { ok: true; participant: BankekaParticipant; matches?: BankekaParticipant[] }
   | { ok: false; error: string }
 
 export interface MessengerProps {
@@ -143,6 +144,8 @@ export function Messenger({
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [foundParticipant, setFoundParticipant] = useState<BankekaParticipant | null>(null)
+  const [foundMatches, setFoundMatches] = useState<BankekaParticipant[]>([])
+  const isAdminViewer = useIsAdmin()
   const [supportContact, setSupportContact] = useState<BankekaParticipant | null>(null)
   const scrollEndRef = useRef<HTMLDivElement | null>(null)
 
@@ -205,6 +208,7 @@ export function Messenger({
     setEmailQuery("")
     setSearchError(null)
     setFoundParticipant(null)
+    setFoundMatches([])
     // Opening reads incoming messages → refresh unread counts shortly after.
     setTimeout(() => mutateConversations(), 400)
   }
@@ -225,10 +229,13 @@ export function Messenger({
     setSearching(true)
     setSearchError(null)
     setFoundParticipant(null)
+    setFoundMatches([])
     try {
       const res = await findByEmail(email)
-      if (res.ok) setFoundParticipant(res.participant)
-      else setSearchError(res.error)
+      if (res.ok) {
+        if (res.matches && res.matches.length > 0) setFoundMatches(res.matches)
+        else setFoundParticipant(res.participant)
+      } else setSearchError(res.error)
     } catch {
       setSearchError("Could not complete the search. Please try again.")
     } finally {
@@ -429,16 +436,20 @@ export function Messenger({
                     <div className="relative flex-1">
                       <Mail className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                       <Input
-                        type="email"
-                        inputMode="email"
+                        type={isAdminViewer ? "search" : "email"}
+                        inputMode={isAdminViewer ? "search" : "email"}
                         autoComplete="off"
+                        autoCorrect="off"
                         autoCapitalize="none"
                         spellCheck={false}
+                        enterKeyHint="search"
+                        data-1p-ignore
+                        data-lpignore="true"
                         value={emailQuery}
                         onChange={(e) => setEmailQuery(e.target.value)}
-                        placeholder="name@example.com"
+                        placeholder={isAdminViewer ? "Name, company or email…" : "name@example.com"}
                         className="h-10 pl-8 text-base md:text-sm"
-                        aria-label="Recipient email address"
+                        aria-label={isAdminViewer ? "Search client accounts" : "Recipient email address"}
                       />
                     </div>
                     <Button type="submit" disabled={searching || !emailQuery.trim()} className="h-10 shrink-0">
@@ -472,9 +483,36 @@ export function Messenger({
                   </button>
                 )}
 
+                {foundMatches.length > 0 && (
+                  <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto">
+                    <p className="text-[11px] text-muted-foreground">
+                      {foundMatches.length} {foundMatches.length === 1 ? "account" : "accounts"} found
+                    </p>
+                    {foundMatches.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => openThread(p)}
+                        className="flex min-h-11 w-full items-center gap-3 rounded-lg border border-border px-3 py-2 text-left transition-colors hover:bg-secondary"
+                      >
+                        <Avatar className="h-9 w-9">
+                          <AvatarFallback className="bg-secondary text-xs text-foreground">{p.initials}</AvatarFallback>
+                        </Avatar>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-foreground">{p.name}</p>
+                          <p className="truncate text-xs text-muted-foreground">{p.company}</p>
+                        </div>
+                        <Send className="h-4 w-4 shrink-0 text-primary" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                   <Lock className="h-3 w-3" />
-                  We never reveal other members&apos; names or account details.
+                  {isAdminViewer
+                    ? "Administrator search — type a few letters of a name, company or email."
+                    : "We never reveal other members\u2019 names or account details."}
                 </p>
               </DialogContent>
             </Dialog>
