@@ -13,6 +13,8 @@ import { useInstrumentRequests, type Instrument } from "@/lib/instrument-request
 import { generateInstrumentCertificate } from "@/lib/certificate-pdf"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { riskScoreTone } from "@/lib/instrument-audit"
+import { useCurrentUser } from "@/lib/use-current-user"
+import { DEMO_USER_ID } from "@/lib/users"
 
 const typeColors: Record<string, string> = {
   SBLC: "bg-blue-500/10 text-blue-400 border-blue-500/20",
@@ -38,6 +40,7 @@ export default function InstrumentDetailPage() {
   const router = useRouter()
   const { instruments, hydrated } = useInstrumentRequests()
   const { show } = usePdfViewer()
+  const isDemo = useCurrentUser().id === DEMO_USER_ID
 
   const id = decodeURIComponent(params.id)
   const instrument = useMemo(() => instruments.find((i) => i.id === id), [instruments, id])
@@ -146,10 +149,12 @@ export default function InstrumentDetailPage() {
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
-        <Button variant="outline" size="sm" onClick={() => downloadCertificate(instrument)}>
-          <Download className="mr-2 h-4 w-4" />
-          Certificate
-        </Button>
+        {!isDemo && (
+          <Button variant="outline" size="sm" onClick={() => downloadCertificate(instrument)}>
+            <Download className="mr-2 h-4 w-4" />
+            Certificate
+          </Button>
+        )}
       </div>
 
       <Card className="bg-card border-border">
@@ -323,6 +328,12 @@ export default function InstrumentDetailPage() {
             </div>
           )}
 
+          {isDemo ? (
+            <p className="flex items-start gap-2 rounded-lg border border-border bg-secondary/40 p-3 text-sm leading-relaxed text-muted-foreground">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+              For security, instrument certificates and hard copies are not available on the demo account.
+            </p>
+          ) : (
           <div className="flex flex-col gap-2 sm:flex-row">
             <Button className="w-full" onClick={() => downloadCertificate(instrument)}>
               <Download className="mr-2 h-4 w-4" />
@@ -335,6 +346,7 @@ export default function InstrumentDetailPage() {
               </Link>
             </Button>
           </div>
+          )}
         </CardContent>
       </Card>
     </div>

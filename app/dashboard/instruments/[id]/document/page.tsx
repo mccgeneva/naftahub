@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { useInstrumentRequests } from "@/lib/instrument-requests-store"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { usePdfViewer } from "@/lib/pdf-viewer"
+import { DEMO_USER_ID } from "@/lib/users"
 import { buildInstrumentDocument, generateInstrumentDocumentPdf } from "@/lib/instrument-document"
 
 export default function InstrumentDocumentPage() {
@@ -28,6 +29,30 @@ export default function InstrumentDocumentPage() {
       country: user.passportMeta?.country,
     })
   }, [instrument, user])
+
+  if (user.id === DEMO_USER_ID) {
+    return (
+      <div className="mx-auto max-w-2xl">
+        <Button variant="ghost" size="sm" asChild className="mb-4">
+          <Link href="/dashboard/instruments" replace>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Instruments
+          </Link>
+        </Button>
+        <Card className="bg-card border-border">
+          <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
+              <ShieldCheck className="h-6 w-6 text-muted-foreground" />
+            </div>
+            <p className="text-base font-semibold text-foreground">Not available on the demo account</p>
+            <p className="max-w-sm text-pretty text-sm leading-relaxed text-muted-foreground">
+              For security, instrument certificates and hard copies cannot be viewed or downloaded on the demo account.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   if (hydrated && !instrument) {
     return (
