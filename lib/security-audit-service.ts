@@ -11,6 +11,7 @@
 // Route Handlers are exempt from that check.
 // ---------------------------------------------------------------------------
 
+import { getLastSeen } from "@/lib/last-seen-db"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { geolocateIp, type IpGeo } from "@/lib/ip-geo"
 import { getIdentityStatus, getLastLoginSelfie, getAdminIdentityDetails, type IdentityStatus } from "@/lib/biometric-db"
@@ -126,6 +127,8 @@ export interface UserAuditReport {
   /** ADMIN-ONLY: session-gated proxy URL for the retained passport image. */
   passportImageUrl: string | null
   selfie: { url: string | null; at: string | null }
+  /** Last time the client's own app was open (not admin maintenance). */
+  lastActive: { at: string; ip: string | null; userAgent: string | null } | null
   devices: DeviceRow[]
   /** Geolocated distinct IPs (best-effort, capped). */
   locations: IpGeo[]
@@ -165,6 +168,7 @@ function profileCountry(profile: SerializableUserProfile | null | undefined): st
 
 /** Full audit report for one account. */
 export async function buildUserAudit(userId: string, opts?: { category?: string }): Promise<UserAuditReport> {
+  const lastActivePromise = getLastSeen(userId)
   const [stats, identity, adminIdentity, selfie, devices, events, documents, user] = await Promise.all([
     getActorStats(userId),
     getIdentityStatus(userId),
@@ -225,6 +229,7 @@ export async function buildUserAudit(userId: string, opts?: { category?: string 
     passportNo: adminIdentity.passportNo,
     passportImageUrl: passportUrl(adminIdentity.passportImagePath),
     selfie: { url: selfieUrl(selfie?.url ?? null), at: selfie?.at ?? null },
+    lastActive: await lastActivePromise,
     devices,
     locations,
     events,

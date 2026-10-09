@@ -507,6 +507,19 @@ export function SecurityAudit() {
                   <CardTitle className="text-base font-semibold text-balance">{report.account}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-5">
+                  <div className="flex flex-col gap-1 rounded-lg border border-border bg-secondary/40 p-3">
+                    <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Last active in the app
+                    </span>
+                    <span className="text-sm font-semibold text-foreground">
+                      {report.lastActive ? fmtWhen(report.lastActive.at) : "Not recorded yet"}
+                    </span>
+                    <span className="text-xs leading-relaxed text-muted-foreground text-pretty">
+                      {report.lastActive?.ip ? `IP ${report.lastActive.ip} · ` : ""}
+                      Updates whenever the client opens the app, even with Stay signed in. Admin maintenance
+                      sessions are not counted.
+                    </span>
+                  </div>
                   <div className="flex flex-col gap-5 sm:flex-row">
                     <div className="flex shrink-0 gap-3">
                       <div className="flex flex-col items-center gap-2">
