@@ -24,6 +24,13 @@ import { CARD_FEES } from "@/lib/card-fees"
 import { GATEWAY_ACCOUNT_FEE, GATEWAY_TERMINATION_FEE } from "@/lib/gateway-catalog"
 import { loanArrangementFee, loanMonthlyInterest, getLoanProduct, type FacilityType } from "@/lib/loan-products"
 import { yieldCancellationPenalty } from "@/lib/ppp-yield"
+import {
+  TRADING_FUND_EARLY_EXIT_PENALTY_RATE,
+  TRADING_FUND_EXIT_COMMISSION,
+  TRADING_FUND_MONTHLY_ROI,
+  TRADING_FUND_ROI_LOCK_MONTHS,
+  TRADING_FUND_TERM_MONTHS,
+} from "@/lib/trading-fund"
 
 type Client = { id: string; fullName: string; company: string; email: string }
 type Context = {
@@ -48,22 +55,25 @@ type ServiceId =
   | "payment"
   | "loan"
   | "yield"
+  | "hedge"
   | "card"
   | "gateway"
 
-const SERVICES: { id: ServiceId; label: string }[] = [
-  { id: "receive", label: "Receive a bank instrument (SWIFT MT760 / BG / SBLC)" },
-  { id: "acquire", label: "Acquire from the marketplace (assign / lease / purchase)" },
-  { id: "monetize", label: "Monetize a bank instrument" },
-  { id: "leverage", label: "Leverage line" },
-  { id: "upgrade", label: "Instrument upgrade / transformation" },
-  { id: "exit", label: "Delete / settle out an instrument" },
-  { id: "payment", label: "Payments (outgoing / incoming / internal)" },
-  { id: "loan", label: "Project funding loan" },
-  { id: "yield", label: "Yield / PPP investment (early exit)" },
-  { id: "card", label: "Card issuance" },
-  { id: "gateway", label: "Payment gateway bank account" },
+const SERVICES: { id: ServiceId; label: string; short: string; group: string }[] = [
+  { id: "receive", label: "Receive a bank instrument or cash (SWIFT MT760 / MT103)", short: "Receive instrument / cash", group: "Bank instruments" },
+  { id: "acquire", label: "Acquire from the marketplace (assign / lease / purchase)", short: "Acquire (assign / lease / buy)", group: "Bank instruments" },
+  { id: "upgrade", label: "Instrument upgrade / transformation", short: "Upgrade instrument", group: "Bank instruments" },
+  { id: "exit", label: "Delete / settle out an instrument", short: "Delete instrument", group: "Bank instruments" },
+  { id: "monetize", label: "Monetize a bank instrument", short: "Monetize", group: "Financing" },
+  { id: "leverage", label: "Leverage line", short: "Leverage line", group: "Financing" },
+  { id: "loan", label: "Project funding loan", short: "Project funding loan", group: "Financing" },
+  { id: "yield", label: "Yield / PPP investment", short: "Yield / PPP", group: "Investments" },
+  { id: "hedge", label: "Treuhand AG Hedge Fund investment", short: "Hedge fund (Treuhand)", group: "Investments" },
+  { id: "payment", label: "Payments (outgoing / incoming / internal)", short: "Payments", group: "Banking" },
+  { id: "card", label: "Card issuance", short: "Card issuance", group: "Banking" },
+  { id: "gateway", label: "Payment gateway bank account", short: "Gateway bank account", group: "Banking" },
 ]
+const SERVICE_GROUPS = ["Bank instruments", "Financing", "Investments", "Banking"]
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF"]
 
@@ -223,6 +233,18 @@ export function CostForecaster() {
         lines.push({ label: "Early-exit cost (standard 2% of principal)", amount: yieldCancellationPenalty(a), kind: "upfront", note: "Only if the client resigns early — administrator negotiates the final figure" })
         lines.push({ label: "Capital committed (cash-funded only)", amount: a, kind: "info", note: "Instrument-funded programs move no cash" })
         break
+      case "hedge": {
+        const m = Math.min(TRADING_FUND_TERM_MONTHS, Math.max(1, Math.round(num(months)) || TRADING_FUND_TERM_MONTHS))
+        const remaining = (TRADING_FUND_TERM_MONTHS - m) / TRADING_FUND_TERM_MONTHS
+        lines.push({ label: "Capital invested (debited from the master account)", amount: a, kind: "upfront", note: "Must be the client's own funds — no subscription fee" })
+        lines.push({ label: `Monthly ROI (${pct(TRADING_FUND_MONTHLY_ROI, 0)} of capital)`, amount: a * TRADING_FUND_MONTHLY_ROI, kind: "credit", note: `If leverage-funded, each ROI is locked ${TRADING_FUND_ROI_LOCK_MONTHS} months` })
+        lines.push({ label: `ROI over ${m} month${m === 1 ? "" : "s"}`, amount: a * TRADING_FUND_MONTHLY_ROI * m, kind: "credit" })
+        lines.push({ label: `Exit commission (${pct(TRADING_FUND_EXIT_COMMISSION, 0)} of capital returned)`, amount: a * TRADING_FUND_EXIT_COMMISSION, kind: "recurring", note: "Charged on every exit, at term end or early" })
+        if (remaining > 0) {
+          lines.push({ label: `Early-exit penalty if leaving after ${m} month${m === 1 ? "" : "s"} (suggested)`, amount: a * TRADING_FUND_EARLY_EXIT_PENALTY_RATE * remaining, kind: "recurring", note: `${pct(TRADING_FUND_EARLY_EXIT_PENALTY_RATE, 0)} pro-rated on the remaining term — administrator sets the final figure` })
+        }
+        break
+      }
       case "card":
         withCashback(`${cardFormat === "virtual" ? "Virtual" : "Physical"} card issuance fee (one-time)`, CARD_FEES[cardFormat], "platform")
         break
@@ -315,19 +337,32 @@ export function CostForecaster() {
           </div>
 
           <div className="flex flex-col gap-2">
-            <Label>Service</Label>
-            <Select value={service} onValueChange={(v) => setService(v as ServiceId)}>
-              <SelectTrigger className="h-11 w-full min-w-0 text-base [&>span]:min-w-0 [&>span]:truncate">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SERVICES.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {s.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label>Service — tap one to forecast</Label>
+            {SERVICE_GROUPS.map((group) => (
+              <div key={group} className="flex flex-col gap-2">
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{group}</span>
+                <div className="grid grid-cols-2 gap-2">
+                  {SERVICES.filter((s) => s.group === group).map((s) => {
+                    const active = s.id === service
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => setService(s.id)}
+                        aria-pressed={active}
+                        className={`min-h-11 rounded-md border px-3 py-2 text-left text-sm leading-snug transition-colors ${
+                          active
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-border bg-card text-foreground hover:bg-muted"
+                        }`}
+                      >
+                        {s.short}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
 
           {service !== "card" && service !== "gateway" && (
@@ -395,6 +430,9 @@ export function CostForecaster() {
               />
               <NumberField id="cf-months" label="Holding period (months)" value={months} onChange={setMonths} />
             </>
+          )}
+          {service === "hedge" && (
+            <NumberField id="cf-hedge-months" label={`Months invested before exit (1–${TRADING_FUND_TERM_MONTHS})`} value={months} onChange={setMonths} />
           )}
           {service === "payment" && (
             <Choice
@@ -510,7 +548,8 @@ function amountLabel(s: ServiceId): string {
     case "loan":
       return "Facility amount"
     case "yield":
-      return "Principal invested"
+    case "hedge":
+      return "Capital invested"
     default:
       return "Face value"
   }
