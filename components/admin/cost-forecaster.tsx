@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Calculator, Loader2, Send, ShieldAlert } from "lucide-react"
+import { Calculator, Handshake, Loader2, Send, ShieldAlert } from "lucide-react"
+import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -259,7 +260,26 @@ export function CostForecaster() {
     return { lines, upfront, feeCcy }
   }, [service, amount, currency, ratio, funding, ltv, months, acquire, payDir, receiveKind, receivedCcy, loanType, collateral, cardFormat, ctx, tiers]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const upfrontEur = convertCurrency(forecast.upfront, forecast.feeCcy, "EUR")
+  const [negotiating, setNegotiating] = useState(false)
+  const [overrides, setOverrides] = useState<Record<number, string>>({})
+  const [dealNote, setDealNote] = useState("")
+
+  useEffect(() => {
+    setOverrides({})
+  }, [forecast])
+
+  const isNegotiable = (l: Line) => l.kind === "upfront" || l.kind === "recurring"
+  const effective = forecast.lines.map((l, i) => {
+    const raw = overrides[i]
+    const v = raw !== undefined && raw !== "" ? Number(raw) : NaN
+    const negotiated = isNegotiable(l) && Number.isFinite(v) && Math.abs(v - l.amount) > 0.004
+    return { ...l, standard: l.amount, amount: negotiated ? Math.max(0, v) : l.amount, negotiated }
+  })
+  const anyNegotiated = effective.some((l) => l.negotiated)
+  const standardUpfront = forecast.upfront
+  const upfront = effective.filter((l) => l.kind === "upfront").reduce((s, l) => s + l.amount, 0)
+
+  const upfrontEur = convertCurrency(upfront, forecast.feeCcy, "EUR")
   const spendableEur = ctx ? ctx.availableEur + ctx.overdraftRemainingEur : 0
   const affordable = ctx ? upfrontEur <= spendableEur + 0.01 : null
 
@@ -269,11 +289,22 @@ export function CostForecaster() {
     if (!clientId) return
     setSending(true)
     const body = [
-      `Indicative costs for: ${serviceLabel}.`,
+      anyNegotiated ? `Special pricing agreed for you — ${serviceLabel}.` : `Indicative costs for: ${serviceLabel}.`,
       `Amount: ${fmt(num(amount), currency)}.`,
-      ...forecast.lines.filter((l) => l.kind !== "info" || l.amount > 0).map((l) => `• ${l.label.trim()}: ${fmt(l.amount, forecast.feeCcy)}${l.note ? ` (${l.note})` : ""}`),
-      `Total upfront: ${fmt(forecast.upfront, forecast.feeCcy)}.`,
-      "This forecast is indicative; final figures are confirmed when you apply.",
+      ...effective
+        .filter((l) => l.kind !== "info" || l.amount > 0)
+        .map((l) =>
+          l.negotiated
+            ? `• ${l.label.trim()}: ${fmt(l.amount, forecast.feeCcy)} (special price — standard ${fmt(l.standard, forecast.feeCcy)})`
+            : `• ${l.label.trim()}: ${fmt(l.amount, forecast.feeCcy)}${l.note ? ` (${l.note})` : ""}`,
+        ),
+      anyNegotiated && Math.abs(standardUpfront - upfront) > 0.004
+        ? `Total upfront: ${fmt(upfront, forecast.feeCcy)} (standard ${fmt(standardUpfront, forecast.feeCcy)} — you save ${fmt(standardUpfront - upfront, forecast.feeCcy)}).`
+        : `Total upfront: ${fmt(upfront, forecast.feeCcy)}.`,
+      ...(dealNote.trim() ? [`Note from the administrator: ${dealNote.trim()}`] : []),
+      anyNegotiated
+        ? "These prices were set by the administrator for your account. Mention this forecast when you apply."
+        : "This forecast is indicative; final figures are confirmed when you apply.",
     ].join("\n")
     try {
       const r = await call<{ ok: boolean; error?: string }>({ op: "send", userId: clientId, text: body })
@@ -485,31 +516,115 @@ export function CostForecaster() {
           <CardDescription className="text-pretty">{serviceLabel}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          <Button
+            type="button"
+            variant={negotiating ? "default" : "outline"}
+            onClick={() => setNegotiating((v) => !v)}
+            className="h-11 w-full"
+            aria-pressed={negotiating}
+          >
+            <Handshake className="mr-2 h-4 w-4" aria-hidden />
+            {negotiating ? "Done negotiating" : "Negotiate prices for this client"}
+          </Button>
+          {negotiating && (
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Type the agreed price under any fee. Leave a field empty to keep the standard price. The client will see
+              the special price next to the standard one.
+            </p>
+          )}
+
           <ul className="flex flex-col divide-y divide-border">
-            {forecast.lines.map((l, i) => (
-              <li key={i} className="flex flex-col gap-0.5 py-2.5">
+            {effective.map((l, i) => (
+              <li key={i} className="flex flex-col gap-1 py-2.5">
                 <div className="flex items-start justify-between gap-3">
                   <span className="min-w-0 text-sm leading-relaxed">{l.label}</span>
-                  <span
-                    className={`shrink-0 font-mono text-sm tabular-nums ${
-                      l.kind === "credit" ? "text-emerald-600 dark:text-emerald-400" : l.kind === "info" ? "text-muted-foreground" : "font-semibold"
-                    }`}
-                  >
-                    {l.kind === "credit" ? "+" : ""}
-                    {fmt(l.amount, forecast.feeCcy)}
+                  <span className="flex shrink-0 flex-col items-end">
+                    {l.negotiated && (
+                      <span className="font-mono text-xs tabular-nums text-muted-foreground line-through">
+                        {fmt(l.standard, forecast.feeCcy)}
+                      </span>
+                    )}
+                    <span
+                      className={`font-mono text-sm tabular-nums ${
+                        l.kind === "credit"
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : l.kind === "info"
+                            ? "text-muted-foreground"
+                            : l.negotiated
+                              ? "font-semibold text-primary"
+                              : "font-semibold"
+                      }`}
+                    >
+                      {l.kind === "credit" ? "+" : ""}
+                      {fmt(l.amount, forecast.feeCcy)}
+                    </span>
                   </span>
                 </div>
                 {l.note && <span className="text-xs leading-relaxed text-muted-foreground">{l.note}</span>}
+                {negotiating && isNegotiable(l) && (
+                  <div className="flex items-center gap-2">
+                    <MoneyInput
+                      aria-label={`Agreed price for ${l.label.trim()}`}
+                      placeholder={`Agreed price (standard ${fmt(l.standard, forecast.feeCcy)})`}
+                      value={overrides[i] ?? ""}
+                      onValueChange={(v) => setOverrides((o) => ({ ...o, [i]: v }))}
+                      className="h-11 min-w-0 flex-1 text-base"
+                    />
+                    {overrides[i] && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-11 shrink-0 px-3"
+                        onClick={() =>
+                          setOverrides((o) => {
+                            const n = { ...o }
+                            delete n[i]
+                            return n
+                          })
+                        }
+                      >
+                        Reset
+                      </Button>
+                    )}
+                  </div>
+                )}
               </li>
             ))}
           </ul>
 
-          <div className="flex items-center justify-between rounded-lg bg-primary/10 p-3">
-            <span className="text-sm font-medium">Total upfront cost</span>
-            <span className="font-mono text-base font-semibold tabular-nums">{fmt(forecast.upfront, forecast.feeCcy)}</span>
-          </div>
+          {negotiating && (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="cf-deal-note">Note to the client (optional)</Label>
+              <Textarea
+                id="cf-deal-note"
+                value={dealNote}
+                onChange={(e) => setDealNote(e.target.value)}
+                placeholder="e.g. Special conditions valid until the end of the month"
+                className="min-h-20 text-base"
+              />
+            </div>
+          )}
 
-          {ctx && affordable !== null && forecast.upfront > 0 && (
+          <div className="flex items-center justify-between gap-3 rounded-lg bg-primary/10 p-3">
+            <span className="text-sm font-medium">
+              {anyNegotiated ? "Agreed upfront cost" : "Total upfront cost"}
+            </span>
+            <span className="flex flex-col items-end">
+              {anyNegotiated && Math.abs(standardUpfront - upfront) > 0.004 && (
+                <span className="font-mono text-xs tabular-nums text-muted-foreground line-through">
+                  {fmt(standardUpfront, forecast.feeCcy)}
+                </span>
+              )}
+              <span className="font-mono text-base font-semibold tabular-nums">{fmt(upfront, forecast.feeCcy)}</span>
+            </span>
+          </div>
+          {anyNegotiated && (
+            <Badge variant="secondary" className="w-fit">
+              Special price for this client
+            </Badge>
+          )}
+
+          {ctx && affordable !== null && upfront > 0 && (
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <Badge variant={affordable ? "default" : "destructive"}>{affordable ? "Client can cover it now" : "Client cannot cover it"}</Badge>
               <span className="text-muted-foreground">
@@ -527,7 +642,7 @@ export function CostForecaster() {
 
           <Button onClick={sendToClient} disabled={!clientId || sending} className="h-11 w-full">
             {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <Send className="mr-2 h-4 w-4" aria-hidden />}
-            {clientId ? "Send this forecast to the client" : "Choose a client to send"}
+            {!clientId ? "Choose a client to send" : anyNegotiated ? "Send special-price forecast to the client" : "Send this forecast to the client"}
           </Button>
         </CardContent>
       </Card>
