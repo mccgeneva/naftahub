@@ -2466,7 +2466,6 @@ export default function AdminPage() {
     {
       title: "Approvals & Requests",
       items: [
-        { id: "costforecast", label: "Cost & Fee Forecaster", description: "Simulate what any service will cost a specific client — instruments, monetization, leverage, loans, payments — and send the forecast to them.", icon: HandCoins, count: 0 },
         { id: "approvals", label: "All Pending Approvals", description: "Cross-client queue for every request type, with bulk actions.", icon: ClipboardList, count: dbPendingTotal },
         { id: "payments", label: "Outgoing Payments", description: "Review and authorize pending wire transfers.", icon: ArrowUpRight, count: pending.length },
         { id: "instruments", label: "Bank Instruments", description: "Approve SBLC, BG and MTN issuance requests, and review customer upgrade requests.", icon: FileText, count: pendingInstruments.length + instrumentUpgradeRequests },
@@ -2501,6 +2500,7 @@ export default function AdminPage() {
       title: "Administration",
       items: [
         { id: "aml", label: "AML Compliance", description: "Upload auditor and compliance-office letters about a customer, and track the actions and measures to undertake on that account.", icon: Scale, count: openAmlCaseCount },
+        { id: "costforecast", label: "Cost & Fee Forecaster", description: "Simulate what any service will cost a specific client — instruments, monetization, leverage, loans, payments — and send the forecast to them.", icon: HandCoins, count: 0 },
         { id: "legaldesk", label: "Legal Desk", description: "Write legal notices about a client, instrument or transaction and send them as an MT799 by email from lawfirm@juristreuhand.com.", icon: Scale, count: 0 },
         { id: "verbiage", label: "Verbiage Desk", description: "Customer-approved bank instrument verbiage: transmit to Barclays for execution and record the issued instrument.", icon: ScrollText, count: verbiageQueueCount },
         { id: "ppi", label: "PPI Insurance", description: "Price full Payment Protection Insurance for a customer's exposure, negotiate with Lloyd's of London, approve and charge.", icon: Umbrella, count: 0 },
