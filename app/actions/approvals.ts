@@ -3989,7 +3989,7 @@ export async function reconcileTradingFundTermination(
     await notifyPositionChange(
       updated,
       "Treuhand termination reconciled",
-      `Your Treuhand AG Hedge Fund position "${updated.title}" has been terminated and reconciled by MCC Capital${input.note?.trim() ? ` — ${input.note.trim()}` : ""}. ${formatMoney(capital, currency)} capital was returned, less ${feeLine}. Net credited to your Master Account: ${formatMoney(net, currency)}.`,
+      `Your Treuhand AG Hedge Fund position "${updated.title}" has been terminated and reconciled by MCC Capital${input.note?.trim() ? ` ��� ${input.note.trim()}` : ""}. ${formatMoney(capital, currency)} capital was returned, less ${feeLine}. Net credited to your Master Account: ${formatMoney(net, currency)}.`,
     )
     await logPositionChange(
       updated,
@@ -5421,8 +5421,11 @@ export async function adminReturnPaymentFromReceiver(
   reasonCode: string,
   reasonLabel: string,
   reasonNote?: string,
+  opts?: { recall?: boolean; chargeFees?: boolean },
 ): Promise<DecideResult> {
   if (!(await adminOk(passcode))) return { ok: false, error: "Administrator authorization failed." }
+  const isRecall = opts?.recall === true
+  const chargeFees = opts?.chargeFees ?? !isRecall
   try {
     const existing = await getApprovalById(id)
     if (!existing) return { ok: false, error: "Payment not found." }
@@ -5460,8 +5463,9 @@ export async function adminReturnPaymentFromReceiver(
     const PAYMENT_RETURN_TXN_FEE_RATE = 0.02
     const PAYMENT_RETURN_FINE_RATE = 0.005
     const feeBase = refundAmount
-    const txnFee = Math.round(feeBase * PAYMENT_RETURN_TXN_FEE_RATE * 100) / 100
-    const returnFine = Math.round(feeBase * PAYMENT_RETURN_FINE_RATE * 100) / 100
+    const txnFee = chargeFees ? Math.round(feeBase * PAYMENT_RETURN_TXN_FEE_RATE * 100) / 100 : 0
+    const returnFine = chargeFees ? Math.round(feeBase * PAYMENT_RETURN_FINE_RATE * 100) / 100 : 0
+    const noteSuffix = reasonNote ? `: ${reasonNote}` : ""
 
     // Resolve the SOURCE-account grouping the original outgoing debit used, so the
     // return entries (credit + fees) land under the SAME bank account statement the
@@ -5497,8 +5501,10 @@ export async function adminReturnPaymentFromReceiver(
         account: sourceAccount,
         receivedAccount: sourceReceivedAccount,
         reference: existing.id,
-        comment: `Funds returned by the beneficiary bank (${reasonCode} — ${reasonLabel})${reasonNote ? `: ${reasonNote}` : ""}. Credited back to your Master Account (${ISSUER_BANK.name}, Geneva).`,
-        category: "Payment Return — Beneficiary Bank",
+        comment: isRecall
+          ? `Payment recalled by the administrator (${reasonLabel})${noteSuffix}. Credited back to your Master Account (${ISSUER_BANK.name}, Geneva).`
+          : `Funds returned by the beneficiary bank (${reasonCode} — ${reasonLabel})${noteSuffix}. Credited back to your Master Account (${ISSUER_BANK.name}, Geneva).`,
+        category: isRecall ? "Payment Recall — Administrator" : "Payment Return — Beneficiary Bank",
       })
     } catch (creditErr) {
       console.log("[v0] payment return credit failed:", (creditErr as Error).message)
@@ -5557,6 +5563,8 @@ export async function adminReturnPaymentFromReceiver(
     record.returnReason = reasonLabel
     if (reasonNote) record.returnReasonNote = reasonNote
     record.returnedAt = returnedAt
+    if (isRecall) record.recalledByAdmin = true
+    else delete record.recalledByAdmin
     // Clear any stale delivery flags — a returned payment is not delivered.
     delete record.deliveredAt
     delete record.deliveredBy
@@ -5569,6 +5577,7 @@ export async function adminReturnPaymentFromReceiver(
       returnReason: reasonLabel,
       returnReasonNote: reasonNote ?? null,
       returnedAt,
+      recalledByAdmin: isRecall,
       returnRefundEntryId: `PAYRET-${existing.id}`,
       returnTxnFee: txnFee,
       returnFine: returnFine,
@@ -5582,8 +5591,10 @@ export async function adminReturnPaymentFromReceiver(
       await insertNotification({
         userId: updated.userId,
         tone: "warning",
-        title: "Payment returned by beneficiary bank",
-        body: `Your payment "${updated.title}" was returned by the beneficiary bank (${reasonLabel}). ${formatMoney(refundAmount, refundCurrency)} was credited back to your Master Account, less a 2% transaction fee (${formatMoney(txnFee, refundCurrency)}) and a 0.50% return fine (${formatMoney(returnFine, refundCurrency)}).`,
+        title: isRecall ? "Payment recalled by the administrator" : "Payment returned by beneficiary bank",
+        body: isRecall
+          ? `Your payment "${updated.title}" was recalled by the administrator (${reasonLabel})${noteSuffix}. ${formatMoney(refundAmount, refundCurrency)} was credited back to your Master Account${chargeFees ? `, less a 2% transaction fee (${formatMoney(txnFee, refundCurrency)}) and a 0.50% return fine (${formatMoney(returnFine, refundCurrency)})` : ""}.`
+          : `Your payment "${updated.title}" was returned by the beneficiary bank (${reasonLabel}). ${formatMoney(refundAmount, refundCurrency)} was credited back to your Master Account${chargeFees ? `, less a 2% transaction fee (${formatMoney(txnFee, refundCurrency)}) and a 0.50% return fine (${formatMoney(returnFine, refundCurrency)})` : ""}.`,
         href: KIND_HREF.payment ?? "/dashboard/payments",
       })
     } catch (err) {
@@ -5593,7 +5604,9 @@ export async function adminReturnPaymentFromReceiver(
     try {
       const target = await resolveAccountProfileById(updated.userId)
       await logActivity({
-        action: `Administrator recorded a beneficiary-bank RETURN on payment "${updated.title}" for ${target.fullName}`,
+        action: isRecall
+          ? `Administrator RECALLED payment "${updated.title}" for ${target.fullName}`
+          : `Administrator recorded a beneficiary-bank RETURN on payment "${updated.title}" for ${target.fullName}`,
         category: "Administration / Approvals",
         user: "Administrator",
         details: {
@@ -5601,7 +5614,9 @@ export async function adminReturnPaymentFromReceiver(
           targetAccount: `${target.fullName} — ${target.email}`,
           summary: updated.summary || updated.title,
           amount: formatMoney(refundAmount, refundCurrency),
-          decision: `Returned by beneficiary bank — ${reasonCode} (${reasonLabel})`,
+          decision: isRecall
+            ? `Recalled by administrator — ${reasonLabel}${chargeFees ? " (return fees charged)" : " (no fees)"}`
+            : `Returned by beneficiary bank — ${reasonCode} (${reasonLabel})`,
           note: reasonNote ?? "(none)",
           refundEntryId: `PAYRET-${updated.id}`,
           transactionFee: formatMoney(txnFee, refundCurrency),

@@ -126,6 +126,16 @@ import { Messenger } from "@/components/bankeka/messenger"
 import type { ProjectFundingRequest, UploadedFundingDoc } from "@/lib/project-funding-store"
 import { usePdfViewer } from "@/lib/pdf-viewer"
 import { PAYMENT_RETURN_REASONS } from "@/lib/payment-return-reasons"
+import { RotateCcw } from "lucide-react"
+
+const PAYMENT_RECALL_REASONS = [
+  { code: "COMPLIANCE", label: "Compliance review" },
+  { code: "FRAUD", label: "Suspected fraud" },
+  { code: "DUPLICATE", label: "Duplicate payment" },
+  { code: "WRONG_BENEFICIARY", label: "Wrong beneficiary details" },
+  { code: "CLIENT_REQUEST", label: "Requested by the client" },
+  { code: "OTHER", label: "Other (see note)" },
+]
 import { buildPaymentReturnMt103 } from "@/lib/payment-return-mt103"
 import { generateSwiftMessagePdf } from "@/lib/swift-message-pdf"
 import { generateInvestmentAgreementPdf } from "@/lib/investment-agreement-pdf"
@@ -649,6 +659,8 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
   const [returnReasonCode, setReturnReasonCode] = useState("")
   const [returnNote, setReturnNote] = useState("")
   const [returnClientName, setReturnClientName] = useState("")
+  const [returnMode, setReturnMode] = useState<"bank" | "recall">("bank")
+  const [recallChargeFees, setRecallChargeFees] = useState(false)
   // Discuss a pending payment with the co-account member who must approve it.
   const [discussTarget, setDiscussTarget] = useState<{ id: string; title: string; initiator: string } | null>(null)
   const [discussMembers, setDiscussMembers] = useState<PaymentApprover[]>([])
@@ -1573,9 +1585,11 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
 
   const confirmReturnPayment = async () => {
     if (!returnTarget) return
-    const reason = PAYMENT_RETURN_REASONS.find((r) => r.code === returnReasonCode)
+    const isRecall = returnMode === "recall"
+    const reasons = isRecall ? PAYMENT_RECALL_REASONS : PAYMENT_RETURN_REASONS
+    const reason = reasons.find((r) => r.code === returnReasonCode)
     if (!reason) {
-      toast.error("Select a return reason.")
+      toast.error(isRecall ? "Select a recall reason." : "Select a return reason.")
       return
     }
     setActing(true)
@@ -1585,10 +1599,20 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
       reason.code,
       reason.label,
       returnNote.trim() || undefined,
+      isRecall ? { recall: true, chargeFees: recallChargeFees } : undefined,
     )
     setActing(false)
     if (!res.ok) {
       toast.error(res.error)
+      return
+    }
+    if (isRecall) {
+      toast.success("Payment recalled. Funds credited back to the client's Master Account.")
+      setReturnTarget(null)
+      setReturnReasonCode("")
+      setReturnNote("")
+      setRecallChargeFees(false)
+      mutate()
       return
     }
     // Generate the MT103 return printout for the admin to keep/forward.
@@ -2771,6 +2795,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                               className="h-8 gap-1 text-orange-600"
                               disabled={acting}
                               onClick={() => {
+                                setReturnMode("bank")
                                 setReturnTarget({ id: req.id, title: req.title })
                                 setReturnClientName(
                                   ((req.payload?.record as { accountHolder?: string } | undefined)?.accountHolder ??
@@ -2783,6 +2808,29 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                               title="The beneficiary bank rejected the credit and returned the funds. Credit them back to the client's Master Account and generate an MT103 return printout."
                             >
                               <Undo2 className="h-3.5 w-3.5" /> Returned by bank
+                            </Button>
+                          )}
+                          {paymentInitiated && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 gap-1 text-destructive"
+                              disabled={acting}
+                              onClick={() => {
+                                setReturnMode("recall")
+                                setRecallChargeFees(false)
+                                setReturnTarget({ id: req.id, title: req.title })
+                                setReturnClientName(
+                                  ((req.payload?.record as { accountHolder?: string } | undefined)?.accountHolder ??
+                                    req.title ??
+                                    "Client") as string,
+                                )
+                                setReturnReasonCode("")
+                                setReturnNote("")
+                              }}
+                              title="Recall this payment on the administrator's own decision and credit the amount back to the client's Master Account."
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" /> Recall payment
                             </Button>
                           )}
                         </>
@@ -3750,10 +3798,25 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
         <DialogContent className="flex max-h-[88dvh] max-w-md flex-col overflow-hidden">
           <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
-              <Undo2 className="h-4 w-4 text-orange-600" /> Returned by beneficiary bank
+              {returnMode === "recall" ? (
+                <>
+                  <RotateCcw className="h-4 w-4 text-destructive" /> Recall payment
+                </>
+              ) : (
+                <>
+                  <Undo2 className="h-4 w-4 text-orange-600" /> Returned by beneficiary bank
+                </>
+              )}
             </DialogTitle>
             <DialogDescription>
-              {returnTarget ? (
+              {returnTarget && returnMode === "recall" ? (
+                <>
+                  Recall <span className="font-medium text-foreground">{returnTarget.title}</span> on your own decision.
+                  The amount sent is credited back to{" "}
+                  <span className="font-medium text-foreground">{returnClientName}</span>&apos;s Master Account and the
+                  client is notified. The original sending fee is not refunded.
+                </>
+              ) : returnTarget ? (
                 <>
                   The beneficiary bank rejected{" "}
                   <span className="font-medium text-foreground">{returnTarget.title}</span> and returned the funds.
@@ -3766,13 +3829,15 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground">Return reason</label>
+              <label className="text-sm font-medium text-foreground">
+                {returnMode === "recall" ? "Recall reason" : "Return reason"}
+              </label>
               <Select value={returnReasonCode} onValueChange={setReturnReasonCode}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select a rejection reason" />
+                  <SelectValue placeholder={returnMode === "recall" ? "Select a recall reason" : "Select a rejection reason"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {PAYMENT_RETURN_REASONS.map((r) => (
+                  {(returnMode === "recall" ? PAYMENT_RECALL_REASONS : PAYMENT_RETURN_REASONS).map((r) => (
                     <SelectItem key={r.code} value={r.code}>
                       {r.label}
                     </SelectItem>
@@ -3785,11 +3850,30 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
               <Textarea
                 value={returnNote}
                 onChange={(e) => setReturnNote(e.target.value)}
-                placeholder="Any extra detail from the beneficiary bank's return advice…"
+                placeholder={
+                  returnMode === "recall"
+                    ? "Shown to the client in their notification…"
+                    : "Any extra detail from the beneficiary bank's return advice…"
+                }
                 rows={3}
-                className="max-h-40 overflow-y-auto"
+                className="max-h-40 overflow-y-auto text-base"
               />
             </div>
+            {returnMode === "recall" && (
+              <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-border p-3">
+                <Checkbox
+                  checked={recallChargeFees}
+                  onCheckedChange={(v) => setRecallChargeFees(v === true)}
+                  className="mt-0.5"
+                />
+                <span className="text-sm leading-relaxed text-foreground">
+                  Charge return fees (2% transaction fee + 0.50% return fine)
+                  <span className="block text-xs text-muted-foreground">
+                    Leave unticked to credit the full amount sent with no extra charge.
+                  </span>
+                </span>
+              </label>
+            )}
           </div>
           <DialogFooter className="shrink-0">
             <Button variant="ghost" disabled={acting} onClick={() => setReturnTarget(null)}>
@@ -3800,8 +3884,14 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
               disabled={acting || !returnReasonCode}
               onClick={confirmReturnPayment}
             >
-              {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Undo2 className="h-4 w-4" />}
-              Return funds &amp; generate MT103
+              {acting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : returnMode === "recall" ? (
+                <RotateCcw className="h-4 w-4" />
+              ) : (
+                <Undo2 className="h-4 w-4" />
+              )}
+              {returnMode === "recall" ? "Recall & credit back" : "Return funds & generate MT103"}
             </Button>
           </DialogFooter>
         </DialogContent>
