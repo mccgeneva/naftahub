@@ -26,7 +26,7 @@ import { type UserProfile } from "@/lib/users"
 import { resolveCurrentSession, resolveAccountProfileById } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
 import { saveTreasuryRecordAdmin, releaseTreasuryDepositForDowngradeAdmin } from "@/app/actions/treasury"
-import { getDynamicUserById, updateDynamicUserProfile } from "@/lib/admin-users-db"
+import { getDynamicUserById, listDynamicUsers, updateDynamicUserProfile } from "@/lib/admin-users-db"
 import { notifyAllAdminsOfClientRequest } from "@/lib/notify-admins"
 import { insertNotification } from "@/lib/notifications-db"
 import {
@@ -200,13 +200,70 @@ export type AdminMembershipResult =
   | { ok: true; requests: AdminMembershipView[] }
   | { ok: false; error: string }
 
+interface TreasuryMembershipInfo {
+  status: string
+  financed: number
+  updatedAt: string | null
+}
+
+async function readTreasuryMembershipInfo(): Promise<Map<string, TreasuryMembershipInfo>> {
+  const map = new Map<string, TreasuryMembershipInfo>()
+  try {
+    const { rows } = await query(
+      `SELECT user_id, status, financed_amount, updated_at FROM treasury_accounts`,
+    )
+    for (const r of rows) {
+      map.set(String(r.user_id), {
+        status: String(r.status ?? "none"),
+        financed: Number(r.financed_amount ?? 0),
+        updatedAt: r.updated_at ? new Date(r.updated_at as string).toISOString() : null,
+      })
+    }
+  } catch {
+    // No treasury table yet — nothing to add.
+  }
+  return map
+}
+
+function explicitTierFromBadge(badge: string | undefined | null): MembershipTierId | null {
+  const v = (badge ?? "").trim().toLowerCase()
+  if (v.includes("avant") || v.includes("institutional")) return "avantgarde"
+  if (v.includes("pro")) return "pro"
+  return null
+}
+
+/**
+ * A membership granted outside the upgrade-request flow — typically through a
+ * Treasury security deposit (often financed with leverage) — has no
+ * membership_upgrades row. Derive it from the account badge + treasury record.
+ */
+function derivedMembership(
+  badge: string | undefined | null,
+  treasury: TreasuryMembershipInfo | undefined,
+): MembershipRecord | null {
+  const treasuryLive = !!treasury && treasury.status !== "none" && treasury.status !== "closed"
+  const isVisitor = (badge ?? "").toLowerCase().includes("visitor")
+  if (isVisitor) return null
+  const tier = explicitTierFromBadge(badge) ?? (treasuryLive ? "pro" : null)
+  if (!tier) return null
+  return {
+    tier,
+    status: "active",
+    depositBasis: treasury && treasury.financed > 0 ? "leverage" : treasuryLive ? "cash" : undefined,
+    requestedAt: treasury?.updatedAt ?? undefined,
+    note: treasuryLive ? "Membership through Treasury security deposit" : "Membership set on the account",
+  }
+}
+
 async function listAllForAdmin(): Promise<AdminMembershipView[]> {
   await ensureTable()
   const { rows } = await query(`SELECT * FROM membership_upgrades ORDER BY requested_at DESC`)
   const views: AdminMembershipView[] = []
+  const seen = new Set<string>()
   for (const row of rows) {
     const rec = rowToRecord(row)
     const profile = await resolveAccountProfileById(row.user_id as string)
+    seen.add(row.user_id as string)
     views.push({
       ...rec,
       userId: row.user_id as string,
@@ -215,7 +272,45 @@ async function listAllForAdmin(): Promise<AdminMembershipView[]> {
       email: profile.email,
     })
   }
+
+  try {
+    const [users, treasury] = await Promise.all([listDynamicUsers(), readTreasuryMembershipInfo()])
+    for (const u of users) {
+      if (seen.has(u.id)) continue
+      const st = String(u.status ?? "").toLowerCase()
+      if (st === "rejected" || st === "pending" || st === "suspended" || st === "disabled") continue
+      const rec = derivedMembership(u.profile?.accountBadge, treasury.get(u.id))
+      if (!rec) continue
+      views.push({
+        ...rec,
+        userId: u.id,
+        fullName: u.profile?.fullName ?? u.email,
+        company: u.profile?.company ?? "",
+        email: u.email,
+      })
+    }
+  } catch (err) {
+    console.log("[v0] listing treasury memberships failed:", (err as Error).message)
+  }
   return views
+}
+
+/** Make sure a membership row exists so a badge/treasury-derived member can be downgraded. */
+async function ensureRecordForAccount(userId: string): Promise<MembershipRecord | null> {
+  const existing = await readRecord(userId)
+  if (existing) return existing
+  const dyn = await getDynamicUserById(userId)
+  if (!dyn) return null
+  const treasury = (await readTreasuryMembershipInfo()).get(userId)
+  const rec = derivedMembership(dyn.profile?.accountBadge, treasury)
+  if (!rec) return null
+  await query(
+    `INSERT INTO membership_upgrades (user_id, tier, status, deposit_basis, requested_at, validated_at, note, updated_at)
+     VALUES ($1, $2, 'active', $3, now(), now(), $4, now())
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId, rec.tier, rec.depositBasis ?? null, rec.note ?? null],
+  )
+  return readRecord(userId)
 }
 
 /** Admin: read every client's membership upgrade for the review queue. */
@@ -364,7 +459,7 @@ export async function changeMembershipTierAdmin(
     return { ok: false, error: (err as Error).message }
   }
   try {
-    const rec = await readRecord(userId)
+    const rec = await ensureRecordForAccount(userId)
     if (!rec || rec.status !== "active") {
       return { ok: false, error: "Only an active membership can be downgraded." }
     }
