@@ -156,6 +156,8 @@ export function SourceOfFundsManager() {
   const [uploadKind, setUploadKind] = useState<DocKind>("mt103")
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const kycInputRef = useRef<HTMLInputElement>(null)
+  const [readingKyc, setReadingKyc] = useState(false)
 
   const [decisionNote, setDecisionNote] = useState("")
   const [deciding, setDeciding] = useState<SofStatus | null>(null)
@@ -256,6 +258,98 @@ export function SourceOfFundsManager() {
     }
   }
 
+  const readSenderKyc = async (file: File) => {
+    setReadingKyc(true)
+    try {
+      const fd = new FormData()
+      fd.append("file", file)
+      fd.append("passcode", ADMIN_PASSCODE)
+      const res = await fetch("/api/admin/source-of-funds/extract-kyc", {
+        method: "POST",
+        body: fd,
+        signal: AbortSignal.timeout(60000),
+      })
+      const data = (await res.json()) as {
+        ok?: boolean
+        error?: string
+        data?: {
+          fullName?: string
+          companyName?: string
+          country?: string
+          bankName?: string
+          bic?: string
+          iban?: string
+        }
+      }
+      if (!data.ok || !data.data) {
+        toast.message(data.error ?? "Couldn't read the document — enter the sender details by hand.")
+        return
+      }
+      const x = data.data
+      const name = (x.companyName || x.fullName || "").trim()
+      const bank = [x.bankName, x.bic].filter((v) => v && v.trim()).join(" · ")
+      const filled: string[] = []
+      setDraft((d) => {
+        if (!d) return d
+        const next = { ...d }
+        if (name && !d.senderName) {
+          next.senderName = name
+          filled.push("name")
+        }
+        if (x.country && !d.senderCountry) {
+          next.senderCountry = x.country.trim()
+          filled.push("country")
+        }
+        if (bank && !d.senderBank) {
+          next.senderBank = bank
+          filled.push("bank")
+        }
+        if (x.iban && !d.senderAccount) {
+          next.senderAccount = x.iban.trim()
+          filled.push("account")
+        }
+        return next
+      })
+      toast.success(
+        filled.length > 0
+          ? `Sender ${filled.join(", ")} filled from the document. Check before saving.`
+          : "Document read — the sender fields were already filled in.",
+      )
+    } catch {
+      toast.message("Couldn't read the document — enter the sender details by hand.")
+    } finally {
+      setReadingKyc(false)
+    }
+  }
+
+  const uploadKycAndFill = async (list: FileList | null) => {
+    const file = list?.[0]
+    if (!file || !draft) return
+    setUploading(true)
+    try {
+      const blob = await upload(`source-of-funds/${Date.now()}-${file.name}`, file, {
+        access: "public",
+        handleUploadUrl: "/api/admin/source-of-funds/blob-upload",
+        clientPayload: JSON.stringify({ pin: ADMIN_PASSCODE }),
+      })
+      const doc: SofDocument = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        kind: "sender_passport",
+        name: file.name,
+        pathname: blob.pathname,
+        contentType: file.type || "application/octet-stream",
+        uploadedAt: new Date().toISOString(),
+      }
+      setDraft((d) => (d ? { ...d, documents: [...d.documents, doc] } : d))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed.")
+    } finally {
+      setUploading(false)
+      if (kycInputRef.current) kycInputRef.current.value = ""
+    }
+    await readSenderKyc(file)
+  }
+
   const handleFiles = async (list: FileList | null) => {
     if (!list || list.length === 0 || !draft) return
     setUploading(true)
@@ -276,6 +370,9 @@ export function SourceOfFundsManager() {
           uploadedAt: new Date().toISOString(),
         })
         if (uploadKind === "mt103") void readMt103(file)
+        if (uploadKind === "sender_passport" || uploadKind === "sender_address" || uploadKind === "sender_company") {
+          void readSenderKyc(file)
+        }
       }
       setDraft((d) => (d ? { ...d, documents: [...d.documents, ...added] } : d))
       toast.success(`${added.length} document${added.length === 1 ? "" : "s"} uploaded — save the file to keep them.`)
@@ -488,6 +585,28 @@ export function SourceOfFundsManager() {
 
               <section className="flex flex-col gap-3">
                 <h3 className="text-sm font-semibold">2. Sender (ordering customer)</h3>
+                <div className="flex flex-col gap-2 rounded-md border border-dashed border-border p-3">
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    Upload the sender&apos;s passport, ID, proof of address or company extract — the details printed on it
+                    fill the fields below and the document is added to the file.
+                  </p>
+                  <input
+                    ref={kycInputRef}
+                    type="file"
+                    accept="application/pdf,image/*"
+                    className="hidden"
+                    onChange={(e) => uploadKycAndFill(e.target.files)}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 w-full sm:w-auto"
+                    disabled={uploading || readingKyc}
+                    onClick={() => kycInputRef.current?.click()}
+                  >
+                    {uploading || readingKyc ? "Reading document…" : "Upload KYC & fill sender"}
+                  </Button>
+                </div>
                 {(
                   [
                     ["senderName", "Name / company"],
