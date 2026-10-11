@@ -79,6 +79,76 @@ function fmt(amount: number, currency: string): string {
   return `${currency} ${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+export interface BlockedFundOverview extends BlockedFund {
+  ownerId: string
+  holderName: string
+  holderEmail: string
+}
+
+/** Admin: every active administrative block across ALL clients, newest first. */
+export async function listAllBlockedFundsAdmin(
+  passcode: string,
+): Promise<{ ok: true; blocks: BlockedFundOverview[] } | { ok: false; error: string }> {
+  if (!(await adminActionAuthorized(passcode))) {
+    return { ok: false, error: "Administrator authorization failed." }
+  }
+  try {
+    const { query } = await import("@/lib/db")
+    const res = await query<{
+      user_id: string
+      entry_id: string
+      amount: string | number
+      currency: string
+      entry_date: string | Date
+      counterparty: string | null
+      comment: string | null
+    }>(
+      `SELECT user_id, entry_id, amount, currency, entry_date, counterparty, comment
+         FROM ledger_entries
+        WHERE entry_id LIKE $1 AND status = 'hold' AND direction = 'debit'
+        ORDER BY entry_date DESC`,
+      [`${BLOCK_ID_PREFIX}%`],
+    )
+    const rows = Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])
+    const typed = rows as Array<{
+      user_id: string
+      entry_id: string
+      amount: string | number
+      currency: string
+      entry_date: string | Date
+      counterparty: string | null
+      comment: string | null
+    }>
+    const profiles = new Map<string, { name: string; email: string }>()
+    for (const id of new Set(typed.map((r) => r.user_id))) {
+      try {
+        const p = await resolveAccountProfileById(id)
+        profiles.set(id, {
+          name: [p?.fullName, p?.company].filter(Boolean).join(" · ") || id,
+          email: p?.email ?? "",
+        })
+      } catch {
+        profiles.set(id, { name: id, email: "" })
+      }
+    }
+    const blocks: BlockedFundOverview[] = typed.map((r) => ({
+      id: r.entry_id,
+      amount: Number(r.amount) || 0,
+      currency: r.currency,
+      reason: r.comment?.trim() || "(no reason recorded)",
+      counterparty: r.counterparty || BLOCK_COUNTERPARTY,
+      createdAt: new Date(r.entry_date).toISOString(),
+      ownerId: r.user_id,
+      holderName: profiles.get(r.user_id)?.name ?? r.user_id,
+      holderEmail: profiles.get(r.user_id)?.email ?? "",
+    }))
+    return { ok: true, blocks }
+  } catch (err) {
+    console.log("[v0] listAllBlockedFundsAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The list of blocked funds could not be loaded." }
+  }
+}
+
 /** Admin: list every active block on a client's Master Account + available balances. */
 export async function listBlockedFundsForUserAdmin(passcode: string, userId: string): Promise<FundBlockResult> {
   if (!(await adminActionAuthorized(passcode))) {

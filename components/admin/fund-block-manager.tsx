@@ -31,7 +31,9 @@ import {
   blockUserFundsAdmin,
   releaseBlockedFundsAdmin,
   withdrawBlockedFundsAdmin,
+  listAllBlockedFundsAdmin,
   type BlockedFund,
+  type BlockedFundOverview,
 } from "@/app/actions/fund-blocks"
 import { getActiveUserId } from "@/lib/user-scope"
 import { useLedger } from "@/lib/ledger-store"
@@ -65,6 +67,61 @@ export function FundBlockManager() {
   // Per-block busy + a confirm dialog for the destructive withdrawal.
   const [busyId, setBusyId] = useState<string | null>(null)
   const [withdrawTarget, setWithdrawTarget] = useState<BlockedFund | null>(null)
+
+  const [allBlocks, setAllBlocks] = useState<BlockedFundOverview[]>([])
+  const [allLoading, setAllLoading] = useState(true)
+  const [allError, setAllError] = useState<string | null>(null)
+
+  const loadAll = () => {
+    listAllBlockedFundsAdmin(ADMIN_PASSCODE)
+      .then((res) => {
+        if (res.ok) {
+          setAllBlocks(res.blocks)
+          setAllError(null)
+        } else {
+          setAllError(res.error)
+        }
+      })
+      .catch(() => setAllError("The list of blocked funds could not be loaded."))
+      .finally(() => setAllLoading(false))
+  }
+
+  useEffect(() => {
+    loadAll()
+    const timer = setInterval(loadAll, 20000)
+    const onVisible = () => {
+      if (document.visibilityState === "visible") loadAll()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+    window.addEventListener("pageshow", onVisible)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener("visibilitychange", onVisible)
+      window.removeEventListener("pageshow", onVisible)
+    }
+  }, [])
+
+  const blockedClients = useMemo(() => {
+    const map = new Map<
+      string,
+      { ownerId: string; name: string; email: string; totals: Map<string, number>; count: number; latest: string }
+    >()
+    for (const b of allBlocks) {
+      const cur = map.get(b.ownerId) ?? {
+        ownerId: b.ownerId,
+        name: b.holderName,
+        email: b.holderEmail,
+        totals: new Map<string, number>(),
+        count: 0,
+        latest: b.createdAt,
+      }
+      cur.totals.set(b.currency, (cur.totals.get(b.currency) ?? 0) + b.amount)
+      cur.count += 1
+      if (b.createdAt > cur.latest) cur.latest = b.createdAt
+      map.set(b.ownerId, cur)
+    }
+    return Array.from(map.values()).sort((a, b) => b.latest.localeCompare(a.latest))
+  }, [allBlocks])
 
   useEffect(() => {
     let active = true
@@ -137,6 +194,7 @@ export function FundBlockManager() {
     setBlocks(res.blocks)
     setAvailable(res.available)
     refreshLiveIfSelf()
+    loadAll()
     return true
   }
 
@@ -209,6 +267,52 @@ export function FundBlockManager() {
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
+        {/* Every client with blocked funds — shown on entry */}
+        <div className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-foreground">Clients with blocked funds</p>
+            <Badge className="bg-amber-500/15 text-amber-500">{blockedClients.length}</Badge>
+          </div>
+          {allLoading ? (
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> Loading blocked funds…
+            </p>
+          ) : allError ? (
+            <p className="text-xs text-destructive">{allError}</p>
+          ) : blockedClients.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No client currently has blocked funds.</p>
+          ) : (
+            <ul className="space-y-2">
+              {blockedClients.map((c) => (
+                <li key={c.ownerId}>
+                  <button
+                    type="button"
+                    onClick={() => setTargetUserId(c.ownerId)}
+                    className={`flex min-h-11 w-full flex-col gap-1 rounded-md border p-3 text-left transition-colors ${
+                      targetUserId === c.ownerId
+                        ? "border-primary bg-primary/10"
+                        : "border-border bg-card hover:bg-secondary/60"
+                    }`}
+                  >
+                    <span className="text-sm font-medium text-foreground text-pretty">{c.name}</span>
+                    {c.email && <span className="break-all text-xs text-muted-foreground">{c.email}</span>}
+                    <span className="flex flex-wrap gap-1.5 pt-1">
+                      {Array.from(c.totals.entries()).map(([cur, val]) => (
+                        <Badge key={cur} className="bg-amber-500/15 text-amber-500 font-semibold">
+                          {fmt(val, cur)}
+                        </Badge>
+                      ))}
+                      <span className="text-[11px] text-muted-foreground">
+                        {c.count} block{c.count === 1 ? "" : "s"} · tap to manage
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
         {/* Target account */}
         <div className="space-y-2">
           <Label>Client account</Label>
