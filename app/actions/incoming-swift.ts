@@ -28,6 +28,55 @@ import {
   type IncomingSwiftMessage,
 } from "@/lib/incoming-swift-db"
 import { convertCurrency } from "@/lib/fx"
+import { getSourceOfFundsFileForSwift, listSourceOfFundsLinks } from "@/lib/source-of-funds-db"
+
+const SOF_STATUS_LABEL: Record<string, string> = {
+  open: "still under review",
+  hold: "on hold",
+  returned: "marked Return to sender",
+}
+
+/** A linked Source of Funds file must be cleared before the payment can be credited or booked. */
+async function sofBlockReason(messageId: string): Promise<string | null> {
+  try {
+    const file = await getSourceOfFundsFileForSwift(messageId)
+    if (!file || file.status === "cleared") return null
+    return `The linked Source of Funds file ${file.id} is ${SOF_STATUS_LABEL[file.status] ?? file.status}. Clear it before crediting this payment.`
+  } catch {
+    return null
+  }
+}
+
+export interface SofLinkInfo {
+  fileId: string
+  status: string
+  senderName: string
+  amount: number
+  currency: string
+}
+
+export async function listSofLinksForIncomingSwiftAdmin(
+  passcode: string,
+): Promise<{ ok: boolean; links: Record<string, SofLinkInfo> }> {
+  if (!(await adminActionAuthorized(passcode))) return { ok: false, links: {} }
+  try {
+    const files = await listSourceOfFundsLinks()
+    const links: Record<string, SofLinkInfo> = {}
+    for (const f of files) {
+      if (!f.swiftMessageId) continue
+      links[f.swiftMessageId] = {
+        fileId: f.id,
+        status: f.status,
+        senderName: f.senderName,
+        amount: f.amount,
+        currency: f.currency,
+      }
+    }
+    return { ok: true, links }
+  } catch {
+    return { ok: true, links: {} }
+  }
+}
 import { incomingTransactionFee } from "@/lib/incoming-fees"
 import { applyCashbackForOwner } from "@/lib/fee-cashback-db"
 import { cashbackNote, applyCashback } from "@/lib/fee-cashback"
@@ -696,6 +745,8 @@ export async function creditIncomingSwiftAdmin(passcode: string, id: string): Pr
   if (message.creditedAt) {
     return { ok: false, alreadyCredited: true, error: "This message has already been credited." }
   }
+  const sofBlock = await sofBlockReason(message.id)
+  if (sofBlock) return { ok: false, error: sofBlock }
 
   try {
     // Re-parse the raw FIN so the credited amount is authoritative (never a
@@ -866,6 +917,8 @@ export async function recordGuaranteeInstrumentAdmin(
   if (message.creditedAt) {
     return { ok: false, alreadyBooked: true, error: "This message has already been processed." }
   }
+  const sofBlockBooking = await sofBlockReason(message.id)
+  if (sofBlockBooking) return { ok: false, error: sofBlockBooking }
 
   try {
     // Re-parse the raw FIN so every value is authoritative. BG/SBLC arrive as an

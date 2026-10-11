@@ -71,11 +71,26 @@ type SofFile = {
   decisionNote: string
   decidedAt: string | null
   createdAt: string
+  swiftMessageId?: string | null
 }
 
 type Client = { id: string; fullName: string; company: string; email: string }
 
-type Draft = Omit<SofFile, "id" | "status" | "decisionNote" | "decidedAt" | "createdAt" | "amount"> & { amount: string }
+type SwiftOption = {
+  id: string
+  userId: string | null
+  messageType: string
+  amount: string | null
+  orderingCustomer: string
+  reference: string | null
+  holderLabel: string
+  createdAt: string
+}
+
+type Draft = Omit<
+  SofFile,
+  "id" | "status" | "decisionNote" | "decidedAt" | "createdAt" | "amount" | "swiftMessageId"
+> & { amount: string }
 
 const EMPTY_DRAFT: Draft = {
   userId: "",
@@ -161,16 +176,19 @@ export function SourceOfFundsManager() {
 
   const [decisionNote, setDecisionNote] = useState("")
   const [deciding, setDeciding] = useState<SofStatus | null>(null)
+  const [swiftMessages, setSwiftMessages] = useState<SwiftOption[]>([])
+  const [linking, setLinking] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const res = await api<{ files: SofFile[]; clients: Client[] }>({ op: "list" })
+      const res = await api<{ files: SofFile[]; clients: Client[]; swiftMessages?: SwiftOption[] }>({ op: "list" })
       if (!res.ok) {
         setLoadError(res.error ?? "Could not load files.")
         return
       }
       setFiles(res.files)
       setClients(res.clients)
+      setSwiftMessages(res.swiftMessages ?? [])
       setLoadError(null)
     } catch {
       setLoadError("Could not reach the server.")
@@ -186,6 +204,39 @@ export function SourceOfFundsManager() {
   const current = useMemo(() => files.find((f) => f.id === editingId) ?? null, [files, editingId])
   const locked = !!current && (current.status === "cleared" || current.status === "returned")
   const openCount = files.filter((f) => f.status === "open" || f.status === "hold").length
+
+  const linkToSwift = async (swiftMessageId: string | null) => {
+    if (!editingId) return
+    setLinking(true)
+    try {
+      const res = await api<{ file: SofFile }>({ op: "link", id: editingId, swiftMessageId })
+      if (!res.ok) {
+        toast.error(res.error ?? "Could not link the payment.")
+        return
+      }
+      setFiles((prev) =>
+        prev.map((f) =>
+          f.id === res.file.id
+            ? res.file
+            : swiftMessageId && f.swiftMessageId === swiftMessageId
+              ? { ...f, swiftMessageId: null }
+              : f,
+        ),
+      )
+      toast.success(swiftMessageId ? "Linked to the incoming payment." : "Unlinked from the incoming payment.")
+    } catch {
+      toast.error("Could not reach the server.")
+    } finally {
+      setLinking(false)
+    }
+  }
+
+  const linkedSwift = current?.swiftMessageId
+    ? (swiftMessages.find((m) => m.id === current.swiftMessageId) ?? null)
+    : null
+  const swiftChoices = swiftMessages
+    .filter((m) => !draft?.userId || m.userId === draft.userId)
+    .filter((m) => m.messageType !== "MT760")
 
   const startNew = () => {
     setEditingId(null)
@@ -606,6 +657,57 @@ export function SourceOfFundsManager() {
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="sof-ref">Payment reference</Label>
                   <Input id="sof-ref" className="text-base" value={draft.reference} onChange={(e) => set("reference", e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
+                  <Label>Linked incoming payment</Label>
+                  {!editingId ? (
+                    <p className="text-sm leading-relaxed text-muted-foreground">
+                      Save the file first, then link it to the incoming SWIFT payment waiting under Awaiting credit.
+                    </p>
+                  ) : current?.swiftMessageId ? (
+                    <div className="flex flex-col gap-2">
+                      <p className="text-sm leading-relaxed">
+                        {linkedSwift
+                          ? `${linkedSwift.messageType} · ${linkedSwift.amount ?? "—"} · from ${linkedSwift.orderingCustomer || "—"}`
+                          : `Message ${current.swiftMessageId} (already credited or no longer waiting)`}
+                      </p>
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        {current.status === "cleared"
+                          ? "This file is cleared, so the payment can now be credited."
+                          : "The payment can only be credited once this file is cleared."}
+                      </p>
+                      {!locked && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="min-h-11 w-full sm:w-auto"
+                          disabled={linking}
+                          onClick={() => linkToSwift(null)}
+                        >
+                          Unlink payment
+                        </Button>
+                      )}
+                    </div>
+                  ) : swiftChoices.length === 0 ? (
+                    <p className="text-sm leading-relaxed text-muted-foreground">
+                      No incoming SWIFT payment for this client is waiting under Awaiting credit. Upload the bank&apos;s
+                      MT103 in Incoming SWIFT first.
+                    </p>
+                  ) : (
+                    <Select value="" onValueChange={(v) => linkToSwift(v)} disabled={linking || locked}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder={linking ? "Linking…" : "Choose the incoming payment"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {swiftChoices.map((m) => (
+                          <SelectItem key={m.id} value={m.id}>
+                            {`${m.messageType} · ${m.amount ?? "—"} · ${m.orderingCustomer || m.reference || m.id}`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
               </section>
 

@@ -8,9 +8,11 @@ import {
   saveSourceOfFundsFile,
   decideSourceOfFundsFile,
   deleteSourceOfFundsFile,
+  linkSourceOfFundsFile,
   type SofEditableFields,
   type SofStatus,
 } from "@/lib/source-of-funds-db"
+import { listCreditableIncomingSwift, getIncomingSwiftById } from "@/lib/incoming-swift-db"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -20,6 +22,7 @@ type Payload =
   | { op: "save"; pin: string; id?: string; file: SofEditableFields }
   | { op: "decide"; pin: string; id: string; status: SofStatus; note?: string }
   | { op: "delete"; pin: string; id: string }
+  | { op: "link"; pin: string; id: string; swiftMessageId: string | null }
 
 const STATUSES: SofStatus[] = ["open", "cleared", "hold", "returned"]
 const STATUS_LABEL: Record<SofStatus, string> = {
@@ -50,11 +53,43 @@ export async function POST(req: Request) {
 
   try {
     if (body.op === "list") {
-      const [files, users] = await Promise.all([listSourceOfFundsFiles(), listDynamicUsers()])
+      const [files, users, messages] = await Promise.all([
+        listSourceOfFundsFiles(),
+        listDynamicUsers(),
+        listCreditableIncomingSwift().catch(() => []),
+      ])
       const clients = users
         .filter((u) => u.status === "active")
         .map((u) => ({ id: u.id, fullName: u.profile.fullName, company: u.profile.company, email: u.email }))
-      return NextResponse.json({ ok: true, files, clients })
+      const swiftMessages = messages.map((m) => ({
+        id: m.id,
+        userId: m.userId,
+        messageType: m.messageType,
+        amount: m.amount,
+        orderingCustomer: m.orderingCustomer,
+        reference: m.reference,
+        holderLabel: m.matchedAccountHolder ?? "",
+        createdAt: m.createdAt,
+      }))
+      return NextResponse.json({ ok: true, files, clients, swiftMessages })
+    }
+
+    if (body.op === "link") {
+      const existing = await getSourceOfFundsFile(body.id)
+      if (!existing) return NextResponse.json({ ok: false, error: "File not found." })
+      const msgId = typeof body.swiftMessageId === "string" && body.swiftMessageId ? body.swiftMessageId : null
+      if (msgId) {
+        const msg = await getIncomingSwiftById(msgId)
+        if (!msg) return NextResponse.json({ ok: false, error: "Incoming payment not found." })
+        if (msg.creditedAt) return NextResponse.json({ ok: false, error: "That payment is already credited." })
+      }
+      const saved = await linkSourceOfFundsFile(body.id, msgId)
+      void logActivity({
+        action: msgId ? "Source of Funds — linked to incoming payment" : "Source of Funds — unlinked from payment",
+        category: "Administration / Compliance",
+        details: { fileId: body.id, client: existing.holderLabel, swiftMessageId: msgId ?? existing.swiftMessageId },
+      }).catch(() => null)
+      return NextResponse.json({ ok: true, file: saved })
     }
 
     if (body.op === "save") {

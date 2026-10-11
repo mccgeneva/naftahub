@@ -42,6 +42,8 @@ import {
   listUnmatchedIncomingSwiftAdmin,
   assignIncomingSwiftAdmin,
   listCreditableIncomingSwiftAdmin,
+  listSofLinksForIncomingSwiftAdmin,
+  type SofLinkInfo,
   creditIncomingSwiftAdmin,
   recordGuaranteeInstrumentAdmin,
   rejectIncomingSwiftAdmin,
@@ -193,11 +195,17 @@ export function IncomingSwiftDelivery() {
     if (res.ok) setUnmatched(res.messages)
   }
 
+  const [sofLinks, setSofLinks] = useState<Record<string, SofLinkInfo>>({})
+
   const loadCreditable = async () => {
     setLoadingCreditable(true)
-    const res = await listCreditableIncomingSwiftAdmin(ADMIN_PASSCODE)
+    const [res, links] = await Promise.all([
+      listCreditableIncomingSwiftAdmin(ADMIN_PASSCODE),
+      listSofLinksForIncomingSwiftAdmin(ADMIN_PASSCODE).catch(() => ({ ok: false, links: {} })),
+    ])
     setLoadingCreditable(false)
     if (res.ok) setCreditable(res.messages)
+    if (links.ok) setSofLinks(links.links)
   }
 
   useEffect(() => {
@@ -469,7 +477,10 @@ export function IncomingSwiftDelivery() {
             </p>
           ) : (
             <div className="flex flex-col gap-4">
-              {creditable.map((m) => (
+              {creditable.map((m) => {
+                const sof = sofLinks[m.id]
+                const sofBlocked = !!sof && sof.status !== "cleared"
+                return (
                 <div key={m.id} className="rounded-lg border border-border p-4">
                   <div className="mb-3 flex flex-wrap items-center gap-2">
                     <Badge className="bg-primary/15 text-primary">{m.messageType}</Badge>
@@ -515,6 +526,27 @@ export function IncomingSwiftDelivery() {
                       </Button>
                     </div>
                   )}
+                  {sof && (
+                    <div
+                      className={`mt-3 flex items-start gap-2 rounded-md border p-3 text-sm leading-relaxed ${
+                        sofBlocked
+                          ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                          : "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                      }`}
+                    >
+                      {sofBlocked ? (
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      ) : (
+                        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+                      )}
+                      <span>
+                        Source of Funds file {sof.fileId}
+                        {sof.senderName ? ` (sender ${sof.senderName})` : ""} is{" "}
+                        <strong>{sof.status === "cleared" ? "cleared" : sof.status === "hold" ? "on hold" : sof.status === "returned" ? "marked return to sender" : "still under review"}</strong>
+                        {sofBlocked ? ". Clear it in Source of Funds before crediting." : " — ready to credit."}
+                      </span>
+                    </div>
+                  )}
                   <p className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
                     <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     {m.messageType === "MT760"
@@ -524,7 +556,12 @@ export function IncomingSwiftDelivery() {
                     leverage / PPP line.
                   </p>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <Button size="sm" onClick={() => openBookPanel(m)} disabled={booking === m.id} className="gap-1.5">
+                    <Button
+                      size="sm"
+                      onClick={() => openBookPanel(m)}
+                      disabled={booking === m.id || sofBlocked}
+                      className="gap-1.5"
+                    >
                       <Lock className="h-4 w-4" />
                       Book as bank instrument
                     </Button>
@@ -533,7 +570,7 @@ export function IncomingSwiftDelivery() {
                         size="sm"
                         variant="outline"
                         onClick={() => handleCredit(m)}
-                        disabled={crediting === m.id}
+                        disabled={crediting === m.id || sofBlocked}
                         className="gap-1.5 bg-transparent"
                       >
                         {crediting === m.id ? (
@@ -788,7 +825,8 @@ export function IncomingSwiftDelivery() {
                     </div>
                   )}
                 </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </CardContent>

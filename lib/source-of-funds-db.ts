@@ -59,6 +59,8 @@ export interface SourceOfFundsFile {
   decidedAt: string | null
   createdAt: string
   updatedAt: string
+  /** Incoming SWIFT message this file justifies; crediting it requires this file to be cleared. */
+  swiftMessageId: string | null
 }
 
 export const EMPTY_CHECKLIST: SofChecklist = {
@@ -107,6 +109,10 @@ function ensureTable(): Promise<void> {
         )
       `)
       await query(`CREATE INDEX IF NOT EXISTS source_of_funds_files_user_idx ON source_of_funds_files (user_id)`)
+      await query(`ALTER TABLE source_of_funds_files ADD COLUMN IF NOT EXISTS swift_message_id text`)
+      await query(
+        `CREATE INDEX IF NOT EXISTS source_of_funds_files_swift_idx ON source_of_funds_files (swift_message_id)`,
+      )
     })().catch((err) => {
       tableReady = null
       throw err
@@ -136,6 +142,7 @@ type Row = {
   decided_at: Date | string | null
   created_at: Date | string
   updated_at: Date | string
+  swift_message_id?: string | null
 }
 
 const iso = (v: Date | string | null) => (v == null ? null : new Date(v).toISOString())
@@ -162,7 +169,43 @@ function rowToFile(r: Row): SourceOfFundsFile {
     decidedAt: iso(r.decided_at),
     createdAt: iso(r.created_at) as string,
     updatedAt: iso(r.updated_at) as string,
+    swiftMessageId: r.swift_message_id ?? null,
   }
+}
+
+/** Link a file to an incoming SWIFT message (one file per message). Pass null to unlink. */
+export async function linkSourceOfFundsFile(
+  id: string,
+  swiftMessageId: string | null,
+): Promise<SourceOfFundsFile | null> {
+  await ensureTable()
+  if (swiftMessageId) {
+    await query(
+      `UPDATE source_of_funds_files SET swift_message_id = NULL, updated_at = now()
+       WHERE swift_message_id = $1 AND id <> $2`,
+      [swiftMessageId, id],
+    )
+  }
+  const res = await query<Row>(
+    `UPDATE source_of_funds_files SET swift_message_id = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, swiftMessageId],
+  )
+  return res.rows[0] ? rowToFile(res.rows[0]) : null
+}
+
+export async function getSourceOfFundsFileForSwift(swiftMessageId: string): Promise<SourceOfFundsFile | null> {
+  await ensureTable()
+  const res = await query<Row>(
+    `SELECT * FROM source_of_funds_files WHERE swift_message_id = $1 ORDER BY updated_at DESC LIMIT 1`,
+    [swiftMessageId],
+  )
+  return res.rows[0] ? rowToFile(res.rows[0]) : null
+}
+
+export async function listSourceOfFundsLinks(): Promise<SourceOfFundsFile[]> {
+  await ensureTable()
+  const res = await query<Row>(`SELECT * FROM source_of_funds_files WHERE swift_message_id IS NOT NULL`)
+  return res.rows.map(rowToFile)
 }
 
 export async function listSourceOfFundsFiles(): Promise<SourceOfFundsFile[]> {
