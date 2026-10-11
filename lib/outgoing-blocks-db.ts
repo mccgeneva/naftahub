@@ -98,6 +98,17 @@ export async function clearOutgoingBlock(userId: string): Promise<void> {
   await query(`DELETE FROM outgoing_blocks WHERE user_id = $1`, [userId])
 }
 
+/** Every configured block (active first, newest change first) for the admin overview. */
+export async function listOutgoingBlocks(): Promise<Array<OutgoingBlockConfig & { userId: string }>> {
+  await ensureTable()
+  const { rows } = await query(
+    `SELECT * FROM outgoing_blocks
+     WHERE block_payments OR block_trades
+     ORDER BY ((until IS NULL OR until > now())) DESC, updated_at DESC`,
+  )
+  return rows.map((r: Record<string, unknown>) => ({ userId: r.user_id as string, ...rowToConfig(r) }))
+}
+
 /** Count users currently under an active outgoing block (for the admin badge). */
 export async function countActiveOutgoingBlocks(): Promise<number> {
   await ensureTable()

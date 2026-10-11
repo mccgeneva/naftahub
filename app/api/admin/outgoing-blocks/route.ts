@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { adminActionAuthorized } from "@/lib/admin-auth"
 import { listDynamicUsers } from "@/lib/admin-users-db"
-import { getOutgoingBlock, saveOutgoingBlock, clearOutgoingBlock } from "@/lib/outgoing-blocks-db"
+import { getOutgoingBlock, saveOutgoingBlock, clearOutgoingBlock, listOutgoingBlocks } from "@/lib/outgoing-blocks-db"
 import type { OutgoingBlockConfig } from "@/lib/outgoing-blocks-eval"
 
 export const runtime = "nodejs"
@@ -63,11 +63,12 @@ export async function POST(req: Request) {
     }
 
     if (body.op === "load") {
-      const [clients, block] = await Promise.all([
+      const [clients, block, blocks] = await Promise.all([
         buildClientList(),
         body.targetId ? getOutgoingBlock(body.targetId) : Promise.resolve<OutgoingBlockConfig | null>(null),
+        listOutgoingBlocks(),
       ])
-      return NextResponse.json({ ok: true, clients, block })
+      return NextResponse.json({ ok: true, clients, block, blocks })
     }
 
     if (body.op === "save") {

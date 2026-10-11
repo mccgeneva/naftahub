@@ -36,6 +36,8 @@ export function OutgoingBlocksManager({ passcode }: { passcode: string }) {
   const [clearing, setClearing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [current, setCurrent] = useState<OutgoingBlockConfig | null>(null)
+  const [allBlocks, setAllBlocks] = useState<Array<OutgoingBlockConfig & { userId: string }>>([])
+  const [reloadKey, setReloadKey] = useState(0)
 
   const [blockPayments, setBlockPayments] = useState(false)
   const [blockTrades, setBlockTrades] = useState(false)
@@ -76,6 +78,7 @@ export function OutgoingBlocksManager({ passcode }: { passcode: string }) {
         if (!active) return
         if (data.ok) {
           if (Array.isArray(data.clients) && data.clients.length) setClients(data.clients)
+          if (Array.isArray(data.blocks)) setAllBlocks(data.blocks)
           applyBlock((data.block as OutgoingBlockConfig | null) ?? null)
         } else if (data.reason === "unauthorized") {
           setLoadError("Administrator session not recognized. Re-open the panel with your passcode.")
@@ -92,7 +95,7 @@ export function OutgoingBlocksManager({ passcode }: { passcode: string }) {
     return () => {
       active = false
     }
-  }, [passcode, target])
+  }, [passcode, target, reloadKey])
 
   const save = async () => {
     if (!target) {
@@ -134,6 +137,7 @@ export function OutgoingBlocksManager({ passcode }: { passcode: string }) {
       return
     }
     applyBlock(res.block)
+    setReloadKey((k) => k + 1)
     const anyOn = blockPayments || blockTrades
     toast.success(anyOn ? "Outgoing block applied" : "Outgoing block lifted", {
       description: anyOn
@@ -164,6 +168,7 @@ export function OutgoingBlocksManager({ passcode }: { passcode: string }) {
       return
     }
     applyBlock(null)
+    setReloadKey((k) => k + 1)
     toast.success("Outgoing block removed", { description: `${targetName} can transact and trade normally.` })
   }
 
@@ -185,6 +190,64 @@ export function OutgoingBlocksManager({ passcode }: { passcode: string }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Current blocks</Label>
+              <span className="text-xs text-muted-foreground">
+                {allBlocks.filter((b) => outgoingBlockActive(b)).length} active · {allBlocks.length} total
+              </span>
+            </div>
+            {allBlocks.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+                {loading ? "Loading blocks…" : "No client is under an outgoing block."}
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {allBlocks.map((b) => {
+                  const c = clients.find((x) => x.id === b.userId)
+                  const name = c ? c.company?.trim() || c.fullName?.trim() || c.email : b.userId
+                  const isActive = outgoingBlockActive(b)
+                  const selected = b.userId === target
+                  return (
+                    <li key={b.userId}>
+                      <button
+                        type="button"
+                        onClick={() => setTarget(b.userId)}
+                        className={`flex min-h-11 w-full flex-col gap-1 rounded-lg border p-3 text-left ${
+                          selected ? "border-primary bg-primary/10" : "border-border hover:bg-muted/40"
+                        }`}
+                      >
+                        <span className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="break-words font-medium">{name}</span>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                              isActive ? "bg-destructive/15 text-destructive" : "bg-muted text-muted-foreground"
+                            }`}
+                          >
+                            {isActive ? "Active" : "Expired"}
+                          </span>
+                        </span>
+                        {c && name !== c.email && (
+                          <span className="break-all text-xs text-muted-foreground">{c.email}</span>
+                        )}
+                        <span className="text-xs text-muted-foreground">
+                          {[b.blockPayments ? "Payments & transfers" : null, b.blockTrades ? "Trading & financing" : null]
+                            .filter(Boolean)
+                            .join(" + ")}
+                          {" · "}
+                          {b.until ? `until ${formatOutgoingBlockUntil(b.until)}` : "indefinite"}
+                        </span>
+                        {b.reason && (
+                          <span className="whitespace-pre-wrap break-words text-xs text-foreground/80">{b.reason}</span>
+                        )}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+
           {/* Target selector */}
           <div className="space-y-1.5">
             <Label>Apply block to</Label>
@@ -212,7 +275,7 @@ export function OutgoingBlocksManager({ passcode }: { passcode: string }) {
               Loading current block…
             </div>
           ) : !target ? (
-            <p className="py-6 text-sm text-muted-foreground">Select a user to view or set an outgoing block.</p>
+            <p className="py-6 text-sm text-muted-foreground">Tap a block above to edit it, or select a user to set a new one.</p>
           ) : (
             <>
               {/* Current status */}
