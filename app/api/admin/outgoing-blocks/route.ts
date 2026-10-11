@@ -62,6 +62,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, reason: "unauthorized", clients: [] }, { status: 200 })
     }
 
+    if ((body as { op?: string }).op === "list") {
+      const [clients, blocks] = await Promise.all([buildClientList(), listOutgoingBlocks()])
+      return NextResponse.json({ ok: true, clients, blocks })
+    }
+
     if (body.op === "load") {
       const [clients, block, blocks] = await Promise.all([
         buildClientList(),

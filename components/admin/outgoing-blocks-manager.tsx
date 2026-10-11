@@ -97,6 +97,55 @@ export function OutgoingBlocksManager({ passcode }: { passcode: string }) {
     }
   }, [passcode, target, reloadKey])
 
+  // Independent of the per-user load: fetch every block as soon as the panel
+  // opens, then keep it fresh (poll + on resume) so it never needs a tap.
+  const [listLoading, setListLoading] = useState(true)
+  const [listError, setListError] = useState<string | null>(null)
+  useEffect(() => {
+    let active = true
+    const loadList = async () => {
+      try {
+        const resp = await fetch("/api/admin/outgoing-blocks", {
+          method: "POST",
+          credentials: "include",
+          cache: "no-store",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ op: "list", pin: passcode }),
+        })
+        const data = await resp.json()
+        if (!active) return
+        if (data.ok) {
+          if (Array.isArray(data.blocks)) setAllBlocks(data.blocks)
+          if (Array.isArray(data.clients) && data.clients.length) setClients(data.clients)
+          setListError(null)
+        } else {
+          setListError(
+            data.reason === "unauthorized"
+              ? "Administrator session not recognized. Re-open the panel with your passcode."
+              : data.error || "Could not load the blocks list.",
+          )
+        }
+      } catch {
+        if (active) setListError("Could not reach the server. Retrying…")
+      } finally {
+        if (active) setListLoading(false)
+      }
+    }
+    void loadList()
+    const timer = setInterval(loadList, 20000)
+    const onResume = () => {
+      if (document.visibilityState === "visible") void loadList()
+    }
+    document.addEventListener("visibilitychange", onResume)
+    window.addEventListener("pageshow", onResume)
+    return () => {
+      active = false
+      clearInterval(timer)
+      document.removeEventListener("visibilitychange", onResume)
+      window.removeEventListener("pageshow", onResume)
+    }
+  }, [passcode, reloadKey])
+
   const save = async () => {
     if (!target) {
       toast.error("Select a user first")
@@ -199,7 +248,11 @@ export function OutgoingBlocksManager({ passcode }: { passcode: string }) {
             </div>
             {allBlocks.length === 0 ? (
               <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-                {loading ? "Loading blocks…" : "No client is under an outgoing block."}
+                {listError
+                  ? listError
+                  : listLoading || loading
+                    ? "Loading blocks…"
+                    : "No client is under an outgoing block."}
               </p>
             ) : (
               <ul className="flex flex-col gap-2">
