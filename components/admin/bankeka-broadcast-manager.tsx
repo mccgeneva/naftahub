@@ -1,7 +1,11 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { upload } from "@vercel/blob/client"
 import {
+  Paperclip,
+  X,
+  FileText,
   Megaphone,
   Inbox,
   ScrollText,
@@ -29,9 +33,21 @@ import {
   adminDeleteMessage,
   adminListAudit,
 } from "@/app/actions/bankeka"
-import type { BankekaAuditEntry } from "@/lib/bankeka-shared"
+import {
+  BANKEKA_MAX_ATTACHMENTS_PER_MESSAGE,
+  BANKEKA_UPLOAD_CONTENT_TYPES,
+  BANKEKA_UPLOAD_MAX_BYTES,
+  type BankekaAttachment,
+  type BankekaAuditEntry,
+} from "@/lib/bankeka-shared"
 
-const MAX_BODY = 4000
+const MAX_BODY = 20000
+
+function formatSize(bytes?: number): string {
+  if (!bytes) return ""
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 function formatTimestamp(iso: string): string {
   const d = new Date(iso)
@@ -47,6 +63,46 @@ function BroadcastComposer() {
   const [selected, setSelected] = useState<Record<string, boolean>>({})
   const [body, setBody] = useState("")
   const [sending, setSending] = useState(false)
+  const [attachments, setAttachments] = useState<BankekaAttachment[]>([])
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    const room = BANKEKA_MAX_ATTACHMENTS_PER_MESSAGE - attachments.length
+    if (room <= 0) {
+      toast.error(`You can attach up to ${BANKEKA_MAX_ATTACHMENTS_PER_MESSAGE} files per broadcast.`)
+      return
+    }
+    const all = Array.from(files)
+    if (all.length > room) {
+      toast.error(`Only ${room} more file${room === 1 ? "" : "s"} can be attached.`)
+    }
+    setUploading(true)
+    try {
+      for (const file of all.slice(0, room)) {
+        if (file.size > BANKEKA_UPLOAD_MAX_BYTES) {
+          toast.error(`"${file.name}" is too large (max 25 MB).`)
+          continue
+        }
+        const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_")
+        const result = await upload(`bankeka/admin/${Date.now()}-${safe}`, file, {
+          access: "public",
+          handleUploadUrl: "/api/bankeka/blob-upload",
+          clientPayload: JSON.stringify({ passcode: ADMIN_PASSCODE }),
+        })
+        setAttachments((prev) => [
+          ...prev,
+          { name: file.name, url: result.url, size: file.size, contentType: file.type || undefined },
+        ])
+      }
+    } catch (err) {
+      toast.error((err as Error).message || "The file could not be uploaded.")
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ""
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -67,8 +123,12 @@ function BroadcastComposer() {
 
   const handleSend = async () => {
     const text = body.trim()
-    if (!text) {
-      toast.error("Message cannot be empty.")
+    if (!text && attachments.length === 0) {
+      toast.error("Write a message or attach a file.")
+      return
+    }
+    if (uploading) {
+      toast.error("Please wait for the attachments to finish uploading.")
       return
     }
     if (target === "selected" && selectedIds.length === 0) {
@@ -77,13 +137,14 @@ function BroadcastComposer() {
     }
     setSending(true)
     try {
-      const res = await adminBroadcast(ADMIN_PASSCODE, target === "all" ? "all" : selectedIds, text)
+      const res = await adminBroadcast(ADMIN_PASSCODE, target === "all" ? "all" : selectedIds, text, attachments)
       if (res.ok) {
         toast.success("Broadcast published", {
           description: `Delivered to ${res.delivered} active client${res.delivered === 1 ? "" : "s"}.`,
         })
         setBody("")
         setSelected({})
+        setAttachments([])
       } else {
         toast.error(res.error)
       }
@@ -162,15 +223,71 @@ function BroadcastComposer() {
             value={body}
             onChange={(e) => setBody(e.target.value.slice(0, MAX_BODY))}
             placeholder="Write your announcement…"
-            rows={4}
-            className="resize-none text-base md:text-sm"
+            rows={16}
+            className="min-h-[60dvh] resize-y text-base leading-relaxed md:min-h-[28rem] md:text-sm"
           />
-          <p className="text-right text-[11px] text-muted-foreground">
-            {body.length}/{MAX_BODY}
+          <p className="text-right text-xs text-muted-foreground">
+            {body.length.toLocaleString("en-US")}/{MAX_BODY.toLocaleString("en-US")}
           </p>
         </div>
 
-        <Button onClick={handleSend} disabled={sending} className="w-full sm:w-auto">
+        <div className="flex flex-col gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept={BANKEKA_UPLOAD_CONTENT_TYPES.join(",")}
+            className="sr-only"
+            onChange={(e) => handleFiles(e.target.files)}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading || attachments.length >= BANKEKA_MAX_ATTACHMENTS_PER_MESSAGE}
+            className="min-h-11 w-full sm:w-auto"
+          >
+            {uploading ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Paperclip className="mr-2 h-4 w-4" />
+            )}
+            {uploading
+              ? "Uploading…"
+              : `Add attachments (${attachments.length}/${BANKEKA_MAX_ATTACHMENTS_PER_MESSAGE})`}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            PDF, images, Word, Excel, text or CSV — up to 25 MB each. You can pick several files at once.
+          </p>
+          {attachments.length > 0 && (
+            <ul className="flex flex-col gap-2">
+              {attachments.map((a, i) => (
+                <li
+                  key={a.url}
+                  className="flex min-w-0 items-center gap-3 rounded-lg border border-border bg-secondary/40 px-3 py-2"
+                >
+                  <FileText className="h-4 w-4 shrink-0 text-primary" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-foreground">{a.name}</span>
+                    <span className="block text-xs text-muted-foreground">{formatSize(a.size)}</span>
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-11 w-11 shrink-0"
+                    onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                    aria-label={`Remove ${a.name}`}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <Button onClick={handleSend} disabled={sending || uploading} className="min-h-11 w-full sm:w-auto">
           {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
           Publish broadcast
         </Button>

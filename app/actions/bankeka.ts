@@ -48,7 +48,7 @@ import {
   type MessageStatus,
 } from "@/lib/bankeka-shared"
 
-const MAX_BODY = 4000
+const MAX_BODY = 20000
 
 /** A short, single-line preview of a message body for the bell notification. */
 function notifyPreview(body: string, hadAttachment: boolean): string {
@@ -559,10 +559,12 @@ export async function adminBroadcast(
   passcode: string,
   target: "all" | string[],
   body: string,
+  attachments?: BankekaAttachment[],
 ): Promise<BroadcastResult> {
   if (!(await adminOk(passcode))) return { ok: false, error: "Administrator authorization failed." }
   const trimmed = (body ?? "").trim()
-  if (!trimmed) return { ok: false, error: "Message cannot be empty." }
+  const files = sanitizeAttachments(attachments)
+  if (!trimmed && files.length === 0) return { ok: false, error: "Message cannot be empty." }
   if (trimmed.length > MAX_BODY) return { ok: false, error: "Message is too long." }
 
   try {
@@ -577,6 +579,7 @@ export async function adminBroadcast(
         senderId: BANKEKA_ADMIN_ID,
         recipientId: rid,
         body: trimmed,
+        attachments: files,
         kind: "broadcast",
         broadcastId,
       })
