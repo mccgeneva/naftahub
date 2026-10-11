@@ -570,7 +570,7 @@ export function IncomingSwiftDelivery() {
                                 value={bookType[m.id] ?? ""}
                                 onValueChange={(v) => setBookType((p) => ({ ...p, [m.id]: v }))}
                               >
-                                <SelectTrigger className="h-10 text-base">
+                                <SelectTrigger className="min-h-10 text-base">
                                   <SelectValue placeholder="Choose type…" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -706,7 +706,7 @@ export function IncomingSwiftDelivery() {
                           value={assignSel[m.id] ?? ""}
                           onValueChange={(v) => setAssignSel((prev) => ({ ...prev, [m.id]: v }))}
                         >
-                          <SelectTrigger className="h-9 w-full sm:w-[320px]">
+                          <SelectTrigger className="min-h-9 w-full sm:w-[320px]">
                             <SelectValue placeholder="Switch to customer…" />
                           </SelectTrigger>
                           <SelectContent>
@@ -846,7 +846,7 @@ export function IncomingSwiftDelivery() {
                       value={assignSel[m.id] ?? ""}
                       onValueChange={(v) => setAssignSel((prev) => ({ ...prev, [m.id]: v }))}
                     >
-                      <SelectTrigger className="h-9 w-full sm:w-[320px]">
+                      <SelectTrigger className="min-h-9 w-full sm:w-[320px]">
                         <SelectValue placeholder="Assign to customer…" />
                       </SelectTrigger>
                       <SelectContent>

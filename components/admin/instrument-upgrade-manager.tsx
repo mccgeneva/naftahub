@@ -545,7 +545,7 @@ export function InstrumentUpgradeManager() {
               <div className="min-w-0 space-y-2">
                 <Label htmlFor="up-type">New instrument type</Label>
                 <Select value={newTypeCode} onValueChange={setNewTypeCode}>
-                  <SelectTrigger id="up-type" className="w-full [&>span]:truncate">
+                  <SelectTrigger id="up-type" className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

@@ -152,7 +152,7 @@ export function KycDocumentManager({ userId, account }: { userId: string; accoun
           <div className="flex flex-1 flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">Document type</label>
             <Select value={docType} onValueChange={(v) => setDocType(v as UploadedKycDocType)}>
-              <SelectTrigger className="h-11">
+              <SelectTrigger className="min-h-11">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

@@ -1890,7 +1890,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
           <div className="space-y-1.5">
             <Label className="text-xs">Status</Label>
             <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as ApprovalStatus | "all")}>
-              <SelectTrigger className="h-10">
+              <SelectTrigger className="min-h-10">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1905,7 +1905,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
           <div className="space-y-1.5">
             <Label className="text-xs">Type</Label>
             <Select value={kindFilter} onValueChange={(v) => setKindFilter(v as ApprovalKind | "all")}>
-              <SelectTrigger className="h-10">
+              <SelectTrigger className="min-h-10">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1921,7 +1921,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
           <div className="space-y-1.5">
             <Label className="text-xs">Client</Label>
             <Select value={clientFilter} onValueChange={setClientFilter}>
-              <SelectTrigger className="h-10">
+              <SelectTrigger className="min-h-10">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

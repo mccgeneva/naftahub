@@ -257,7 +257,7 @@ export function LegalDeskManager({ passcode }: { passcode: string }) {
           <div className="flex flex-col gap-2">
             <Label>Client (optional)</Label>
             <Select value={clientId} onValueChange={setClientId} disabled={loading}>
-              <SelectTrigger className="h-11 text-base">
+              <SelectTrigger className="min-h-11 text-base">
                 <SelectValue placeholder="Choose a client" />
               </SelectTrigger>
               <SelectContent>
@@ -276,7 +276,7 @@ export function LegalDeskManager({ passcode }: { passcode: string }) {
               <div className="flex flex-col gap-2">
                 <Label>Bank instrument (optional)</Label>
                 <Select value={instrumentId} onValueChange={setInstrumentId} disabled={contextLoading}>
-                  <SelectTrigger className="h-11 text-base">
+                  <SelectTrigger className="min-h-11 text-base">
                     <SelectValue placeholder={contextLoading ? "Loading…" : "Choose an instrument"} />
                   </SelectTrigger>
                   <SelectContent>
@@ -296,7 +296,7 @@ export function LegalDeskManager({ passcode }: { passcode: string }) {
               <div className="flex flex-col gap-2">
                 <Label>Transaction (optional)</Label>
                 <Select value={transactionId} onValueChange={setTransactionId} disabled={contextLoading}>
-                  <SelectTrigger className="h-11 text-base">
+                  <SelectTrigger className="min-h-11 text-base">
                     <SelectValue placeholder={contextLoading ? "Loading…" : "Choose a transaction"} />
                   </SelectTrigger>
                   <SelectContent>

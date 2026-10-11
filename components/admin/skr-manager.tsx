@@ -1281,7 +1281,7 @@ export function SkrManager() {
                       value={record.status}
                       onValueChange={(v) => changeStatus(record, v as SkrStatus)}
                     >
-                      <SelectTrigger className="h-9">
+                      <SelectTrigger className="min-h-9">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

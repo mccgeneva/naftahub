@@ -2952,7 +2952,7 @@ export default function AdminPage() {
                           setPayoutBankByRequest((prev) => ({ ...prev, [r.id]: value }))
                         }
                       >
-                        <SelectTrigger className="mt-2 h-9 text-xs">
+                        <SelectTrigger className="mt-2 min-h-9 text-xs">
                           <SelectValue placeholder="Select payout bank" />
                         </SelectTrigger>
                         <SelectContent>

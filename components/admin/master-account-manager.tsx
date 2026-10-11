@@ -660,7 +660,7 @@ export function MasterAccountManager() {
                       <div key={row.id} className="space-y-2 rounded-md border border-border/70 bg-background/40 p-3">
                         <div className="flex items-center gap-2">
                           <Select value={row.currency} onValueChange={(v) => setRowCurrency(row.id, v)}>
-                            <SelectTrigger className="h-8 w-[104px] font-mono text-xs">
+                            <SelectTrigger className="min-h-8 w-[104px] font-mono text-xs">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>

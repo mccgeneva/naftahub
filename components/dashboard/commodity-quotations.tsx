@@ -290,7 +290,7 @@ export function CommodityQuotations() {
                 <div className="space-y-1.5">
                   <Label className="text-xs">Port / terminal</Label>
                   <Select value={selectedPortId} onValueChange={setSelectedPortId}>
-                    <SelectTrigger className="h-9">
+                    <SelectTrigger className="min-h-9">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -305,7 +305,7 @@ export function CommodityQuotations() {
                 <div className="space-y-1.5">
                   <Label className="text-xs">Product / category</Label>
                   <Select value={portFilter} onValueChange={setPortFilter}>
-                    <SelectTrigger className="h-9">
+                    <SelectTrigger className="min-h-9">
                       <span className="truncate text-left">{portFilterLabel}</span>
                     </SelectTrigger>
                     <SelectContent>
@@ -321,7 +321,7 @@ export function CommodityQuotations() {
               <div className="space-y-1.5 sm:col-span-2">
                 <Label className="text-xs">Product / grade</Label>
                 <Select value={selectedProductId} onValueChange={setSelectedProductId}>
-                  <SelectTrigger className="h-9">
+                  <SelectTrigger className="min-h-9">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -336,7 +336,7 @@ export function CommodityQuotations() {
             <div className="space-y-1.5">
               <Label className="text-xs">Basis</Label>
               <Select value={basis} onValueChange={(v) => setBasis(v as BasisFilter)}>
-                <SelectTrigger className="h-9">
+                <SelectTrigger className="min-h-9">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -759,7 +759,7 @@ function RequestProductDialog({
                 <div className="space-y-1.5">
                   <Label className="text-xs">Delivery terms</Label>
                   <Select value={basis} onValueChange={(v) => setBasis(v as PriceBasis)}>
-                    <SelectTrigger className="h-9">
+                    <SelectTrigger className="min-h-9">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -771,7 +771,7 @@ function RequestProductDialog({
                 <div className="space-y-1.5">
                   <Label className="text-xs">Port / terminal</Label>
                   <Select value={portId} onValueChange={setPortId}>
-                    <SelectTrigger className="h-9">
+                    <SelectTrigger className="min-h-9">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

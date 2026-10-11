@@ -54,7 +54,7 @@ function ClientSelect({
 }) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="h-11 w-full min-w-0 [&>span]:truncate">
+      <SelectTrigger className="min-h-11 w-full min-w-0">
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
@@ -239,7 +239,7 @@ export function ProjectFinanceAdmin({ onDone }: { onDone?: () => void }) {
             <div className="space-y-2">
               <Label>Currency</Label>
               <Select value={currency} onValueChange={setCurrency}>
-                <SelectTrigger className="h-11">
+                <SelectTrigger className="min-h-11">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

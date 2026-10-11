@@ -3174,7 +3174,7 @@ export default function InstrumentsPage() {
                   value={transferMtType}
                   onValueChange={(v) => setTransferMtType(v as InstrumentTransferMtType)}
                 >
-                  <SelectTrigger id="transfer-mt-type" className="h-11 text-base">
+                  <SelectTrigger id="transfer-mt-type" className="min-h-11 text-base">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

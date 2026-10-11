@@ -336,7 +336,7 @@ export function AmlCasesManager({ passcode }: { passcode: string }) {
             <div className="flex flex-col gap-2">
               <Label>Customer</Label>
               <Select value={draft.userId} onValueChange={(v) => set("userId", v)} disabled={!!draft.id}>
-                <SelectTrigger className="h-11 text-base">
+                <SelectTrigger className="min-h-11 text-base">
                   <SelectValue placeholder="Choose the customer" />
                 </SelectTrigger>
                 <SelectContent>
@@ -426,7 +426,7 @@ export function AmlCasesManager({ passcode }: { passcode: string }) {
               <div className="flex flex-col gap-2">
                 <Label>Issued by</Label>
                 <Select value={draft.source} onValueChange={(v) => set("source", v as AmlSource)}>
-                  <SelectTrigger className="h-11 text-base">
+                  <SelectTrigger className="min-h-11 text-base">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -469,7 +469,7 @@ export function AmlCasesManager({ passcode }: { passcode: string }) {
               <div className="flex flex-col gap-2">
                 <Label>Risk level</Label>
                 <Select value={draft.riskLevel} onValueChange={(v) => set("riskLevel", v as AmlRiskLevel)}>
-                  <SelectTrigger className="h-11 text-base">
+                  <SelectTrigger className="min-h-11 text-base">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -484,7 +484,7 @@ export function AmlCasesManager({ passcode }: { passcode: string }) {
               <div className="flex flex-col gap-2">
                 <Label>Case status</Label>
                 <Select value={draft.status} onValueChange={(v) => set("status", v as AmlCaseStatus)}>
-                  <SelectTrigger className="h-11 text-base">
+                  <SelectTrigger className="min-h-11 text-base">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -597,7 +597,7 @@ export function AmlCasesManager({ passcode }: { passcode: string }) {
                     value={m.category ?? "other"}
                     onValueChange={(v) => updateMeasure(m.key, { category: v as AmlMeasureCategory })}
                   >
-                    <SelectTrigger className="h-11 flex-1 text-base">
+                    <SelectTrigger className="min-h-11 flex-1 text-base">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

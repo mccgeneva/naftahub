@@ -334,7 +334,7 @@ export function CostForecaster() {
           <div className="flex flex-col gap-2">
             <Label>Client</Label>
             <Select value={clientId} onValueChange={setClientId}>
-              <SelectTrigger className="h-11 w-full min-w-0 text-base [&>span]:min-w-0 [&>span]:truncate">
+              <SelectTrigger className="min-h-11 w-full min-w-0 text-base">
                 <SelectValue placeholder="Choose a client (optional)" />
               </SelectTrigger>
               <SelectContent>
@@ -405,7 +405,7 @@ export function CostForecaster() {
               <div className="flex w-24 flex-col gap-2">
                 <Label>Currency</Label>
                 <Select value={currency} onValueChange={setCurrency}>
-                  <SelectTrigger className="h-11 w-full min-w-0 text-base [&>span]:min-w-0 [&>span]:truncate">
+                  <SelectTrigger className="min-h-11 w-full min-w-0 text-base">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
