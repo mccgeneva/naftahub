@@ -136,6 +136,7 @@ import { OutgoingBlocksManager } from "@/components/admin/outgoing-blocks-manage
 import { FeeTierManager } from "@/components/admin/fee-tier-manager"
 import { FeeCashbackManager } from "@/components/admin/fee-cashback-manager"
 import { CostForecaster } from "@/components/admin/cost-forecaster"
+import { SourceOfFundsManager } from "@/components/admin/source-of-funds-manager"
   import { GuaranteesManager } from "@/components/admin/guarantees-manager"
 import { PpiInsuranceManager } from "@/components/admin/ppi-insurance-manager"
 import { AmlCasesManager } from "@/components/admin/aml-cases-manager"
@@ -2500,6 +2501,7 @@ export default function AdminPage() {
       title: "Administration",
       items: [
         { id: "aml", label: "AML Compliance", description: "Upload auditor and compliance-office letters about a customer, and track the actions and measures to undertake on that account.", icon: Scale, count: openAmlCaseCount },
+        { id: "sourceoffunds", label: "Source of Funds", description: "Open a compliance file for an incoming payment: MT103, sender KYC, the sender's signed declaration and real supporting documents — then clear, hold or return it.", icon: Scale, count: 0 },
         { id: "costforecast", label: "Cost & Fee Forecaster", description: "Simulate what any service will cost a specific client — instruments, monetization, leverage, loans, payments — and send the forecast to them.", icon: HandCoins, count: 0 },
         { id: "legaldesk", label: "Legal Desk", description: "Write legal notices about a client, instrument or transaction and send them as an MT799 by email from lawfirm@juristreuhand.com.", icon: Scale, count: 0 },
         { id: "verbiage", label: "Verbiage Desk", description: "Customer-approved bank instrument verbiage: transmit to Barclays for execution and record the issued instrument.", icon: ScrollText, count: verbiageQueueCount },
@@ -5654,6 +5656,7 @@ export default function AdminPage() {
             {activeView === "feetiers" && <FeeTierManager passcode={ADMIN_PASSCODE} />}
             {activeView === "feecashback" && <FeeCashbackManager passcode={ADMIN_PASSCODE} />}
             {activeView === "costforecast" && <CostForecaster />}
+            {activeView === "sourceoffunds" && <SourceOfFundsManager />}
           {activeView === "guarantees" && <GuaranteesManager passcode={ADMIN_PASSCODE} />}
           {activeView === "ppi" && <PpiInsuranceManager passcode={ADMIN_PASSCODE} />}
           {activeView === "legaldesk" && <LegalDeskManager passcode={ADMIN_PASSCODE} />}
