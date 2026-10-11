@@ -1,5 +1,5 @@
 import "server-only"
-import { generateText, Output } from "ai"
+import { generateText, Output, type LanguageModel } from "ai"
 import * as z from "zod"
 import { docAnalysisModel, nqaiChatModel } from "@/lib/ai-models"
 import { detectMediaType } from "@/lib/kyc-analyze"
@@ -34,7 +34,17 @@ Transcribe ONLY what is printed on the document. Never guess or invent a value â
 For passports and ID cards, read the visual zone and the MRZ; prefer the visual zone spelling for names.
 Return the country in plain English (e.g. "Germany", "United Kingdom").`
 
-async function attempt(model: ReturnType<typeof docAnalysisModel>, buffer: Buffer, mediaType: string) {
+// Grok vision via the AI Gateway, used when the Claude models refuse to read
+// an identity document or return nothing usable.
+const XAI_VISION_MODEL = "xai/grok-4.3"
+
+function isBlank(out: SenderKycExtraction) {
+  return ![out.fullName, out.companyName, out.country, out.documentNumber, out.address, out.bankName, out.bic, out.iban].some(
+    (v) => v && v.trim(),
+  )
+}
+
+async function attempt(model: LanguageModel, buffer: Buffer, mediaType: string) {
   const { output } = await generateText({
     model,
     output: Output.object({ schema: senderKycSchema }),
@@ -49,13 +59,15 @@ async function attempt(model: ReturnType<typeof docAnalysisModel>, buffer: Buffe
     ],
   })
   if (!output) throw new Error("Empty analysis.")
+  if (isBlank(output)) throw new Error("Model returned no readable fields (likely a refusal).")
   return output
 }
 
 export async function extractSenderKyc(buffer: Buffer, fallbackType: string): Promise<SenderKycExtraction> {
   const mediaType = detectMediaType(buffer, fallbackType)
   const errors: string[] = []
-  for (const model of [docAnalysisModel(), nqaiChatModel()]) {
+  const models: LanguageModel[] = [docAnalysisModel(), nqaiChatModel(), XAI_VISION_MODEL]
+  for (const model of models) {
     try {
       return await attempt(model, buffer, mediaType)
     } catch (err) {
