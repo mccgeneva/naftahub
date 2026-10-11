@@ -529,6 +529,32 @@ export function SourceOfFundsManager() {
             )}
 
             <fieldset disabled={locked} className="flex flex-col gap-6">
+              <div className="flex flex-col gap-3 rounded-md border border-primary/40 bg-primary/5 p-4">
+                <div className="flex flex-col gap-1">
+                  <h3 className="text-sm font-semibold">Upload sender KYC</h3>
+                  <p className="text-sm leading-relaxed text-muted-foreground">
+                    Passport, ID card, proof of address, company extract or bank letter (PDF or photo). The details
+                    printed on it fill the sender fields below and the document is added to this file.
+                  </p>
+                </div>
+                <input
+                  ref={kycInputRef}
+                  type="file"
+                  accept="application/pdf,image/*"
+                  className="hidden"
+                  onChange={(e) => uploadKycAndFill(e.target.files)}
+                />
+                <Button
+                  type="button"
+                  className="min-h-11 w-full"
+                  disabled={uploading || readingKyc}
+                  onClick={() => kycInputRef.current?.click()}
+                >
+                  <Upload className="h-4 w-4" aria-hidden />
+                  {uploading || readingKyc ? "Reading document…" : "Upload KYC & fill sender"}
+                </Button>
+              </div>
+
               <section className="flex flex-col gap-3">
                 <h3 className="text-sm font-semibold">1. Payment received</h3>
                 <div className="flex flex-col gap-2">
@@ -585,28 +611,15 @@ export function SourceOfFundsManager() {
 
               <section className="flex flex-col gap-3">
                 <h3 className="text-sm font-semibold">2. Sender (ordering customer)</h3>
-                <div className="flex flex-col gap-2 rounded-md border border-dashed border-border p-3">
-                  <p className="text-sm text-muted-foreground leading-relaxed">
-                    Upload the sender&apos;s passport, ID, proof of address or company extract — the details printed on it
-                    fill the fields below and the document is added to the file.
-                  </p>
-                  <input
-                    ref={kycInputRef}
-                    type="file"
-                    accept="application/pdf,image/*"
-                    className="hidden"
-                    onChange={(e) => uploadKycAndFill(e.target.files)}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="min-h-11 w-full sm:w-auto"
-                    disabled={uploading || readingKyc}
-                    onClick={() => kycInputRef.current?.click()}
-                  >
-                    {uploading || readingKyc ? "Reading document…" : "Upload KYC & fill sender"}
-                  </Button>
-                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 w-full sm:w-auto"
+                  disabled={uploading || readingKyc}
+                  onClick={() => kycInputRef.current?.click()}
+                >
+                  {uploading || readingKyc ? "Reading document…" : "Upload KYC & fill sender"}
+                </Button>
                 {(
                   [
                     ["senderName", "Name / company"],
