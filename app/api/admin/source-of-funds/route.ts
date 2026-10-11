@@ -23,6 +23,7 @@ type Payload =
   | { op: "decide"; pin: string; id: string; status: SofStatus; note?: string }
   | { op: "delete"; pin: string; id: string }
   | { op: "link"; pin: string; id: string; swiftMessageId: string | null }
+  | { op: "fromSwift"; pin: string; swiftMessageId: string }
 
 const STATUSES: SofStatus[] = ["open", "cleared", "hold", "returned"]
 const STATUS_LABEL: Record<SofStatus, string> = {
@@ -72,6 +73,51 @@ export async function POST(req: Request) {
         createdAt: m.createdAt,
       }))
       return NextResponse.json({ ok: true, files, clients, swiftMessages })
+    }
+
+    if (body.op === "fromSwift") {
+      const msgId = typeof body.swiftMessageId === "string" ? body.swiftMessageId : ""
+      const msg = msgId ? await getIncomingSwiftById(msgId) : undefined
+      if (!msg) return NextResponse.json({ ok: false, error: "Incoming payment not found." })
+      if (msg.creditedAt) return NextResponse.json({ ok: false, error: "That payment is already credited." })
+      if (!msg.userId) return NextResponse.json({ ok: false, error: "Assign the payment to a client first." })
+
+      const existing = (await listSourceOfFundsFiles()).find((f) => f.swiftMessageId === msgId)
+      if (existing) return NextResponse.json({ ok: true, file: existing, created: false })
+
+      const amountText = msg.amount ?? ""
+      const amount = Number(amountText.replace(/,/g, "").replace(/[^\d.]/g, "")) || 0
+      const currency =
+        (msg.currency || amountText.match(/[A-Z]{3}/)?.[0] || "EUR").toUpperCase().slice(0, 3)
+      const id = newId()
+      await saveSourceOfFundsFile(id, {
+        userId: msg.userId,
+        holderLabel: clean(msg.matchedAccountHolder ?? "", 200),
+        amount,
+        currency,
+        valueDate: clean(msg.valueDate ?? "", 20) || null,
+        senderName: clean(msg.orderingCustomer, 200),
+        senderCountry: "",
+        senderBank: clean(msg.senderBic, 200),
+        senderAccount: "",
+        reference: clean(msg.reference ?? "", 200),
+        declaration: { purpose: "", sourceOfFunds: "", relationship: "", signedBy: "", signedAt: null },
+        checklist: {
+          senderIdentityVerified: false,
+          sanctionsScreened: false,
+          documentsMatchPayment: false,
+          amountFitsPurpose: false,
+          declarationSigned: false,
+        },
+        documents: [],
+      })
+      const file = await linkSourceOfFundsFile(id, msgId)
+      void logActivity({
+        action: "Source of Funds — opened from incoming SWIFT",
+        category: "Administration / Compliance",
+        details: { fileId: id, swiftMessageId: msgId, client: msg.matchedAccountHolder, amount: amountText },
+      }).catch(() => null)
+      return NextResponse.json({ ok: true, file, created: true })
     }
 
     if (body.op === "link") {

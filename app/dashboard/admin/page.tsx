@@ -254,6 +254,17 @@ export default function AdminPage() {
   // opens that section directly once the panel is unlocked, so an admin lands
   // on the exact queue that needs action instead of the generic menu / the
   // wrong SWIFT surface. Runs once; never fights a later manual navigation.
+  useEffect(() => {
+    const onOpenView = (e: Event) => {
+      const view = (e as CustomEvent<{ view?: string }>).detail?.view
+      if (!view) return
+      setActiveView(view)
+      window.scrollTo({ top: 0, behavior: "smooth" })
+    }
+    window.addEventListener("admin:open-view", onOpenView)
+    return () => window.removeEventListener("admin:open-view", onOpenView)
+  }, [])
+
   const deepLinkedRef = useRef(false)
   useEffect(() => {
     if (!unlocked || deepLinkedRef.current) return

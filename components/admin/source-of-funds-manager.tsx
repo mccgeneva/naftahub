@@ -201,6 +201,26 @@ export function SourceOfFundsManager() {
     void load()
   }, [load])
 
+  useEffect(() => {
+    if (files.length === 0) return
+    let pending: string | null = null
+    try {
+      pending = sessionStorage.getItem("sof:open")
+    } catch {
+      return
+    }
+    if (!pending) return
+    const target = files.find((f) => f.id === pending)
+    if (!target) return
+    try {
+      sessionStorage.removeItem("sof:open")
+    } catch {
+      // ignore
+    }
+    openFile(target)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files])
+
   const current = useMemo(() => files.find((f) => f.id === editingId) ?? null, [files, editingId])
   const locked = !!current && (current.status === "cleared" || current.status === "returned")
   const openCount = files.filter((f) => f.status === "open" || f.status === "hold").length
@@ -676,6 +696,20 @@ export function SourceOfFundsManager() {
                           ? "This file is cleared, so the payment can now be credited."
                           : "The payment can only be credited once this file is cleared."}
                       </p>
+                      {current.status === "cleared" && linkedSwift && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="min-h-11 w-full gap-1.5 sm:w-auto"
+                          onClick={() =>
+                            window.dispatchEvent(
+                              new CustomEvent("admin:open-view", { detail: { view: "incomingswift" } }),
+                            )
+                          }
+                        >
+                          Return to Incoming SWIFT to authorize &amp; credit
+                        </Button>
+                      )}
                       {!locked && (
                         <Button
                           type="button"

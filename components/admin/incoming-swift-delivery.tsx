@@ -214,6 +214,44 @@ export function IncomingSwiftDelivery() {
     void listSelectableClients(ADMIN_PASSCODE).then(setClients)
   }, [])
 
+  const [sendingSof, setSendingSof] = useState<string | null>(null)
+
+  const sendToCompliance = async (m: IncomingSwiftMessage) => {
+    setSendingSof(m.id)
+    try {
+      const res = await fetch("/api/admin/source-of-funds", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ op: "fromSwift", pin: ADMIN_PASSCODE, swiftMessageId: m.id }),
+      })
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean
+        error?: string
+        created?: boolean
+        file?: { id: string }
+      }
+      if (!data.ok || !data.file) {
+        toast.error(data.error ?? "Could not open the compliance file.")
+        return
+      }
+      toast.success(
+        data.created
+          ? `Compliance file ${data.file.id} opened in Source of Funds.`
+          : `Opening compliance file ${data.file.id}.`,
+      )
+      try {
+        sessionStorage.setItem("sof:open", data.file.id)
+      } catch {
+        // ignore — the file is still listed in Source of Funds
+      }
+      window.dispatchEvent(new CustomEvent("admin:open-view", { detail: { view: "sourceoffunds" } }))
+    } catch {
+      toast.error("Could not reach the server.")
+    } finally {
+      setSendingSof(null)
+    }
+  }
+
   const handleCredit = async (m: IncomingSwiftMessage) => {
     setCrediting(m.id)
     try {
@@ -523,6 +561,30 @@ export function IncomingSwiftDelivery() {
                         }
                       >
                         <FileText className="h-4 w-4" /> View uploaded printout
+                      </Button>
+                    </div>
+                  )}
+                  {m.messageType !== "MT760" && (
+                    <div className="mt-3 flex flex-col gap-2 rounded-md border border-primary/40 bg-primary/10 p-3">
+                      <p className="text-sm leading-relaxed text-foreground">
+                        {sof
+                          ? sofBlocked
+                            ? "Step 2 of 3 — compliance review in progress. Clear the file, then come back here to credit."
+                            : "Step 3 of 3 — compliance cleared. Authorize and credit below."
+                          : "Step 1 of 3 — send this payment to Source of Funds for compliance and clearing before crediting."}
+                      </p>
+                      <Button
+                        size="sm"
+                        onClick={() => void sendToCompliance(m)}
+                        disabled={sendingSof === m.id}
+                        className="h-11 w-full gap-1.5 sm:w-auto sm:self-start"
+                      >
+                        {sendingSof === m.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <ShieldCheck className="h-4 w-4" />
+                        )}
+                        {sof ? "Open compliance file" : "Link & send to Source of Funds"}
                       </Button>
                     </div>
                   )}
