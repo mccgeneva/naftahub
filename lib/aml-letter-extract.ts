@@ -1,7 +1,7 @@
 import "server-only"
-import { generateText, Output } from "ai"
+import { generateText, Output, type LanguageModel } from "ai"
 import * as z from "zod"
-import { docAnalysisModel, nqaiChatModel } from "@/lib/ai-models"
+import { documentReaderModels } from "@/lib/ai-models"
 import { detectMediaType } from "@/lib/kyc-analyze"
 
 // Reads an auditor / compliance-office letter about a customer and proposes a
@@ -50,7 +50,7 @@ const PROMPT =
   "for (enhanced due diligence, document requests, restricting payments, freezing, monitoring, filing a " +
   "suspicious activity report, closing the account) as a separate measure."
 
-async function attempt(model: ReturnType<typeof docAnalysisModel>, buffer: Buffer, mediaType: string) {
+async function attempt(model: LanguageModel, buffer: Buffer, mediaType: string) {
   const { output } = await generateText({
     model,
     output: Output.object({ schema: amlLetterSchema }),
@@ -71,7 +71,7 @@ async function attempt(model: ReturnType<typeof docAnalysisModel>, buffer: Buffe
 export async function extractAmlLetter(buffer: Buffer, fallbackType: string): Promise<AmlLetterExtraction> {
   const mediaType = detectMediaType(buffer, fallbackType)
   const errors: string[] = []
-  for (const model of [docAnalysisModel(), nqaiChatModel()]) {
+  for (const model of documentReaderModels()) {
     try {
       return await attempt(model, buffer, mediaType)
     } catch (err) {

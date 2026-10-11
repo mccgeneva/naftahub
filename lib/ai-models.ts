@@ -1,5 +1,6 @@
 import "server-only"
 import { anthropic } from "@ai-sdk/anthropic"
+import type { LanguageModel } from "ai"
 
 /**
  * Single Anthropic backend for the whole platform.
@@ -35,4 +36,16 @@ export function nqaiChatModel() {
 /** The Anthropic document-analysis model instance (Opus) used for KYC. */
 export function docAnalysisModel() {
   return anthropic(DOC_ANALYSIS_MODEL_ID)
+}
+
+/**
+ * Grok vision via the AI Gateway — last-resort reader for document extraction
+ * when both Claude tiers decline to transcribe a file or return nothing usable.
+ * Used only for reading uploaded documents (OCR / field extraction).
+ */
+export const XAI_FALLBACK_MODEL: LanguageModel = "xai/grok-4.3"
+
+/** Ordered model chain for document reading: Opus → Sonnet → Grok. */
+export function documentReaderModels(): LanguageModel[] {
+  return [docAnalysisModel(), nqaiChatModel(), XAI_FALLBACK_MODEL]
 }

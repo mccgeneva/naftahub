@@ -13,9 +13,9 @@
 // ---------------------------------------------------------------------------
 
 import "server-only"
-import { generateText, Output } from "ai"
+import { generateText, Output, type LanguageModel } from "ai"
 import * as z from "zod"
-import { docAnalysisModel, nqaiChatModel } from "@/lib/ai-models"
+import { docAnalysisModel, nqaiChatModel, XAI_FALLBACK_MODEL, documentReaderModels } from "@/lib/ai-models"
 import { detectMediaType } from "@/lib/kyc-analyze"
 
 export const cardTransactionExtractSchema = z.object({
@@ -61,7 +61,7 @@ const EXTRACT_PROMPT =
 
 /** One structured-extraction attempt on a given model. Throws on failure. */
 async function structuredAttempt(
-  model: ReturnType<typeof docAnalysisModel>,
+  model: LanguageModel,
   buffer: Buffer,
   detected: string,
 ): Promise<CardTransactionExtraction> {
@@ -89,7 +89,7 @@ async function structuredAttempt(
  * object generation; the admin confirms/edits before recording.
  */
 async function plainTextAttempt(
-  model: ReturnType<typeof docAnalysisModel>,
+  model: LanguageModel,
   buffer: Buffer,
   detected: string,
 ): Promise<CardTransactionExtraction | null> {
@@ -185,7 +185,12 @@ export async function extractCardTransaction(buffer: Buffer, mediaType: string):
   } catch (err) {
     errors.push(`chat/structured: ${err instanceof Error ? err.message : String(err)}`)
   }
-  for (const model of [docAnalysisModel(), nqaiChatModel()]) {
+  try {
+    return await structuredAttempt(XAI_FALLBACK_MODEL, buffer, detected)
+  } catch (err) {
+    errors.push(`xai/structured: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  for (const model of documentReaderModels()) {
     try {
       const result = await plainTextAttempt(model, buffer, detected)
       if (result) return result

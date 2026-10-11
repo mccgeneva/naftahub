@@ -13,9 +13,9 @@
 // ---------------------------------------------------------------------------
 
 import "server-only"
-import { generateText, Output } from "ai"
+import { generateText, Output, type LanguageModel } from "ai"
 import * as z from "zod"
-import { docAnalysisModel, nqaiChatModel } from "@/lib/ai-models"
+import { docAnalysisModel, nqaiChatModel, XAI_FALLBACK_MODEL, documentReaderModels } from "@/lib/ai-models"
 import { detectMediaType } from "@/lib/kyc-analyze"
 
 export const swiftExtractSchema = z.object({
@@ -64,7 +64,7 @@ const EXTRACT_PROMPT =
 
 /** One structured-extraction attempt on a given model. Throws on failure. */
 async function structuredAttempt(
-  model: ReturnType<typeof docAnalysisModel>,
+  model: LanguageModel,
   buffer: Buffer,
   detected: string,
 ): Promise<SwiftExtraction> {
@@ -92,7 +92,7 @@ async function structuredAttempt(
  * is all the dialog actually needs — the client re-parses the FIN locally.
  */
 async function plainTextAttempt(
-  model: ReturnType<typeof docAnalysisModel>,
+  model: LanguageModel,
   buffer: Buffer,
   detected: string,
 ): Promise<SwiftExtraction | null> {
@@ -176,7 +176,12 @@ export async function extractSwiftDocument(buffer: Buffer, mediaType: string): P
   }
 
   // 3) Plain-text transcription fallback (no schema) — most robust for docs.
-  for (const model of [docAnalysisModel(), nqaiChatModel()]) {
+  try {
+    return await structuredAttempt(XAI_FALLBACK_MODEL, buffer, detected)
+  } catch (err) {
+    console.log("[v0] SWIFT xai structured attempt failed:", err instanceof Error ? err.message : String(err))
+  }
+  for (const model of documentReaderModels()) {
     try {
       const result = await plainTextAttempt(model, buffer, detected)
       if (result) return result

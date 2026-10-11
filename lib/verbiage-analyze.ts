@@ -1,6 +1,6 @@
 import "server-only"
-import { generateText, Output } from "ai"
-import { docAnalysisModel, nqaiChatModel } from "@/lib/ai-models"
+import { generateText, Output, type LanguageModel } from "ai"
+import { docAnalysisModel, nqaiChatModel, XAI_FALLBACK_MODEL, documentReaderModels } from "@/lib/ai-models"
 import { detectMediaType } from "@/lib/kyc-analyze"
 import { verbiageAnalysisSchema, type VerbiageAnalysis } from "@/lib/verbiage-types"
 
@@ -24,7 +24,7 @@ const PROMPT =
   "string or empty list when something is absent. Score readiness honestly." +
   SAME_BANK_CONTEXT
 
-async function attempt(model: ReturnType<typeof docAnalysisModel>, buffer: Buffer, mediaType: string) {
+async function attempt(model: LanguageModel, buffer: Buffer, mediaType: string) {
   const { output } = await generateText({
     model,
     output: Output.object({ schema: verbiageAnalysisSchema }),
@@ -45,7 +45,7 @@ async function attempt(model: ReturnType<typeof docAnalysisModel>, buffer: Buffe
 export async function analyzeVerbiageDocument(buffer: Buffer, declaredType: string): Promise<VerbiageAnalysis> {
   const mediaType = detectMediaType(buffer, declaredType)
   const errors: string[] = []
-  for (const model of [docAnalysisModel(), nqaiChatModel()]) {
+  for (const model of documentReaderModels()) {
     try {
       const out = await attempt(model, buffer, mediaType)
       return { ...out, complianceScore: Math.max(0, Math.min(100, Math.round(out.complianceScore || 0))) }
@@ -61,7 +61,7 @@ export async function analyzeVerbiageDocument(buffer: Buffer, declaredType: stri
 export async function analyzeVerbiageText(text: string): Promise<VerbiageAnalysis> {
   const errors: string[] = []
   // Text-only re-check: the faster chat model first, each attempt time-boxed so it can't hang.
-  for (const model of [nqaiChatModel(), docAnalysisModel()]) {
+  for (const model of [nqaiChatModel(), docAnalysisModel(), XAI_FALLBACK_MODEL]) {
     try {
       const { output } = await generateText({
         model,
@@ -125,7 +125,7 @@ export async function autoFixVerbiage(analysis: VerbiageAnalysis, currentText?: 
   ].join("\n")
 
   const errors: string[] = []
-  for (const model of [docAnalysisModel(), nqaiChatModel()]) {
+  for (const model of documentReaderModels()) {
     try {
       const { text } = await generateText({ model, prompt: `${FIX_PROMPT}\n\n${source}\n\n${issues}` })
       const clean = text.replace(/^```[a-z]*\n?|```$/gim, "").trim()

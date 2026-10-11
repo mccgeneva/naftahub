@@ -13,9 +13,9 @@
 // ---------------------------------------------------------------------------
 
 import "server-only"
-import { generateText, Output } from "ai"
+import { generateText, Output, type LanguageModel } from "ai"
 import * as z from "zod"
-import { docAnalysisModel } from "@/lib/ai-models"
+import { documentReaderModels } from "@/lib/ai-models"
 import { detectMediaType } from "@/lib/kyc-analyze"
 
 const DOC_KINDS = ["LOI", "ICPO", "RFQ", "SPA", "Other"] as const
@@ -78,8 +78,24 @@ export type LoiExtraction = z.infer<typeof loiSchema>
  */
 export async function extractLoiDocument(buffer: Buffer, mediaType: string): Promise<LoiExtraction> {
   const detected = detectMediaType(buffer, mediaType)
+  const errors: string[] = []
+  for (const model of documentReaderModels()) {
+    try {
+      const output = await readLoi(model, buffer, detected)
+      const hasContent = Object.values(output).some((v) => typeof v === "string" && v.trim())
+      if (!hasContent) throw new Error("Model returned no readable fields (likely a refusal).")
+      return output
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : String(err))
+    }
+  }
+  console.log("[v0] LOI extraction failed:", errors)
+  throw new Error("Could not read the LOI automatically.")
+}
+
+async function readLoi(model: LanguageModel, buffer: Buffer, detected: string): Promise<LoiExtraction> {
   const { output } = await generateText({
-    model: docAnalysisModel(),
+    model,
     output: Output.object({ schema: loiSchema }),
     messages: [
       {
