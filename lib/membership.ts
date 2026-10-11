@@ -25,7 +25,10 @@
 import { resolvePlatformTier, type PlatformTier } from "@/lib/platform-tier"
 
 export type MembershipTierId = "pro" | "avantgarde"
-export type MembershipStatus = "none" | "pending" | "approved" | "active" | "rejected"
+export type MembershipStatus = "none" | "pending" | "approved" | "active" | "rejected" | "revoked"
+
+/** Badge written when an administrator downgrades a client to Visitor. */
+export const VISITOR_ACCOUNT_BADGE = "Visitor Account"
 
 /** How the validated security deposit is recorded in the client's treasury. */
 export type DepositBasis = "cash" | "leverage"
@@ -63,6 +66,7 @@ export const MEMBERSHIP_STATUS_LABEL: Record<MembershipStatus, string> = {
   approved: "Awaiting deposit validation",
   active: "Active",
   rejected: "Declined",
+  revoked: "Downgraded to Visitor",
 }
 
 /** Map a membership tier id to the canonical account badge string. */

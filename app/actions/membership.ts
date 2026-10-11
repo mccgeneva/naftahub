@@ -25,15 +25,17 @@ import { adminActionAuthorized } from "@/lib/admin-auth"
 import { type UserProfile } from "@/lib/users"
 import { resolveCurrentSession, resolveAccountProfileById } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
-import { saveTreasuryRecordAdmin } from "@/app/actions/treasury"
+import { saveTreasuryRecordAdmin, releaseTreasuryDepositForDowngradeAdmin } from "@/app/actions/treasury"
 import { getDynamicUserById, updateDynamicUserProfile } from "@/lib/admin-users-db"
 import { notifyAllAdminsOfClientRequest } from "@/lib/notify-admins"
+import { insertNotification } from "@/lib/notifications-db"
 import {
   AVANTGARDE_REQUIRED_DEPOSIT,
   AVANTGARDE_LEVERAGE_CONTRIBUTION,
   AVANTGARDE_ACCOUNT_BADGE,
   badgeForTier,
   MEMBERSHIP_TIER_LABEL,
+  VISITOR_ACCOUNT_BADGE,
   type DepositBasis,
   type MembershipRecord,
   type MembershipStatus,
@@ -337,6 +339,118 @@ export async function rejectMembershipUpgradeAdmin(
   } catch (err) {
     console.log("[v0] rejectMembershipUpgradeAdmin failed:", (err as Error).message)
     return { ok: false, error: "The request could not be declined. Please try again." }
+  }
+}
+
+export type MembershipChangeTarget = "pro" | "visitor"
+
+/**
+ * Admin: downgrade an active membership (Avant-Garde → PRO / Visitor, or
+ * PRO → Visitor). The grant row drives the effective tier, and dynamic accounts
+ * also get their stored badge rewritten so every badge-derived surface matches.
+ * The client's own paid-in security deposit is released back to the Master
+ * Account (PRO keeps EUR 500,000; Visitor gets it all); the financed part is not.
+ */
+export async function changeMembershipTierAdmin(
+  passcode: string,
+  userId: string,
+  target: MembershipChangeTarget,
+  reason?: string,
+): Promise<AdminMembershipResult> {
+  let admin: UserProfile
+  try {
+    admin = await requireAdmin(passcode)
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+  try {
+    const rec = await readRecord(userId)
+    if (!rec || rec.status !== "active") {
+      return { ok: false, error: "Only an active membership can be downgraded." }
+    }
+    if (target === "pro" && rec.tier !== "avantgarde") {
+      return { ok: false, error: "This client is already on PRO." }
+    }
+
+    const fromLabel = MEMBERSHIP_TIER_LABEL[rec.tier]
+    const toLabel = target === "pro" ? "PRO" : "Visitor"
+    const decidedBy = `${admin.fullName} (${admin.company})`
+    const note = reason?.trim() || null
+    const now = new Date().toISOString()
+
+    if (target === "pro") {
+      await query(
+        `UPDATE membership_upgrades
+            SET tier = 'pro', status = 'active', decided_by = $2, note = $3, updated_at = $4
+          WHERE user_id = $1`,
+        [userId, decidedBy, note, now],
+      )
+    } else {
+      await query(
+        `UPDATE membership_upgrades
+            SET status = 'revoked', decided_by = $2, note = $3, updated_at = $4
+          WHERE user_id = $1`,
+        [userId, decidedBy, note, now],
+      )
+    }
+
+    let refunded = 0
+    try {
+      const release = await releaseTreasuryDepositForDowngradeAdmin(passcode, userId, target)
+      refunded = release.refunded
+    } catch (err) {
+      console.log("[v0] deposit release on downgrade failed:", (err as Error).message)
+    }
+    const refundText =
+      refunded > 0
+        ? ` EUR ${refunded.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} of your own security deposit has been credited back to your Master Account (the financed part is not paid out).`
+        : ""
+
+    try {
+      const dyn = await getDynamicUserById(userId)
+      if (dyn) {
+        await updateDynamicUserProfile(userId, {
+          profile: {
+            ...dyn.profile,
+            accountBadge: target === "pro" ? badgeForTier("pro") : VISITOR_ACCOUNT_BADGE,
+          },
+        })
+      }
+    } catch {
+      // Badge sync is best-effort; the grant row already drives the tier.
+    }
+
+    const target_ = await resolveAccountProfileById(userId)
+    try {
+      await insertNotification({
+        userId,
+        tone: "warning",
+        title: `Your membership is now ${toLabel}`,
+        body: `An administrator changed your membership from ${fromLabel} to ${toLabel}.${note ? ` Reason: ${note}.` : ""}${refundText} Contact MCC through Bankeka if you have questions.`,
+        href: "/dashboard/plans",
+      })
+    } catch {
+      // Notification is best-effort.
+    }
+
+    await logActivity({
+      action: `Administrator downgraded ${target_.fullName} from ${fromLabel} to ${toLabel}`,
+      category: "Administration",
+      user: decidedBy,
+      details: {
+        summary: `Administrator changed ${target_.fullName}'s membership from ${fromLabel} to ${toLabel}.${note ? ` Reason: ${note}.` : ""} Own security deposit refunded to the Master Account: EUR ${refunded.toFixed(2)} (financed part not paid out).`,
+        depositRefunded: refunded,
+        targetAccount: `${target_.fullName} — ${target_.email}`,
+        from: fromLabel,
+        to: toLabel,
+        reason: note ?? "(none provided)",
+      },
+    })
+
+    return { ok: true, requests: await listAllForAdmin() }
+  } catch (err) {
+    console.log("[v0] changeMembershipTierAdmin failed:", (err as Error).message)
+    return { ok: false, error: "The membership could not be changed. Please try again." }
   }
 }
 

@@ -1059,6 +1059,77 @@ export type FundDepositResult =
     }
   | { ok: false; error: string }
 
+export type DowngradeDepositRelease = { refunded: number; currency: string; entryId: string | null }
+
+/**
+ * Releases the client's own paid-in security deposit when an administrator
+ * downgrades their membership. Only `customer_contribution` (the client's own
+ * cash) is credited back; the MCC-financed part is never paid out, and SKR
+ * collateral stays where it is. PRO keeps a EUR 500,000 deposit, so only the
+ * excess above it is returned; Visitor returns everything and closes the account.
+ */
+export async function releaseTreasuryDepositForDowngradeAdmin(
+  passcode: string,
+  userId: string,
+  target: "pro" | "visitor",
+): Promise<DowngradeDepositRelease> {
+  if (!adminActionAuthorized(passcode)) throw new Error("Not authorized.")
+  const acct = await readAccount(userId)
+  if (acct.status === "none" || acct.status === "closed") {
+    return { refunded: 0, currency: DEPOSIT_CURRENCY, entryId: null }
+  }
+
+  const newRequired = target === "visitor" ? 0 : DEFAULT_REQUIRED_DEPOSIT
+  const contribution = Math.max(0, acct.customerContribution || 0)
+  const collateral = Math.max(0, acct.skrCollateral || 0)
+  const refund = round2(Math.max(0, contribution - newRequired))
+  const remainingContribution = round2(contribution - refund)
+  const now = new Date().toISOString()
+
+  if (target === "visitor") {
+    await query(
+      `UPDATE treasury_accounts
+          SET status = 'closed', required_deposit = 0, customer_contribution = 0,
+              financed_amount = 0, leverage_enabled = false, updated_at = $2
+        WHERE user_id = $1`,
+      [userId, now],
+    )
+  } else {
+    const financed = acct.leverageEnabled
+      ? round2(Math.max(0, newRequired - remainingContribution - collateral))
+      : 0
+    const secured = remainingContribution + collateral + financed >= newRequired - 0.01
+    await query(
+      `UPDATE treasury_accounts
+          SET profile = 'pro', required_deposit = $2, customer_contribution = $3,
+              financed_amount = $4, status = $5, updated_at = $6
+        WHERE user_id = $1`,
+      [userId, newRequired, remainingContribution, financed, secured ? "secured" : "shortfall", now],
+    )
+  }
+
+  if (refund <= 0.01) return { refunded: 0, currency: DEPOSIT_CURRENCY, entryId: null }
+
+  const entryId = `TRY-REFUND-${userId.slice(-10)}-${Date.now()}`
+  const ledgerOwnerId = await resolveDataOwnerIdFor(userId)
+  await upsertLedgerEntry(ledgerOwnerId, {
+    id: entryId,
+    direction: "credit",
+    amount: refund,
+    currency: DEPOSIT_CURRENCY,
+    status: "completed",
+    date: now,
+    counterparty: "MCC Capital — Treasury Security Deposit",
+    reference: entryId,
+    category: "Treasury Deposit Refund",
+    comment:
+      target === "visitor"
+        ? "Security deposit returned on downgrade to Visitor (own contribution only; the financed part is not paid out)."
+        : `Excess security deposit returned on downgrade to PRO (PRO keeps ${DEPOSIT_CURRENCY} ${DEFAULT_REQUIRED_DEPOSIT.toLocaleString("en-US")}; the financed part is not paid out).`,
+  })
+  return { refunded: refund, currency: DEPOSIT_CURRENCY, entryId }
+}
+
 export async function fundTreasuryDepositFromBalance(amountInput: number): Promise<FundDepositResult> {
   const session = await resolveCurrentSession()
   if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }

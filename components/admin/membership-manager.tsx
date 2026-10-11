@@ -10,7 +10,9 @@ import {
   Landmark,
   Clock,
   RefreshCw,
+  ArrowDownCircle,
 } from "lucide-react"
+import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -37,7 +39,9 @@ import {
   approveMembershipUpgradeAdmin,
   rejectMembershipUpgradeAdmin,
   validateMembershipDepositAdmin,
+  changeMembershipTierAdmin,
   type AdminMembershipView,
+  type MembershipChangeTarget,
 } from "@/app/actions/membership"
 
 const fmtEur = (value: number) => `EUR ${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`
@@ -54,6 +58,7 @@ const STATUS_TONE: Record<MembershipStatus, string> = {
   approved: "border-blue-500/30 bg-blue-500/10 text-blue-500",
   active: "border-green-500/30 bg-green-500/10 text-green-500",
   rejected: "border-red-500/30 bg-red-500/10 text-red-500",
+  revoked: "border-orange-500/30 bg-orange-500/10 text-orange-500",
 }
 
 export function MembershipManager() {
@@ -62,6 +67,9 @@ export function MembershipManager() {
   const [busyId, setBusyId] = useState<string | null>(null)
   // Per-request chosen deposit basis at validation time (default: full cash).
   const [basisById, setBasisById] = useState<Record<string, DepositBasis>>({})
+  const [downgradeId, setDowngradeId] = useState<string | null>(null)
+  const [downgradeTarget, setDowngradeTarget] = useState<MembershipChangeTarget>("pro")
+  const [downgradeReason, setDowngradeReason] = useState("")
 
   const load = async () => {
     setLoading(true)
@@ -115,9 +123,28 @@ export function MembershipManager() {
     )
   }
 
+  const openDowngrade = (r: AdminMembershipView) => {
+    setDowngradeId(r.userId)
+    setDowngradeTarget(r.tier === "avantgarde" ? "pro" : "visitor")
+    setDowngradeReason("")
+  }
+
+  const handleDowngrade = async (r: AdminMembershipView) => {
+    setBusyId(r.userId)
+    const res = await changeMembershipTierAdmin(ADMIN_PASSCODE, r.userId, downgradeTarget, downgradeReason)
+    setBusyId(null)
+    if (res.ok) setDowngradeId(null)
+    applyResult(
+      res,
+      `${r.fullName} is now ${downgradeTarget === "pro" ? "PRO" : "Visitor"}. Their own security deposit balance was credited back to the Master Account.`,
+    )
+  }
+
   const pending = requests.filter((r) => r.status === "pending")
   const approved = requests.filter((r) => r.status === "approved")
-  const decided = requests.filter((r) => r.status === "active" || r.status === "rejected")
+  const decided = requests.filter(
+    (r) => r.status === "active" || r.status === "rejected" || r.status === "revoked",
+  )
 
   return (
     <Card className="bg-card border-border">
@@ -267,15 +294,89 @@ export function MembershipManager() {
             >
               {decided.map((r) => (
                 <RequestRow key={r.userId} r={r}>
-                  <p className="text-xs text-muted-foreground">
-                    {r.status === "active"
-                      ? `Activated ${fmtDate(r.validatedAt)}${
-                          r.depositBasis
-                            ? ` · ${r.depositBasis === "leverage" ? "1:10 leverage" : "full cash"} deposit`
-                            : ""
-                        }`
-                      : `Declined${r.note ? ` · ${r.note}` : ""}`}
-                  </p>
+                  <div className="flex w-full flex-col gap-3">
+                    <p className="text-xs text-muted-foreground">
+                      {r.status === "active"
+                        ? `Activated ${fmtDate(r.validatedAt)}${
+                            r.depositBasis
+                              ? ` · ${r.depositBasis === "leverage" ? "1:10 leverage" : "full cash"} deposit`
+                              : ""
+                          }`
+                        : r.status === "revoked"
+                          ? `Downgraded to Visitor${r.note ? ` · ${r.note}` : ""}`
+                          : `Declined${r.note ? ` · ${r.note}` : ""}`}
+                    </p>
+
+                    {r.status === "active" && downgradeId !== r.userId && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="min-h-11 w-full sm:w-auto"
+                        onClick={() => openDowngrade(r)}
+                      >
+                        <ArrowDownCircle className="mr-1.5 h-4 w-4" />
+                        Downgrade membership
+                      </Button>
+                    )}
+
+                    {r.status === "active" && downgradeId === r.userId && (
+                      <div className="flex flex-col gap-3 rounded-lg border border-orange-500/30 bg-orange-500/5 p-3">
+                        <p className="text-sm font-medium text-foreground">
+                          Downgrade {r.fullName} from {MEMBERSHIP_TIER_LABEL[r.tier]}
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {r.tier === "avantgarde" && (
+                            <Button
+                              size="sm"
+                              variant={downgradeTarget === "pro" ? "default" : "outline"}
+                              className="min-h-11 flex-1"
+                              onClick={() => setDowngradeTarget("pro")}
+                            >
+                              To PRO
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            variant={downgradeTarget === "visitor" ? "default" : "outline"}
+                            className="min-h-11 flex-1"
+                            onClick={() => setDowngradeTarget("visitor")}
+                          >
+                            To Visitor
+                          </Button>
+                        </div>
+                        <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
+                          {downgradeTarget === "pro"
+                            ? `PRO keeps a ${fmtEur(500_000)} security deposit. Any of the client's own paid-in deposit above that is credited back to their Master Account.`
+                            : "The client's whole own paid-in security deposit is credited back to their Master Account and the Treasury account is closed."}{" "}
+                          The part financed by MCC is never paid out.
+                        </p>
+                        <Textarea
+                          value={downgradeReason}
+                          onChange={(e) => setDowngradeReason(e.target.value)}
+                          placeholder="Reason (optional, shown to the client)"
+                          className="min-h-20 text-base"
+                        />
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <Button
+                            className="min-h-11 flex-1"
+                            onClick={() => handleDowngrade(r)}
+                            disabled={busyId === r.userId}
+                          >
+                            {busyId === r.userId && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+                            Confirm downgrade to {downgradeTarget === "pro" ? "PRO" : "Visitor"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            className="min-h-11"
+                            onClick={() => setDowngradeId(null)}
+                            disabled={busyId === r.userId}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </RequestRow>
               ))}
             </Section>
