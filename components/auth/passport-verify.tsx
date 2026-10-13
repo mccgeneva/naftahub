@@ -89,7 +89,9 @@ export function PassportVerify({
       })
     } catch (err) {
       if (err instanceof FaceModelLoadError) {
-        setError("Couldn't load the document scanner. Check your connection and try again.")
+        setError(
+          "Couldn't load the document scanner. Please try again — if it keeps failing, open this page in Chrome or Safari (not an in-app or company-restricted browser), or try from your phone.",
+        )
       } else {
         setError("We couldn't read that image. Please choose a clear photo of your passport.")
       }

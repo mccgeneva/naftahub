@@ -10,6 +10,7 @@
 import type * as FaceApi from "@vladmandic/face-api"
 
 const MODEL_URL = "/models"
+const MODEL_CDN_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model"
 
 /** Error thrown when the face-api library or its model weights fail to load.
  *  Lets the UI show an environment-specific, actionable message (common in
@@ -41,11 +42,41 @@ async function ensureModels(): Promise<typeof FaceApi> {
       // cold-start wait to the slowest single file instead of the sum of all
       // three — a noticeable speed-up on mobile connections.
       modelsPromise = (async () => {
-        await Promise.all([
-          faceapi!.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-          faceapi!.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-          faceapi!.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
-        ])
+        const api = faceapi!
+        // Desktops/VMs/corporate PCs often have WebGL disabled or blocked, which
+        // makes the default backend fail to initialise. Fall back to the pure
+        // JS CPU backend so the scanner still works (slower, but functional).
+        // face-api's bundled `tf` typing omits the backend API, but the runtime
+        // object is the full tfjs core.
+        const tf = api.tf as unknown as {
+          setBackend: (name: string) => Promise<boolean>
+          ready: () => Promise<void>
+        }
+        let webglOk = false
+        try {
+          webglOk = await tf.setBackend("webgl")
+          if (webglOk) await tf.ready()
+        } catch {
+          webglOk = false
+        }
+        if (!webglOk) {
+          await tf.setBackend("cpu")
+          await tf.ready()
+        }
+        const loadAll = (base: string) =>
+          Promise.all([
+            api.nets.tinyFaceDetector.loadFromUri(base),
+            api.nets.faceLandmark68Net.loadFromUri(base),
+            api.nets.faceRecognitionNet.loadFromUri(base),
+          ])
+        // Some corporate proxies/firewalls block the large .bin weight files
+        // from our origin; retry once from the public CDN mirror of the same
+        // model version before giving up.
+        try {
+          await loadAll(MODEL_URL)
+        } catch {
+          await loadAll(MODEL_CDN_URL)
+        }
       })()
     }
     await modelsPromise
