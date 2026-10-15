@@ -1,5 +1,6 @@
 import "server-only"
 import { query } from "@/lib/db"
+import { mirrorAdminActionEmail } from "@/lib/admin-action-email"
 
 /**
  * Per-user notifications, stored in Neon so the server can push a message to a
@@ -72,6 +73,7 @@ export async function insertNotification(n: NewNotification): Promise<Notificati
      VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
     [id, n.userId, n.tone ?? "info", n.title, n.body, n.href ?? null],
   )
+  mirrorAdminActionEmail(n)
   return rowToNotification(rows[0])
 }
 
@@ -90,7 +92,9 @@ export async function insertNotificationOnce(id: string, n: NewNotification): Pr
      ON CONFLICT (id) DO NOTHING`,
     [id, n.userId, n.tone ?? "info", n.title, n.body, n.href ?? null],
   )
-  return (rowCount ?? 0) > 0
+  const created = (rowCount ?? 0) > 0
+  if (created) mirrorAdminActionEmail(n)
+  return created
 }
 
 export async function listNotificationsForUser(userId: string, limit = 30): Promise<NotificationRecord[]> {
