@@ -11,6 +11,7 @@ import { PlatformTierBanner } from "@/components/dashboard/platform-tier-banner"
 import { BankekaCard } from "@/components/dashboard/bankeka-card"
 import { SpotDealsHighlight } from "@/components/dashboard/spot-deals-highlight"
 import { ComplianceNotices } from "@/components/dashboard/compliance-notices"
+import { InsuranceCoverCard } from "@/components/dashboard/insurance-cover-card"
 
 export default function DashboardPage() {
   return (
@@ -26,6 +27,9 @@ export default function DashboardPage() {
 
       {/* Portfolio Stats */}
       <PortfolioOverview />
+
+      {/* PPI insurance cover the client has purchased (hidden when none) */}
+      <InsuranceCoverCard compact />
 
       {/* Quick Actions */}
       <QuickActions />

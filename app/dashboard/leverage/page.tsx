@@ -86,6 +86,7 @@ import { leverageApplicationCharges } from "@/lib/leverage-audit-fee"
 import { isLiveRequest } from "@/lib/live-request"
 import { Checkbox } from "@/components/ui/checkbox"
 import { GuaranteeScoreCard } from "@/components/dashboard/guarantee-score-card"
+import { InsuranceCoverCard } from "@/components/dashboard/insurance-cover-card"
 
 // Round to 2 dp for money settlement (mirrors the admin switch-off handler).
 function round2(n: number) {
@@ -1112,6 +1113,7 @@ export default function LeveragePage() {
 
       {/* Independent trust/risk score — reflects guarantees, leverage, exposure & payment history */}
       <GuaranteeScoreCard />
+      <InsuranceCoverCard />
 
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
