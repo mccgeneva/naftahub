@@ -669,8 +669,24 @@ export default function LeveragePage() {
   useEffect(() => {
     if (!hydrated || autoSelectedRef.current) return
     autoSelectedRef.current = true
-    if (myRequests.length > 0) setActiveTab("lines")
+    const wantsLines =
+      typeof window !== "undefined" && new URLSearchParams(window.location.search).get("tab") === "lines"
+    if (myRequests.length > 0 || wantsLines) setActiveTab("lines")
   }, [hydrated, myRequests.length])
+
+  // In-page "View my leverage lines" links (e.g. the PPI cover card) switch
+  // the tab and scroll to it, since navigating to the same URL is a no-op.
+  const tabsRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onTab = (e: Event) => {
+      const tab = (e as CustomEvent<string>).detail
+      if (!tab) return
+      setActiveTab(tab)
+      requestAnimationFrame(() => tabsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }))
+    }
+    window.addEventListener("nqai:leverage-tab", onTab)
+    return () => window.removeEventListener("nqai:leverage-tab", onTab)
+  }, [])
 
   const numericEquity = Number(equity.replace(/[^0-9.]/g, "")) || 0
   const numericRatio = Number(ratio) || LEVERAGE_RATIOS[0]
@@ -1165,7 +1181,7 @@ export default function LeveragePage() {
         />
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+      <Tabs ref={tabsRef} value={activeTab} onValueChange={setActiveTab} className="w-full scroll-mt-28">
         <TabsList>
           <TabsTrigger value="request">Request Leverage</TabsTrigger>
           <TabsTrigger value="lines">

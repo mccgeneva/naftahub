@@ -2,6 +2,7 @@
 
 import { useMemo } from "react"
 import Link from "next/link"
+import { usePathname } from "next/navigation"
 import { ShieldCheck, ChevronRight } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -41,6 +42,7 @@ function formatDate(iso: string) {
 }
 
 export function InsuranceCoverCard({ compact = false }: { compact?: boolean }) {
+  const pathname = usePathname()
   const { entries } = useLedger()
   const { requests } = useLeverageRequests()
 
@@ -132,7 +134,13 @@ export function InsuranceCoverCard({ compact = false }: { compact?: boolean }) {
           </div>
         ))}
         <Link
-          href="/dashboard/leverage"
+          href="/dashboard/leverage?tab=lines"
+          onClick={(e) => {
+            if (pathname === "/dashboard/leverage") {
+              e.preventDefault()
+              window.dispatchEvent(new CustomEvent("nqai:leverage-tab", { detail: "lines" }))
+            }
+          }}
           className="flex min-h-11 items-center justify-between rounded-md px-1 text-sm font-medium text-primary"
         >
           View my leverage lines
