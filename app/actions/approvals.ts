@@ -3331,6 +3331,19 @@ export async function reconcileMyApprovedCredits(): Promise<{ ok: boolean; appli
         rows.set(post.id, post)
         applied += 1
       }
+
+      // A held (locked) ROI row the engine no longer produces — e.g. forfeited
+      // by an early exit before its lock expired — must not linger as
+      // "locked ROI". Remove it so a terminated position shows no ROI.
+      const expected = new Set(posts.map((p) => p.id))
+      const roiPrefix = `TFUND-ROI-${req.id}-`
+      for (const [id, row] of Array.from(rows.entries())) {
+        if (id.startsWith(roiPrefix) && row.status === "hold" && row.direction === "credit" && !expected.has(id)) {
+          await deleteLedgerEntry(ownerId, id)
+          rows.delete(id)
+          applied += 1
+        }
+      }
     }
 
     // Leverage charges on the ledger, driven off the approval status (no
@@ -3989,7 +4002,7 @@ export async function reconcileTradingFundTermination(
     await notifyPositionChange(
       updated,
       "Treuhand termination reconciled",
-      `Your Treuhand AG Hedge Fund position "${updated.title}" has been terminated and reconciled by MCC Capital${input.note?.trim() ? ` ��� ${input.note.trim()}` : ""}. ${formatMoney(capital, currency)} capital was returned, less ${feeLine}. Net credited to your Master Account: ${formatMoney(net, currency)}.`,
+      `Your Treuhand AG Hedge Fund position "${updated.title}" has been terminated and reconciled by MCC Capital${input.note?.trim() ? ` ����� ${input.note.trim()}` : ""}. ${formatMoney(capital, currency)} capital was returned, less ${feeLine}. Net credited to your Master Account: ${formatMoney(net, currency)}.`,
     )
     await logPositionChange(
       updated,

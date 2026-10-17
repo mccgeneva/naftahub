@@ -327,6 +327,10 @@ export function buildTradingFundPosts(req: ApprovalRequest, now: Date = new Date
         u.setMonth(u.getMonth() + TRADING_FUND_ROI_LOCK_MONTHS)
         unlockMs = u.getTime()
       }
+      // Early exit before this ROI's lock expired → the locked ROI is forfeited
+      // (a terminated investment shows no locked ROI). ROI already unlocked
+      // before the exit was earned and stays credited.
+      if (leverageFunded && adminCloseMs != null && adminCloseMs < unlockMs) continue
       const locked = leverageFunded && nowMs < unlockMs
       posts.push({
         id: tradingFundRoiId(req.id, period.index),
