@@ -8,7 +8,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react"
 import type { jsPDF } from "jspdf"
-import { type GeneratedPdf, stampDemoNotice } from "@/lib/pdf-core"
+import { type GeneratedPdf, anonymizeDemoPdf, demoFilename, stampDemoNotice } from "@/lib/pdf-core"
 import { warmPdfLogos } from "@/lib/pdf-logos"
 import { useCurrentUser } from "@/lib/use-current-user"
 import { DEMO_USER_ID, UNKNOWN_USER_ID } from "@/lib/users"
@@ -102,7 +102,12 @@ export function PdfViewerProvider({ children }: { children: React.ReactNode }) {
 
   const preview = useCallback(
     (doc: jsPDF, filename: string, title?: string) => {
-      if (isDemo) stampDemoNotice(doc)
+      if (isDemo) {
+        anonymizeDemoPdf(doc)
+        stampDemoNotice(doc)
+        filename = demoFilename(filename)
+        title = "Demo document"
+      }
       traceDocument(doc, filename, title)
       setState({ doc, filename, title })
     },
@@ -111,9 +116,15 @@ export function PdfViewerProvider({ children }: { children: React.ReactNode }) {
 
   const show = useCallback(
     (generated: GeneratedPdf) => {
-      if (isDemo) stampDemoNotice(generated.doc)
-      traceDocument(generated.doc, generated.filename, generated.title)
-      setState({ doc: generated.doc, filename: generated.filename, title: generated.title })
+      let { filename, title } = generated
+      if (isDemo) {
+        anonymizeDemoPdf(generated.doc)
+        stampDemoNotice(generated.doc)
+        filename = demoFilename(filename)
+        title = "Demo document"
+      }
+      traceDocument(generated.doc, filename, title)
+      setState({ doc: generated.doc, filename, title })
     },
     [isDemo, traceDocument],
   )

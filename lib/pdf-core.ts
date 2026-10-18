@@ -100,6 +100,71 @@ const demoStamped = new WeakSet<object>()
  * dimensions rather than assuming a unit. The band is drawn last so it sits on
  * top of any footer the generator already placed.
  */
+// Brand / company identifiers that must never appear on a document produced by
+// the demo account (no trace or control over demo users). Order matters: the
+// longest, most specific names are replaced before the bare "MCC" fallback.
+const DEMO_BRAND_SCRUB: Array<[RegExp, string]> = [
+  [/[A-Za-z0-9._%+-]+@(?:mccgva|mccoilgas|mcc-capital|mccpetroli|naftahub|nqai)\.[A-Za-z.]+/gi, "info@example.com"],
+  [/(?:https?:\/\/)?(?:www\.)?(?:mccgva\.ch|mccoilgas\.com|mcc-capital\.com|mccpetroli\.com|naftahub\.[a-z.]+|nqai\.cloud)/gi, "www.example.com"],
+  [/Rue du Rh(?:\\\d{3}|ô|o)ne\s*\d*,?\s*(?:1204\s*)?(?:Geneva|Gen[eè]ve)?,?\s*(?:Switzerland)?/gi, "Demo Street 1, Demo City"],
+  [/MCC\s+(?:Oil\s*(?:\\\(|&|and)?\s*Gas|Petroli|Capital|Holding(?:\s+Hong\s+Kong\s+Corp\s+Ltd)?(?:\s*S\.?A\.?)?|Group|China|Banking\s*&\s*Trade\s*Platform)/gi, "Demo Company"],
+  [/MCC\s+oilGas/gi, "Demo Company"],
+  [/NAFTA\s*hub(?:\\\d{3}|®)?/gi, "Demo Platform"],
+  [/NQAi/g, "Demo"],
+  [/\bMCC\b/g, "DEMO"],
+]
+
+const demoAnonymized = new WeakSet<PdfDoc>()
+
+/**
+ * Strip every MCC / NAFTAhub brand mark, logo and company identifier from a
+ * generated document so the demo account can only ever produce ANONYMOUS
+ * paperwork. Runs on the finished jsPDF content streams (the single chokepoint
+ * in the PDF viewer), so it covers every generator without per-file changes:
+ *  - all embedded images (logos, brand marks) are removed,
+ *  - brand names, company names, Geneva address, emails and domains are
+ *    replaced with neutral placeholders,
+ *  - the document metadata is neutralised.
+ */
+export function anonymizeDemoPdf(doc: PdfDoc): void {
+  if (demoAnonymized.has(doc)) return
+  try {
+    const pages = (doc.internal as unknown as { pages?: unknown[] }).pages
+    if (Array.isArray(pages)) {
+      for (const page of pages) {
+        if (!Array.isArray(page)) continue
+        for (let i = 0; i < page.length; i++) {
+          let line = page[i]
+          if (typeof line !== "string") continue
+          // Drop image XObject draws (every logo / brand mark is an image).
+          if (/\/I\d+\s+Do\b/.test(line)) {
+            line = line.replace(/\/I\d+\s+Do\b/g, "")
+          }
+          for (const [re, rep] of DEMO_BRAND_SCRUB) line = line.replace(re, rep)
+          page[i] = line
+        }
+      }
+    }
+    doc.setProperties({
+      title: "Demo document",
+      subject: "Demo document",
+      author: "Demo",
+      creator: "Demo",
+      keywords: "demo",
+    })
+  } catch {
+    // Anonymisation is best-effort; the viewer also disables every export path
+    // for the demo account, so a failure here never leaks a usable file.
+  }
+  demoAnonymized.add(doc)
+}
+
+/** Neutral filename for a demo document (no brand prefix). */
+export function demoFilename(filename: string): string {
+  const scrubbed = filename.replace(/MCC|NAFTAhub|NQAi/gi, "").replace(/^[-_\s]+/, "")
+  return `DEMO-${scrubbed || "document.pdf"}`
+}
+
 export function stampDemoNotice(doc: PdfDoc, message: string = DEMO_DOCUMENT_NOTICE): void {
   if (demoStamped.has(doc)) return
 
