@@ -96,6 +96,7 @@ const navGroups: NavGroup[] = [
         logo: "/images/naftahub-logo.png",
       },
       { title: "NAFTAhub Trading", href: "/dashboard/trading", icon: Cpu, logo: "/images/nqai-logo.png", badge: "cTrader" },
+      { title: "Trading Desk", href: "/dashboard/desk", icon: TrendingUp, badge: "Desk" },
       { title: "SWIFT Services", href: "/dashboard/swift", icon: Globe },
       { title: "Bank Instruments", href: "/dashboard/instruments", icon: FileText, badge: "New" },
       { title: "SKR Trading", href: "/dashboard/skr", icon: ShieldCheck, badge: "SKR" },

@@ -73,6 +73,7 @@ export const DASHBOARD_SECTIONS: DashboardSection[] = [
   { key: "debits", label: "Debits & Financing", path: "/dashboard/debits", group: "Project Funding" },
 
   { key: "trading", label: "NAFTAhub Trading", path: "/dashboard/trading", group: "Trading & Instruments" },
+  { key: "desk", label: "Trading Desk", path: "/dashboard/desk", group: "Trading & Instruments" },
   { key: "swift", label: "SWIFT Services", path: "/dashboard/swift", group: "Trading & Instruments" },
   { key: "instruments", label: "Bank Instruments", path: "/dashboard/instruments", group: "Trading & Instruments" },
   { key: "skr", label: "SKR Trading", path: "/dashboard/skr", group: "Trading & Instruments" },

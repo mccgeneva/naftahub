@@ -842,6 +842,42 @@ export default function TradingPage() {
     setLots("0.10")
   }
 
+  // Trading Desk hand-off: /dashboard/trading?ticket=SYM&side=LONG opens the
+  // real order ticket, so desk orders run through this engine's margin rules.
+  const deskTicketRef = useRef(false)
+  useEffect(() => {
+    if (deskTicketRef.current || typeof window === "undefined") return
+    const params = new URLSearchParams(window.location.search)
+    const sym = params.get("ticket")?.toUpperCase()
+    if (!sym) {
+      deskTicketRef.current = true
+      return
+    }
+    const q = quotes[sym]
+    const known = signalInstruments.find((s) => s.symbol === sym) ?? metaBySymbol.get(sym)
+    if (!known && !q) return
+    deskTicketRef.current = true
+    const side = params.get("side") === "SHORT" ? "SHORT" : "LONG"
+    const instrument: Instrument = known
+      ? q
+        ? { ...known, price: q.price, change: q.changePct, live: true }
+        : known
+      : {
+          symbol: sym,
+          name: sym,
+          category: "Equities",
+          price: q!.price,
+          decimals: 2,
+          change: q!.changePct,
+          live: true,
+          ...deriveSignal(q!.changePct, sym),
+        }
+    setCtraderView(true)
+    openTrade(instrument, side)
+    window.history.replaceState(null, "", window.location.pathname)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quotes, signalInstruments])
+
   const confirmTrade = () => {
     if (!tradeTarget) return
     const volume = parseFloat(lots) || 0
