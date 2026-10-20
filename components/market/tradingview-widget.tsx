@@ -41,13 +41,16 @@ export function TradingViewWidget({
     script.src = `https://s3.tradingview.com/external-embedding/${scriptSrc}`
     script.type = "text/javascript"
     script.async = true
-    script.innerHTML = JSON.stringify(config)
+    script.innerHTML = configKey
     container.appendChild(script)
 
     return () => {
       container.innerHTML = ""
     }
-  }, [scriptSrc, configKey, config])
+    // Keyed on the serialised config only: a fresh `config` object on every
+    // parent re-render (e.g. live-quote polling) must not rebuild the widget,
+    // or any open search/compare dialog inside it is wiped after a few seconds.
+  }, [scriptSrc, configKey])
 
   return (
     <div
