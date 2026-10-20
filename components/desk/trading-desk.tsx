@@ -32,6 +32,8 @@ import {
 } from "@/components/desk/desk-panels"
 import { BankInstrumentsPanel, CompanySearchPanel, HeadlinesPanel } from "@/components/desk/desk-lookup-panels"
 import { FunctionPanel } from "@/components/desk/desk-function-panel"
+import { InstrumentInspector } from "@/components/desk/instrument-inspector"
+import { ISIN_PATTERN } from "@/lib/instrument-inspection"
 import { parseDeskCommand, type DeskFn, type DeskFnView } from "@/lib/desk-functions"
 import { cn } from "@/lib/utils"
 
@@ -105,6 +107,14 @@ export function TradingDesk() {
   const [fnView, setFnView] = useState<DeskFnView>("MENU")
   const [headlineQuery, setHeadlineQuery] = useState({ q: "", n: 0 })
   const [searchQuery, setSearchQuery] = useState({ q: "", n: 0 })
+  const [inspectIsin, setInspectIsin] = useState<string | null>(null)
+  const openInspector = useCallback(
+    (isin: string) => {
+      setInspectIsin(isin.toUpperCase())
+      log("Desk instrument inspector opened", { isin: isin.toUpperCase() })
+    },
+    [log],
+  )
 
   const symbols = useMemo(() => {
     const set = new Set(DESK_UNIVERSE.map((i) => i.symbol))
@@ -174,6 +184,12 @@ export function TradingDesk() {
       return
     }
     setCommand("")
+    const isinCandidate = raw.replace(/\s+/g, "").toUpperCase()
+    if (ISIN_PATTERN.test(isinCandidate)) {
+      openInspector(isinCandidate)
+      setCmdStatus({ tone: "ok", text: `${isinCandidate} opened in the instrument inspector.` })
+      return
+    }
     if (raw.startsWith("/")) {
       const name = raw.slice(1).toLowerCase()
       const panel = DESK_PANELS.find((p) => p.id === name || p.label.toLowerCase() === name)
@@ -251,10 +267,16 @@ export function TradingDesk() {
         return <MessagesPanel symbol={layout.symbol} log={log} />
       case "search":
         return (
-          <CompanySearchPanel key={`s${searchQuery.n}`} initialQuery={searchQuery.q} onLoad={loadSecurity} log={log} />
+          <CompanySearchPanel
+            key={`s${searchQuery.n}`}
+            initialQuery={searchQuery.q}
+            onLoad={loadSecurity}
+            onInspect={openInspector}
+            log={log}
+          />
         )
       case "instruments":
-        return <BankInstrumentsPanel log={log} />
+        return <BankInstrumentsPanel log={log} onInspect={openInspector} />
       case "headlines":
         return (
           <HeadlinesPanel
@@ -455,8 +477,17 @@ export function TradingDesk() {
       </div>
 
       <p className="hidden font-mono text-[10px] text-muted-foreground lg:block">
-        F1–F12 panels · MENU lists all codes · Esc restore · type a security or code then GO · layout saves automatically
+        F1–F12 panels · MENU lists all codes · Esc restore · type a security, ISIN or code then GO · layout saves
+        automatically
       </p>
+
+      <InstrumentInspector
+        isin={inspectIsin}
+        holderName={user.fullName || user.email || undefined}
+        onClose={() => setInspectIsin(null)}
+        onLoad={loadSecurity}
+        log={log}
+      />
     </div>
   )
 }

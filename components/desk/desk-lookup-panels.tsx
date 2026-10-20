@@ -84,16 +84,19 @@ type FigiRecord = {
 
 export function CompanySearchPanel({
   onLoad,
+  onInspect,
   log,
   initialQuery = "",
 }: {
   onLoad: (s: string) => void
+  onInspect: (isin: string) => void
   log: DeskLog
   initialQuery?: string
 }) {
   const [term, setTerm] = useState(initialQuery)
   const q = useDebounced(term.trim())
   const ready = q.length >= 2
+  const typedIsin = ISIN_RE.test(q.toUpperCase()) ? q.toUpperCase() : null
 
   const listed = useSWR<{ results: ListedResult[] }>(
     ready ? `/api/market/search?q=${encodeURIComponent(q)}` : null,
@@ -133,6 +136,8 @@ export function CompanySearchPanel({
         {ready && !loading && listedRows.length === 0 && figiRows.length === 0 && (
           <Hint>No listed security matches “{q}”.</Hint>
         )}
+
+        {typedIsin && <InspectButton isin={typedIsin} onInspect={onInspect} />}
 
         {listedRows.length > 0 && (
           <Section title={`Listed securities · ${listedRows.length}`}>
@@ -232,7 +237,20 @@ function compactMoney(v: number, ccy: string) {
   }
 }
 
-export function BankInstrumentsPanel({ log }: { log: DeskLog }) {
+function InspectButton({ isin, onInspect }: { isin: string; onInspect: (isin: string) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onInspect(isin)}
+      className="flex min-h-12 w-full items-center justify-between gap-3 border-b border-border bg-primary px-3 py-2 text-left font-mono text-sm font-semibold text-primary-foreground"
+    >
+      <span className="truncate">Inspect {isin}</span>
+      <span className="shrink-0 text-[11px] uppercase">Open ›</span>
+    </button>
+  )
+}
+
+export function BankInstrumentsPanel({ log, onInspect }: { log: DeskLog; onInspect: (isin: string) => void }) {
   const [term, setTerm] = useState("")
   const q = useDebounced(term.trim())
   const upper = q.toUpperCase()
@@ -255,6 +273,7 @@ export function BankInstrumentsPanel({ log }: { log: DeskLog }) {
     <div className="flex h-full min-h-0 flex-col">
       <SearchBox value={term} onChange={setTerm} placeholder="ISIN, bank, SBLC, BG, MTN…" label="Search bank instruments" />
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {isIsin && <InspectButton isin={upper} onInspect={onInspect} />}
         {isIsin && (
           <Section title={`ISIN check · ${upper}`}>
             <div className="px-3 py-2 text-sm">
@@ -322,6 +341,15 @@ export function BankInstrumentsPanel({ log }: { log: DeskLog }) {
                     )}
                     {r.assignable && <span className="rounded-sm border border-border px-1.5 py-0.5">Assignable</span>}
                     {r.monetizable && <span className="rounded-sm border border-border px-1.5 py-0.5">Monetizable</span>}
+                    {ISIN_RE.test(r.isin.toUpperCase()) && (
+                      <button
+                        type="button"
+                        onClick={() => onInspect(r.isin)}
+                        className="ml-auto inline-flex min-h-9 items-center px-1 font-semibold text-primary"
+                      >
+                        Inspect ›
+                      </button>
+                    )}
                     <Link
                       href="/dashboard/instruments"
                       onClick={() => log("Desk opened bank instrument", { isin: r.isin, type: r.type })}
