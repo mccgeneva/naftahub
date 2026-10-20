@@ -190,11 +190,11 @@ export function TradingDesk() {
   const decimals = DESK_UNIVERSE.find((i) => i.symbol === layout.symbol)?.decimals ?? 2
 
   return (
-    <div className="flex min-h-[calc(100dvh-8rem)] flex-col gap-3">
-      <header className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+    <div className="terminal-desk -m-4 flex min-h-[calc(100dvh-8rem)] flex-col gap-3 p-3 md:-m-6 md:p-4">
+      <header className="flex flex-col gap-2 border-b border-border pb-2 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-2">
           <Terminal className="size-5 text-primary" aria-hidden />
-          <h1 className="text-balance text-lg font-semibold text-foreground">Trading Desk</h1>
+          <h1 className="text-balance text-lg font-semibold uppercase tracking-wider text-foreground">Trading Desk</h1>
           <span className="rounded bg-primary px-1.5 py-0.5 font-mono text-[10px] font-semibold text-primary-foreground">
             LIVE
           </span>

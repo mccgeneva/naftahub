@@ -93,6 +93,41 @@
   --gold-foreground: oklch(0.14 0.01 60);
 }
 
+/* Terminal skin scoped to the Trading Desk: black screen, amber phosphor text, orange function keys. */
+.terminal-desk {
+  --background: oklch(0 0 0);
+  --foreground: oklch(0.82 0.16 70);
+  --card: oklch(0.08 0 0);
+  --card-foreground: oklch(0.82 0.16 70);
+  --popover: oklch(0.1 0 0);
+  --popover-foreground: oklch(0.82 0.16 70);
+  --primary: oklch(0.72 0.19 52);
+  --primary-foreground: oklch(0 0 0);
+  --secondary: oklch(0.14 0 0);
+  --secondary-foreground: oklch(0.82 0.16 70);
+  --muted: oklch(0.12 0 0);
+  --muted-foreground: oklch(0.62 0.1 70);
+  --accent: oklch(0.72 0.19 52);
+  --accent-foreground: oklch(0 0 0);
+  --border: oklch(0.26 0.05 60);
+  --input: oklch(0.12 0 0);
+  --ring: oklch(0.72 0.19 52);
+  --radius: 0.125rem;
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.terminal-desk h1,
+.terminal-desk h2,
+.terminal-desk h3,
+.terminal-desk button,
+.terminal-desk select {
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
 @theme inline {
   --font-sans: 'Inter', 'Geist', 'Geist Fallback', system-ui, sans-serif;
   --font-mono: 'Geist Mono', 'Geist Mono Fallback', monospace;
