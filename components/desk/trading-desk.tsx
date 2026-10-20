@@ -30,6 +30,7 @@ import {
   type AssetClass,
   type DeskLog,
 } from "@/components/desk/desk-panels"
+import { BankInstrumentsPanel, CompanySearchPanel, HeadlinesPanel } from "@/components/desk/desk-lookup-panels"
 import { cn } from "@/lib/utils"
 
 const ASSET_KEYS: Array<{ id: AssetClass | "All"; code: string }> = [
@@ -129,10 +130,10 @@ export function TradingDesk() {
     [layout.slots, update],
   )
 
-  // F1–F8 place the matching function into the focused panel; Esc restores the grid.
+  // F1–F11 place the matching function into the focused panel; Esc restores the grid.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const m = /^F([1-8])$/.exec(e.key)
+      const m = /^F([1-9]|1[01])$/.exec(e.key)
       if (m) {
         e.preventDefault()
         const panel = DESK_PANELS[Number(m[1]) - 1].id
@@ -183,6 +184,12 @@ export function TradingDesk() {
         return <AlertsPanel book={book} quotes={quotes} />
       case "messages":
         return <MessagesPanel symbol={layout.symbol} log={log} />
+      case "search":
+        return <CompanySearchPanel onLoad={loadSecurity} log={log} />
+      case "instruments":
+        return <BankInstrumentsPanel log={log} />
+      case "headlines":
+        return <HeadlinesPanel symbol={layout.symbol} onLoad={loadSecurity} log={log} />
     }
   }
 
@@ -227,7 +234,7 @@ export function TradingDesk() {
           id="desk-cmd"
           value={command}
           onChange={(e) => setCommand(e.target.value)}
-          placeholder="AAPL <GO> · /chart · /risk"
+          placeholder="AAPL <GO> · /companies · /instruments"
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="characters"
@@ -354,7 +361,7 @@ export function TradingDesk() {
       </div>
 
       <p className="hidden font-mono text-[10px] text-muted-foreground lg:block">
-        F1–F8 functions · Esc restore · type a security then GO · layout saves automatically
+        F1–F11 functions · Esc restore · type a security then GO · layout saves automatically
       </p>
     </div>
   )

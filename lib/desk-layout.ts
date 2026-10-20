@@ -9,6 +9,9 @@ export const DESK_PANELS = [
   { id: "risk", label: "Risk", key: "F6", desc: "Exposure, margin, trust score" },
   { id: "alerts", label: "Alerts", key: "F7", desc: "Price alerts watch" },
   { id: "messages", label: "Messages", key: "F8", desc: "Desk messaging" },
+  { id: "search", label: "Companies", key: "F9", desc: "Listed companies & FIGI lookup" },
+  { id: "instruments", label: "Instruments", key: "F10", desc: "Bank instruments & ISIN check" },
+  { id: "headlines", label: "Headlines", key: "F11", desc: "Search news by keyword" },
 ] as const
 
 export type DeskPanelId = (typeof DESK_PANELS)[number]["id"]
