@@ -98,6 +98,8 @@ export function TradingDesk() {
   const [maximized, setMaximized] = useState<number | null>(null)
   const [assetClass, setAssetClass] = useState<AssetClass | "All">("All")
   const [command, setCommand] = useState("")
+  const [cmdStatus, setCmdStatus] = useState<{ tone: "ok" | "info" | "error"; text: string } | null>(null)
+  const cmdInputRef = useRef<HTMLInputElement>(null)
 
   const symbols = useMemo(() => {
     const set = new Set(DESK_UNIVERSE.map((i) => i.symbol))
@@ -148,22 +150,47 @@ export function TradingDesk() {
     return () => window.removeEventListener("keydown", onKey)
   }, [visible, focusSlot, setSlotPanel])
 
+  const showPanel = useCallback(
+    (panel: DeskPanelId) => {
+      const shown = visible.indexOf(panel)
+      if (shown >= 0) setActiveSlot(shown)
+      else setSlotPanel(focusSlot, panel)
+    },
+    [visible, focusSlot, setSlotPanel],
+  )
+
   // Command line: "<SECURITY> <GO>" loads a security, "/<function>" opens one.
+  // Every path gives visible feedback so GO never looks dead.
   const runCommand = () => {
     const raw = command.trim()
+    if (!raw) {
+      setCmdStatus({ tone: "info", text: "Type a security (e.g. AAPL, EURUSD, HSBC) or /companies, /instruments, /headlines, then GO." })
+      cmdInputRef.current?.focus()
+      return
+    }
     setCommand("")
-    if (!raw) return
     if (raw.startsWith("/")) {
       const name = raw.slice(1).toLowerCase()
       const panel = DESK_PANELS.find((p) => p.id === name || p.label.toLowerCase() === name)
-      if (panel) {
-        const shown = visible.indexOf(panel.id)
-        if (shown >= 0) setActiveSlot(shown)
-        else setSlotPanel(focusSlot, panel.id)
+      if (!panel) {
+        setCmdStatus({
+          tone: "error",
+          text: `Unknown function "${raw}". Try: ${DESK_PANELS.map((p) => "/" + p.label.toLowerCase()).join(" ")}`,
+        })
+        return
       }
+      showPanel(panel.id)
+      setCmdStatus({ tone: "ok", text: `${panel.key} ${panel.label} opened.` })
       return
     }
-    loadSecurity(raw.replace(/\s*<?GO>?$/i, ""))
+    const sym = raw.replace(/\s*<?GO>?$/i, "").trim().toUpperCase()
+    if (!sym) return
+    if (sym !== layout.symbol) loadSecurity(sym)
+    showPanel("chart")
+    setCmdStatus({
+      tone: "ok",
+      text: sym === layout.symbol ? `${sym} is already loaded — showing chart.` : `${sym} loaded into chart, news and ticket.`,
+    })
   }
 
   const renderPanel = (id: DeskPanelId) => {
@@ -231,9 +258,14 @@ export function TradingDesk() {
           Desk command
         </label>
         <input
+          ref={cmdInputRef}
           id="desk-cmd"
           value={command}
-          onChange={(e) => setCommand(e.target.value)}
+          onChange={(e) => {
+            setCommand(e.target.value)
+            if (cmdStatus) setCmdStatus(null)
+          }}
+          enterKeyHint="go"
           placeholder="AAPL <GO> · /companies · /instruments"
           autoComplete="off"
           autoCorrect="off"
@@ -245,6 +277,18 @@ export function TradingDesk() {
           GO
         </button>
       </form>
+      {cmdStatus && (
+        <p
+          role="status"
+          aria-live="polite"
+          className={cn(
+            "-mt-1 px-1 font-mono text-xs leading-relaxed",
+            cmdStatus.tone === "error" ? "text-red-500" : cmdStatus.tone === "ok" ? "text-emerald-500" : "text-muted-foreground",
+          )}
+        >
+          {cmdStatus.text}
+        </p>
+      )}
 
       {/* Asset-class keys + tile count */}
       <div className="flex flex-wrap items-center gap-2">
