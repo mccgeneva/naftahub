@@ -82,8 +82,16 @@ type FigiRecord = {
   marketSector?: string
 }
 
-export function CompanySearchPanel({ onLoad, log }: { onLoad: (s: string) => void; log: DeskLog }) {
-  const [term, setTerm] = useState("")
+export function CompanySearchPanel({
+  onLoad,
+  log,
+  initialQuery = "",
+}: {
+  onLoad: (s: string) => void
+  log: DeskLog
+  initialQuery?: string
+}) {
+  const [term, setTerm] = useState(initialQuery)
   const q = useDebounced(term.trim())
   const ready = q.length >= 2
 
@@ -354,12 +362,14 @@ export function HeadlinesPanel({
   symbol,
   onLoad,
   log,
+  initialQuery = "",
 }: {
   symbol: string
   onLoad: (s: string) => void
   log: DeskLog
+  initialQuery?: string
 }) {
-  const [term, setTerm] = useState("")
+  const [term, setTerm] = useState(initialQuery)
   const typed = useDebounced(term.trim())
   const q = typed.length >= 2 ? typed : symbol.replace("/", "")
 

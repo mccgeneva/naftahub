@@ -31,6 +31,8 @@ import {
   type DeskLog,
 } from "@/components/desk/desk-panels"
 import { BankInstrumentsPanel, CompanySearchPanel, HeadlinesPanel } from "@/components/desk/desk-lookup-panels"
+import { FunctionPanel } from "@/components/desk/desk-function-panel"
+import { parseDeskCommand, type DeskFn, type DeskFnView } from "@/lib/desk-functions"
 import { cn } from "@/lib/utils"
 
 const ASSET_KEYS: Array<{ id: AssetClass | "All"; code: string }> = [
@@ -100,6 +102,9 @@ export function TradingDesk() {
   const [command, setCommand] = useState("")
   const [cmdStatus, setCmdStatus] = useState<{ tone: "ok" | "info" | "error"; text: string } | null>(null)
   const cmdInputRef = useRef<HTMLInputElement>(null)
+  const [fnView, setFnView] = useState<DeskFnView>("MENU")
+  const [headlineQuery, setHeadlineQuery] = useState({ q: "", n: 0 })
+  const [searchQuery, setSearchQuery] = useState({ q: "", n: 0 })
 
   const symbols = useMemo(() => {
     const set = new Set(DESK_UNIVERSE.map((i) => i.symbol))
@@ -135,7 +140,7 @@ export function TradingDesk() {
   // F1–F11 place the matching function into the focused panel; Esc restores the grid.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const m = /^F([1-9]|1[01])$/.exec(e.key)
+      const m = /^F([1-9]|1[0-2])$/.exec(e.key)
       if (m) {
         e.preventDefault()
         const panel = DESK_PANELS[Number(m[1]) - 1].id
@@ -164,7 +169,7 @@ export function TradingDesk() {
   const runCommand = () => {
     const raw = command.trim()
     if (!raw) {
-      setCmdStatus({ tone: "info", text: "Type a security (e.g. AAPL, EURUSD, HSBC) or /companies, /instruments, /headlines, then GO." })
+      setCmdStatus({ tone: "info", text: "Type a security (AAPL, CL1 CMDTY) or a code (TOP, WEI, GLCO, ECO, MENU), then GO." })
       cmdInputRef.current?.focus()
       return
     }
@@ -183,14 +188,47 @@ export function TradingDesk() {
       setCmdStatus({ tone: "ok", text: `${panel.key} ${panel.label} opened.` })
       return
     }
-    const sym = raw.replace(/\s*<?GO>?$/i, "").trim().toUpperCase()
-    if (!sym) return
-    if (sym !== layout.symbol) loadSecurity(sym)
+    const parsed = parseDeskCommand(raw)
+    const sym = parsed.symbol ?? layout.symbol
+    if (parsed.symbol && parsed.symbol !== layout.symbol) loadSecurity(parsed.symbol)
+    if (parsed.fn) {
+      runFunction(parsed.fn, sym, parsed.arg, parsed.symbol)
+      return
+    }
+    if (!parsed.symbol) return
     showPanel("chart")
     setCmdStatus({
       tone: "ok",
       text: sym === layout.symbol ? `${sym} is already loaded — showing chart.` : `${sym} loaded into chart, news and ticket.`,
     })
+  }
+
+  const runFunction = (fn: DeskFn, sym: string, arg: string, loaded?: string) => {
+    const prefix = loaded ? `${loaded} · ` : ""
+    const a = fn.action
+    log(`Desk function ${fn.code}`, { symbol: sym, arg: arg || undefined })
+    if (a.kind === "unavailable") {
+      setCmdStatus({ tone: "error", text: `${fn.code} (${fn.title}) needs a licensed terminal data feed and isn't available here.` })
+      return
+    }
+    if (a.kind === "view") {
+      setFnView(a.view)
+      showPanel("functions")
+    } else if (a.kind === "panel") {
+      showPanel(a.panel)
+    } else if (a.kind === "headlines") {
+      setHeadlineQuery((p) => ({ q: a.query(sym, arg.toLowerCase()), n: p.n + 1 }))
+      showPanel("headlines")
+    } else if (a.kind === "search") {
+      setSearchQuery((p) => ({ q: a.query(sym, arg.toLowerCase()), n: p.n + 1 }))
+      showPanel("search")
+    }
+    setCmdStatus({ tone: "ok", text: `${prefix}${fn.code} — ${fn.title}.` })
+  }
+
+  const runCode = (code: string) => {
+    const parsed = parseDeskCommand(code)
+    if (parsed.fn) runFunction(parsed.fn, layout.symbol, "")
   }
 
   const renderPanel = (id: DeskPanelId) => {
@@ -212,11 +250,23 @@ export function TradingDesk() {
       case "messages":
         return <MessagesPanel symbol={layout.symbol} log={log} />
       case "search":
-        return <CompanySearchPanel onLoad={loadSecurity} log={log} />
+        return (
+          <CompanySearchPanel key={`s${searchQuery.n}`} initialQuery={searchQuery.q} onLoad={loadSecurity} log={log} />
+        )
       case "instruments":
         return <BankInstrumentsPanel log={log} />
       case "headlines":
-        return <HeadlinesPanel symbol={layout.symbol} onLoad={loadSecurity} log={log} />
+        return (
+          <HeadlinesPanel
+            key={`h${headlineQuery.n}`}
+            initialQuery={headlineQuery.q}
+            symbol={layout.symbol}
+            onLoad={loadSecurity}
+            log={log}
+          />
+        )
+      case "functions":
+        return <FunctionPanel view={fnView} symbol={layout.symbol} onRun={runCode} />
     }
   }
 
@@ -266,7 +316,7 @@ export function TradingDesk() {
             if (cmdStatus) setCmdStatus(null)
           }}
           enterKeyHint="go"
-          placeholder="AAPL <GO> · /companies · /instruments"
+          placeholder="AAPL EQUITY DES · TOP CMD · MENU"
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="characters"
@@ -405,7 +455,7 @@ export function TradingDesk() {
       </div>
 
       <p className="hidden font-mono text-[10px] text-muted-foreground lg:block">
-        F1–F11 functions · Esc restore · type a security then GO · layout saves automatically
+        F1–F12 panels · MENU lists all codes · Esc restore · type a security or code then GO · layout saves automatically
       </p>
     </div>
   )
