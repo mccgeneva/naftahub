@@ -252,7 +252,7 @@ export function TradingDesk() {
       case "quotes":
         return <QuotesPanel quotes={quotes} assetClass={assetClass} symbol={layout.symbol} onSelect={loadSecurity} />
       case "chart":
-        return <ChartPanel symbol={layout.symbol} />
+        return <ChartPanel symbol={layout.symbol} onInspect={openInspector} onLoad={loadSecurity} />
       case "news":
         return <NewsPanel symbol={layout.symbol} />
       case "ticket":

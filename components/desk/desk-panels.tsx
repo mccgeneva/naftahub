@@ -133,24 +133,99 @@ export function QuotesPanel({
 }
 
 // ── Chart / News (TradingView licensed embeds) ─────────────────────────────
-export function ChartPanel({ symbol }: { symbol: string }) {
+const CHART_ISIN_PATTERN = /^[A-Z]{2}[A-Z0-9]{9}\d$/
+
+export function ChartPanel({
+  symbol,
+  onInspect,
+  onLoad,
+}: {
+  symbol: string
+  onInspect?: (isin: string) => void
+  onLoad?: (symbol: string) => void
+}) {
   const { resolvedTheme } = useTheme()
+  const [lookup, setLookup] = useState("")
+  const symbolIsIsin = CHART_ISIN_PATTERN.test(symbol.toUpperCase())
+
+  const submitLookup = () => {
+    const value = lookup.replace(/\s+/g, "").toUpperCase()
+    if (!value) return
+    setLookup("")
+    if (CHART_ISIN_PATTERN.test(value)) onInspect?.(value)
+    else onLoad?.(value)
+  }
+
   return (
-    <TradingViewWidget
-      key={`${symbol}-${resolvedTheme}`}
-      scriptSrc="embed-widget-advanced-chart.js"
-      config={{
-        symbol: tradingViewSymbol(symbol),
-        interval: "60",
-        theme: resolvedTheme === "light" ? "light" : "dark",
-        style: "1",
-        autosize: true,
-        hide_side_toolbar: true,
-        allow_symbol_change: false,
-        backgroundColor: "rgba(0,0,0,0)",
-        locale: "en",
-      }}
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      {onInspect && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            submitLookup()
+          }}
+          className="flex shrink-0 items-center gap-2 border-b border-border p-2"
+        >
+          <label htmlFor="chart-inspect" className="sr-only">
+            ISIN or ticker
+          </label>
+          <input
+            id="chart-inspect"
+            value={lookup}
+            onChange={(e) => setLookup(e.target.value)}
+            placeholder="ISIN → inspect · ticker → chart"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            enterKeyHint="go"
+            className="h-11 min-w-0 flex-1 rounded-sm border border-border bg-background px-3 font-mono text-base uppercase text-foreground placeholder:normal-case placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+          <button
+            type="submit"
+            className="h-11 shrink-0 rounded-sm bg-primary px-4 font-mono text-sm font-semibold uppercase text-primary-foreground"
+          >
+            Inspect
+          </button>
+        </form>
+      )}
+      {symbolIsIsin ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
+          <p className="font-mono text-lg font-semibold text-primary">{symbol.toUpperCase()}</p>
+          <p className="max-w-sm text-pretty text-sm leading-relaxed text-foreground">
+            This is an ISIN — a bond or instrument identifier, not a chartable ticker. Open the inspector to see
+            the full details and download the reference certificate.
+          </p>
+          {onInspect && (
+            <button
+              type="button"
+              onClick={() => onInspect(symbol.toUpperCase())}
+              className="h-12 w-full max-w-xs rounded-sm bg-primary px-4 font-mono text-sm font-semibold uppercase text-primary-foreground"
+            >
+              Open instrument inspector
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1">
+          <TradingViewWidget
+            key={`${symbol}-${resolvedTheme}`}
+            scriptSrc="embed-widget-advanced-chart.js"
+            config={{
+              symbol: tradingViewSymbol(symbol),
+              interval: "60",
+              theme: resolvedTheme === "light" ? "light" : "dark",
+              style: "1",
+              autosize: true,
+              hide_side_toolbar: true,
+              allow_symbol_change: false,
+              backgroundColor: "rgba(0,0,0,0)",
+              locale: "en",
+            }}
+          />
+        </div>
+      )}
+    </div>
   )
 }
 
