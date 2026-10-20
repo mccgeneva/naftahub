@@ -8,6 +8,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { useLedger } from "@/lib/ledger-store"
 import { useLeverageRequests } from "@/lib/leverage-requests-store"
+import useSWR from "swr"
+import {
+  PPI_INSURER,
+  PPI_STATUS_LABEL,
+  effectivePpiStatus,
+  ppiPremiumDue,
+  type PpiPolicy,
+} from "@/lib/ppi-insurance"
 
 interface CoverPolicy {
   id: string
@@ -17,6 +25,20 @@ interface CoverPolicy {
   coverAmount: number | null
   purchasedAt: string
   active: boolean
+  statusLabel: string
+  coverLabel: string
+  covers: string
+  expiresAt?: string | null
+  remainingCover?: number | null
+  reference?: string | null
+}
+
+type PpiResponse = { ok: boolean; policy: (PpiPolicy & { remainingCover?: number }) | null }
+
+async function fetchPpi(url: string): Promise<PpiResponse> {
+  const res = await fetch(url, { cache: "no-store" })
+  if (!res.ok) return { ok: false, policy: null }
+  return res.json()
 }
 
 const PPI_PREFIX = "LEV-PPI-"
@@ -46,7 +68,35 @@ export function InsuranceCoverCard({ compact = false }: { compact?: boolean }) {
   const { entries } = useLedger()
   const { requests } = useLeverageRequests()
 
+  const { data: ppiData } = useSWR<PpiResponse>("/api/ppi", fetchPpi, {
+    refreshInterval: 60000,
+    revalidateOnFocus: false,
+  })
+
   const policies = useMemo<CoverPolicy[]>(() => {
+    const out: CoverPolicy[] = []
+    const lp = ppiData?.ok ? ppiData.policy : null
+    if (lp) {
+      const status = effectivePpiStatus(lp)
+      if (status !== "negotiating" && status !== "cancelled") {
+        out.push({
+          id: lp.id,
+          label: `${lp.insurer || PPI_INSURER} — account PPI`,
+          premium: ppiPremiumDue(lp),
+          currency: lp.currency || "EUR",
+          coverAmount: lp.coverAmount,
+          purchasedAt: lp.activatedAt ?? lp.createdAt,
+          active: status === "active",
+          statusLabel: PPI_STATUS_LABEL[status],
+          coverLabel: "Sum insured",
+          expiresAt: lp.expiresAt,
+          remainingCover: lp.remainingCover ?? null,
+          reference: lp.lloydsReference || null,
+          covers: "All debits, leverage, loans, PPP & overdraft",
+        })
+      }
+    }
+
     const premiums = entries.filter(
       (e) =>
         e.direction === "debit" &&
@@ -55,7 +105,7 @@ export function InsuranceCoverCard({ compact = false }: { compact?: boolean }) {
         !NON_POLICY_SUFFIXES.some((s) => e.id.slice(PPI_PREFIX.length).startsWith(s)),
     )
 
-    return premiums.map((e) => {
+    const linePolicies = premiums.map((e): CoverPolicy => {
       const lineId = e.id.slice(PPI_PREFIX.length)
       const refunds = entries
         .filter(
@@ -69,16 +119,20 @@ export function InsuranceCoverCard({ compact = false }: { compact?: boolean }) {
       return {
         id: lineId,
         label: line
-          ? `${line.accountLabel} · 1:${line.leverageRatio} leverage line`
-          : "Leverage line",
+          ? `Leverage line PPI · 1:${line.leverageRatio} ${line.accountLabel}`
+          : "Leverage line PPI",
         premium: Math.max(0, e.amount - refunds),
         currency: e.currency,
         coverAmount: line?.buyingPower ?? null,
         purchasedAt: e.date,
         active,
+        statusLabel: active ? "Active" : "Ended",
+        coverLabel: "Position covered",
+        covers: "This leverage line",
       }
     })
-  }, [entries, requests])
+    return [...out, ...linePolicies]
+  }, [entries, requests, ppiData])
 
   if (policies.length === 0) return null
 
@@ -108,28 +162,46 @@ export function InsuranceCoverCard({ compact = false }: { compact?: boolean }) {
             <div className="flex items-center justify-between gap-2">
               <span className="min-w-0 truncate text-sm font-medium">{p.label}</span>
               <Badge variant={p.active ? "default" : "secondary"} className="shrink-0">
-                {p.active ? "Active" : "Ended"}
+                {p.statusLabel}
               </Badge>
             </div>
             <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
               {p.coverAmount != null && (
-                <div className="flex flex-col">
-                  <dt className="text-xs text-muted-foreground">Position covered</dt>
-                  <dd className="font-mono tabular-nums">{fmt(p.coverAmount, p.currency)}</dd>
+                <div className="flex min-w-0 flex-col">
+                  <dt className="text-xs text-muted-foreground">{p.coverLabel}</dt>
+                  <dd className="break-all font-mono tabular-nums">{fmt(p.coverAmount, p.currency)}</dd>
                 </div>
               )}
-              <div className="flex flex-col">
+              <div className="flex min-w-0 flex-col">
                 <dt className="text-xs text-muted-foreground">Premium paid</dt>
-                <dd className="font-mono tabular-nums">{fmt(p.premium, p.currency)}</dd>
+                <dd className="break-all font-mono tabular-nums">{fmt(p.premium, p.currency)}</dd>
               </div>
+              {p.remainingCover != null && p.coverAmount != null && p.remainingCover < p.coverAmount && (
+                <div className="flex min-w-0 flex-col">
+                  <dt className="text-xs text-muted-foreground">Cover remaining</dt>
+                  <dd className="break-all font-mono tabular-nums">{fmt(p.remainingCover, p.currency)}</dd>
+                </div>
+              )}
               <div className="flex flex-col">
                 <dt className="text-xs text-muted-foreground">In force since</dt>
                 <dd>{formatDate(p.purchasedAt)}</dd>
               </div>
-              <div className="flex flex-col">
+              {p.expiresAt && (
+                <div className="flex flex-col">
+                  <dt className="text-xs text-muted-foreground">Valid until</dt>
+                  <dd>{formatDate(p.expiresAt)}</dd>
+                </div>
+              )}
+              <div className="col-span-2 flex flex-col">
                 <dt className="text-xs text-muted-foreground">Covers</dt>
-                <dd>Trading &amp; debits</dd>
+                <dd>{p.covers}</dd>
               </div>
+              {p.reference && (
+                <div className="col-span-2 flex flex-col">
+                  <dt className="text-xs text-muted-foreground">Policy reference</dt>
+                  <dd className="break-all font-mono text-xs">{p.reference}</dd>
+                </div>
+              )}
             </dl>
           </div>
         ))}
