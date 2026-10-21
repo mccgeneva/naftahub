@@ -111,7 +111,7 @@ export function InstrumentInspector({
                   <>
                     <ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-500" aria-hidden />
                     <p className="leading-relaxed">
-                      Found in the OpenFIGI registry with {ins.registry.matches.length} listing
+                      Verified by the Bloomberg compatible terminal with {ins.registry.matches.length} listing
                       {ins.registry.matches.length === 1 ? "" : "s"}.
                     </p>
                   </>
@@ -186,7 +186,7 @@ export function InstrumentInspector({
               )}
 
               <p className="px-4 py-4 text-xs leading-relaxed text-muted-foreground">
-                Reference data from OpenFIGI and the platform catalogue, checked {fmtDate(ins.checkedAt)}. It is not
+                Reference data from the Bloomberg compatible terminal and the platform catalogue, checked {fmtDate(ins.checkedAt)}. It is not
                 proof of ownership, custody or value.
               </p>
             </>

@@ -81,7 +81,7 @@ export function generateInstrumentReferencePdf(data: InstrumentInspection, holde
   ])
 
   if (primary) {
-    section("Registry record (OpenFIGI)", [
+    section("Bloomberg compatible terminal record", [
       ["Name", primary.name ?? "—"],
       ["Ticker", primary.ticker ?? "—"],
       ["FIGI", primary.figi],
@@ -93,7 +93,7 @@ export function generateInstrumentReferencePdf(data: InstrumentInspection, holde
       ["Registry listings", String(data.registry.matches.length)],
     ])
   } else {
-    section("Registry record (OpenFIGI)", [
+    section("Bloomberg compatible terminal record", [
       [
         "Status",
         data.registry.available
