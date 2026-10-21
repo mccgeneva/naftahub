@@ -110,10 +110,19 @@ export function InstrumentInspector({
                 {ins.registry.listed ? (
                   <>
                     <ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-500" aria-hidden />
-                    <p className="leading-relaxed">
-                      Verified by the Bloomberg compatible terminal with {ins.registry.matches.length} listing
-                      {ins.registry.matches.length === 1 ? "" : "s"}.
-                    </p>
+                    <div className="flex min-w-0 flex-col gap-2">
+                      <img
+                        src="/logos/bloomberg.jpeg"
+                        alt="Bloomberg"
+                        width={518}
+                        height={181}
+                        className="h-7 w-auto self-start rounded-sm"
+                      />
+                      <p className="leading-relaxed">
+                        Verified by the Bloomberg compatible terminal with {ins.registry.matches.length} listing
+                        {ins.registry.matches.length === 1 ? "" : "s"}.
+                      </p>
+                    </div>
                   </>
                 ) : (
                   <>
