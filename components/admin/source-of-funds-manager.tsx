@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { upload } from "@vercel/blob/client"
 import { toast } from "sonner"
@@ -630,18 +632,13 @@ export function SourceOfFundsManager() {
                 <h3 className="text-sm font-semibold">1. Payment received</h3>
                 <div className="flex flex-col gap-2">
                   <Label>Receiving client</Label>
-                  <Select value={draft.userId} onValueChange={selectClient}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select a client" />
-                    </SelectTrigger>
-                    <SelectContent>
+                  <SearchableSelect value={draft.userId} onValueChange={selectClient} placeholder="Select a client">
                       {clients.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
                           {[c.fullName, c.company].filter(Boolean).join(" · ") || c.email}
                         </SelectItem>
                       ))}
-                    </SelectContent>
-                  </Select>
+                    </SearchableSelect>
                 </div>
                 <div className="flex gap-3">
                   <div className="flex min-w-0 flex-1 flex-col gap-2">

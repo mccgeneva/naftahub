@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useEffect, useMemo, useState } from "react"
 import { Banknote, Building2, Loader2, ShieldCheck } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -53,18 +55,13 @@ function ClientSelect({
   placeholder: string
 }) {
   return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="min-h-11 w-full min-w-0">
-        <SelectValue placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent>
+    <SearchableSelect value={value} onValueChange={onChange}>
         {clients.map((c) => (
           <SelectItem key={c.id} value={c.id}>
             {c.fullName} · {c.company || c.email}
           </SelectItem>
         ))}
-      </SelectContent>
-    </Select>
+      </SearchableSelect>
   )
 }
 

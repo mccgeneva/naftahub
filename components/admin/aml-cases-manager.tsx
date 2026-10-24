@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { upload } from "@vercel/blob/client"
 import { toast } from "sonner"
@@ -335,18 +337,13 @@ export function AmlCasesManager({ passcode }: { passcode: string }) {
           <CardContent className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
               <Label>Customer</Label>
-              <Select value={draft.userId} onValueChange={(v) => set("userId", v)} disabled={!!draft.id}>
-                <SelectTrigger className="min-h-11 text-base">
-                  <SelectValue placeholder="Choose the customer" />
-                </SelectTrigger>
-                <SelectContent>
+              <SearchableSelect value={draft.userId} onValueChange={(v) => set("userId", v)} disabled={!!draft.id} placeholder="Choose the customer">
                   {clients.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
                       {c.label}
                     </SelectItem>
                   ))}
-                </SelectContent>
-              </Select>
+                </SearchableSelect>
             </div>
 
             <div className="flex flex-col gap-2">

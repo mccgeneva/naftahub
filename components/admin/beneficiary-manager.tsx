@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useEffect, useMemo, useState } from "react"
 import { Users, Check, Ban, Trash2, Plus, Loader2, Pencil, ShieldCheck } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -409,18 +411,13 @@ export function BeneficiaryManager() {
         {/* Client picker */}
         <div className="space-y-2">
           <Label>Client account</Label>
-          <Select value={targetUserId} onValueChange={setTargetUserId}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select a client" />
-            </SelectTrigger>
-            <SelectContent>
+          <SearchableSelect value={targetUserId} onValueChange={setTargetUserId} placeholder="Select a client">
               {clients.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
                   {c.fullName} — {c.company} ({c.email})
                 </SelectItem>
               ))}
-            </SelectContent>
-          </Select>
+            </SearchableSelect>
           {pendingCount > 0 && (
             <p className="flex items-center gap-1.5 text-[11px] text-amber-600">
               <ShieldCheck className="h-3 w-3" />

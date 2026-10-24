@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useEffect, useMemo, useState } from "react"
 import { createPortal } from "react-dom"
 import useSWR from "swr"
@@ -1944,11 +1946,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Client</Label>
-            <Select value={clientFilter} onValueChange={setClientFilter}>
-              <SelectTrigger className="min-h-10">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
+            <SearchableSelect value={clientFilter} onValueChange={setClientFilter}>
                 <SelectItem value="all">All clients</SelectItem>
                 {clients.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
@@ -1956,8 +1954,7 @@ export function PendingApprovals({ initialKind }: { initialKind?: ApprovalKind }
                     {c.company ? ` · ${c.company}` : ""}
                   </SelectItem>
                 ))}
-              </SelectContent>
-            </Select>
+              </SearchableSelect>
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">From</Label>

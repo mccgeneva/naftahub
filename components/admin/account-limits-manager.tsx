@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useEffect, useMemo, useState } from "react"
 import { Gauge, Infinity as InfinityIcon, Save, Loader2, RotateCcw, Users, User } from "lucide-react"
 import { toast } from "sonner"
@@ -189,11 +191,7 @@ export function AccountLimitsManager({ passcode }: { passcode: string }) {
           {/* Target selector */}
           <div className="space-y-1.5">
             <Label>Apply limits to</Label>
-            <Select value={target} onValueChange={setTarget}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
+            <SearchableSelect value={target} onValueChange={setTarget}>
                 <SelectItem value={GLOBAL_TARGET}>
                   <span className="flex items-center gap-2">
                     <Users className="h-3.5 w-3.5" />
@@ -208,8 +206,7 @@ export function AccountLimitsManager({ passcode }: { passcode: string }) {
                     </span>
                   </SelectItem>
                 ))}
-              </SelectContent>
-            </Select>
+              </SearchableSelect>
             {!isGlobal && (
               <p className="text-[11px] text-muted-foreground">
                 {hasOverride

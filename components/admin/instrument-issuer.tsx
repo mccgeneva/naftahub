@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useEffect, useMemo, useState } from "react"
 import { Landmark, Loader2, ShieldCheck } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -181,18 +183,13 @@ export function InstrumentIssuer() {
       <CardContent className="space-y-4">
         <div className="grid gap-2">
           <Label htmlFor="issue-client">Client</Label>
-          <Select value={targetUserId} onValueChange={setTargetUserId}>
-            <SelectTrigger id="issue-client">
-              <SelectValue placeholder="Select a client account" />
-            </SelectTrigger>
-            <SelectContent>
+          <SearchableSelect value={targetUserId} onValueChange={setTargetUserId} id="issue-client" placeholder="Select a client account">
               {clients.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
                   {c.fullName} {c.company ? `· ${c.company}` : ""}
                 </SelectItem>
               ))}
-            </SelectContent>
-          </Select>
+            </SearchableSelect>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">

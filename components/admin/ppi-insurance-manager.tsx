@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import {
@@ -297,19 +299,14 @@ export function PpiInsuranceManager({ passcode }: { passcode: string }) {
           <div className="flex flex-col gap-2">
             <Label htmlFor="ppi-client">Customer</Label>
             <div className="flex flex-col gap-2 sm:flex-row">
-              <Select value={userId} onValueChange={selectClient} disabled={loading}>
-                <SelectTrigger id="ppi-client" className="min-h-11 w-full sm:flex-1">
-                  <SelectValue placeholder={loading ? "Loading customers…" : "Select a customer"} />
-                </SelectTrigger>
-                <SelectContent>
+              <SearchableSelect value={userId} onValueChange={selectClient} disabled={loading} id="ppi-client">
                   {clients.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
                       {c.fullName || c.email}
                       {c.company ? ` · ${c.company}` : ""}
                     </SelectItem>
                   ))}
-                </SelectContent>
-              </Select>
+                </SearchableSelect>
               <Button onClick={analyze} disabled={!userId || analyzing} className="min-h-11">
                 {analyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                 Analyze profile

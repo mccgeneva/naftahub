@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useEffect, useMemo, useState } from "react"
 import { Ban, Save, Loader2, RotateCcw, User, ArrowUpRight, TrendingUp } from "lucide-react"
 import { toast } from "sonner"
@@ -304,11 +306,7 @@ export function OutgoingBlocksManager({ passcode }: { passcode: string }) {
           {/* Target selector */}
           <div className="space-y-1.5">
             <Label>Apply block to</Label>
-            <Select value={target} onValueChange={setTarget}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select a user…" />
-              </SelectTrigger>
-              <SelectContent>
+            <SearchableSelect value={target} onValueChange={setTarget} placeholder="Select a user…">
                 {clients.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
                     <span className="flex items-center gap-2">
@@ -317,8 +315,7 @@ export function OutgoingBlocksManager({ passcode }: { passcode: string }) {
                     </span>
                   </SelectItem>
                 ))}
-              </SelectContent>
-            </Select>
+              </SearchableSelect>
             {loadError && <p className="text-[11px] text-destructive">{loadError}</p>}
           </div>
 

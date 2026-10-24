@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { CreditCard, Loader2, Upload, Sparkles, ReceiptText, AlertTriangle } from "lucide-react"
@@ -187,19 +189,14 @@ export function CardTransactionRecorder() {
         {/* Client */}
         <div className="space-y-1.5">
           <Label htmlFor="ctr-client">Client account</Label>
-          <Select value={clientId} onValueChange={setClientId}>
-            <SelectTrigger id="ctr-client">
-              <SelectValue placeholder="Select a client account" />
-            </SelectTrigger>
-            <SelectContent>
+          <SearchableSelect value={clientId} onValueChange={setClientId} id="ctr-client" placeholder="Select a client account">
               {clients.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
                   {c.fullName}
                   {c.company ? ` — ${c.company}` : ""}
                 </SelectItem>
               ))}
-            </SelectContent>
-          </Select>
+            </SearchableSelect>
         </div>
 
         {/* Upload */}

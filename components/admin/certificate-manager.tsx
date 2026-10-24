@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useEffect, useMemo, useState } from "react"
 import { Award, Check, X, Clock, History, RefreshCw, BadgeCheck, Loader2 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -300,18 +302,13 @@ export function CertificateManager() {
         <div className="space-y-1.5">
           <Label className="text-xs text-muted-foreground">Client account</Label>
           <div className="flex items-center gap-2">
-            <Select value={targetUserId} onValueChange={setTargetUserId}>
-              <SelectTrigger className="sm:max-w-md">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
+            <SearchableSelect value={targetUserId} onValueChange={setTargetUserId}>
                 {clients.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
                     {c.fullName} — {c.company}
                   </SelectItem>
                 ))}
-              </SelectContent>
-            </Select>
+              </SearchableSelect>
             <Button
               variant="outline"
               size="icon"

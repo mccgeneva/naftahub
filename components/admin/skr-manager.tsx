@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   ShieldCheck,
@@ -1062,18 +1064,13 @@ export function SkrManager() {
         {/* Client selector */}
         <div className="space-y-2">
           <Label>Client account</Label>
-          <Select value={targetUserId} onValueChange={setTargetUserId}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select a client" />
-            </SelectTrigger>
-            <SelectContent>
+          <SearchableSelect value={targetUserId} onValueChange={setTargetUserId} placeholder="Select a client">
               {clients.map((u) => (
                 <SelectItem key={u.id} value={u.id}>
                   {u.fullName} — {u.company} ({u.email})
                 </SelectItem>
               ))}
-            </SelectContent>
-          </Select>
+            </SearchableSelect>
           {loading && (
             <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" /> Loading portfolio…

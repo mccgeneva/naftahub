@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useEffect, useMemo, useState } from "react"
 import {
   Loader2,
@@ -340,11 +342,7 @@ export function SwiftRoutingQueue() {
                 <Label className="flex items-center gap-1.5 text-sm">
                   <Users className="h-4 w-4" /> Beneficiary
                 </Label>
-                <Select value={beneficiaryId} onValueChange={setBeneficiaryId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a platform user" />
-                  </SelectTrigger>
-                  <SelectContent>
+                <SearchableSelect value={beneficiaryId} onValueChange={setBeneficiaryId} placeholder="Select a platform user">
                     {clients.length === 0 ? (
                       <div className="px-2 py-3 text-center text-sm text-muted-foreground">No active platform users</div>
                     ) : (
@@ -354,8 +352,7 @@ export function SwiftRoutingQueue() {
                         </SelectItem>
                       ))
                     )}
-                  </SelectContent>
-                </Select>
+                  </SearchableSelect>
               </div>
             ) : (
               <div className="flex flex-col gap-3">

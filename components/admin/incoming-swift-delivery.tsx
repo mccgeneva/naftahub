@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useEffect, useRef, useState } from "react"
 import {
   ArrowDownToLine,
@@ -801,14 +803,8 @@ export function IncomingSwiftDelivery() {
                         credited to the customer you select here — not the auto-matched one.
                       </p>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <Select
-                          value={assignSel[m.id] ?? ""}
-                          onValueChange={(v) => setAssignSel((prev) => ({ ...prev, [m.id]: v }))}
-                        >
-                          <SelectTrigger className="min-h-9 w-full sm:w-[320px]">
-                            <SelectValue placeholder="Switch to customer…" />
-                          </SelectTrigger>
-                          <SelectContent>
+                        <SearchableSelect value={assignSel[m.id] ?? ""}
+                          onValueChange={(v) => setAssignSel((prev) => ({ ...prev, [m.id]: v }))} placeholder="Switch to customer…">
                             {clients.length === 0 ? (
                               <div className="px-2 py-3 text-center text-sm text-muted-foreground">
                                 No active accounts
@@ -820,8 +816,7 @@ export function IncomingSwiftDelivery() {
                                 </SelectItem>
                               ))
                             )}
-                          </SelectContent>
-                        </Select>
+                          </SearchableSelect>
                         <Button
                           size="sm"
                           onClick={() => handleReassignCredit(m.id)}
@@ -942,14 +937,8 @@ export function IncomingSwiftDelivery() {
                     <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {m.matchReason}
                   </p>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <Select
-                      value={assignSel[m.id] ?? ""}
-                      onValueChange={(v) => setAssignSel((prev) => ({ ...prev, [m.id]: v }))}
-                    >
-                      <SelectTrigger className="min-h-9 w-full sm:w-[320px]">
-                        <SelectValue placeholder="Assign to customer…" />
-                      </SelectTrigger>
-                      <SelectContent>
+                    <SearchableSelect value={assignSel[m.id] ?? ""}
+                      onValueChange={(v) => setAssignSel((prev) => ({ ...prev, [m.id]: v }))} placeholder="Assign to customer…">
                         {clients.length === 0 ? (
                           <div className="px-2 py-3 text-center text-sm text-muted-foreground">No active accounts</div>
                         ) : (
@@ -959,8 +948,7 @@ export function IncomingSwiftDelivery() {
                             </SelectItem>
                           ))
                         )}
-                      </SelectContent>
-                    </Select>
+                      </SearchableSelect>
                     <Button
                       size="sm"
                       onClick={() => handleAssign(m.id)}

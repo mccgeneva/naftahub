@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useEffect, useState } from "react"
 import { Landmark, Plus, Trash2, Save, Building2, Loader2, ShieldCheck, AlertTriangle, Wallet } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -349,19 +351,14 @@ export function TreasuryManager() {
         {/* Target account */}
         <div className="space-y-2">
           <Label>Client account</Label>
-          <Select value={targetUserId} onValueChange={setTargetUserId}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select a client" />
-            </SelectTrigger>
-            <SelectContent>
+          <SearchableSelect value={targetUserId} onValueChange={setTargetUserId} placeholder="Select a client">
               {clients.map((u) => (
                 <SelectItem key={u.id} value={u.id}>
                   {u.fullName} — {u.company}
                   {u.email ? ` (${u.email})` : ""}
                 </SelectItem>
               ))}
-            </SelectContent>
-          </Select>
+            </SearchableSelect>
           {loading && (
             <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" /> Loading record…

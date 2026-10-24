@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useEffect, useMemo, useState } from "react"
 import { Percent, Save, Loader2, Trash2, Users, Globe, Calculator } from "lucide-react"
 import { toast } from "sonner"
@@ -177,19 +179,14 @@ export function FeeCashbackManager({ passcode }: { passcode: string }) {
           <div className="space-y-3 rounded-lg border border-border p-3">
             <div className="space-y-1">
               <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">Customer</Label>
-              <Select value={scopeUser} onValueChange={setScopeUser}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
+              <SearchableSelect value={scopeUser} onValueChange={setScopeUser}>
                   <SelectItem value={GLOBAL}>All users (global)</SelectItem>
                   {clients.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
                       {c.company ? `${c.fullName} · ${c.company}` : c.fullName}
                     </SelectItem>
                   ))}
-                </SelectContent>
-              </Select>
+                </SearchableSelect>
             </div>
             <div className="space-y-1">
               <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">Fee type</Label>

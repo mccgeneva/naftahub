@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
 import { toast } from "sonner"
@@ -541,18 +543,13 @@ export function CardManager() {
         <CardContent className="space-y-4">
           <div className="grid gap-2">
             <Label htmlFor="issue-card-client">Client</Label>
-            <Select value={issueClient} onValueChange={setIssueClient}>
-              <SelectTrigger id="issue-card-client">
-                <SelectValue placeholder="Select a client account" />
-              </SelectTrigger>
-              <SelectContent>
+            <SearchableSelect value={issueClient} onValueChange={setIssueClient} id="issue-card-client" placeholder="Select a client account">
                 {clients.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
                     {c.fullName} {c.company ? `· ${c.company}` : ""}
                   </SelectItem>
                 ))}
-              </SelectContent>
-            </Select>
+              </SearchableSelect>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">

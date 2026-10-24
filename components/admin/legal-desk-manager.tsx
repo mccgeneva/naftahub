@@ -1,5 +1,7 @@
 "use client"
 
+import { SearchableSelect } from "@/components/ui/searchable-select"
+
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import { Gavel, Loader2, Mail, RefreshCw, Send, Eye, ShieldCheck } from "lucide-react"
@@ -256,19 +258,14 @@ export function LegalDeskManager({ passcode }: { passcode: string }) {
 
           <div className="flex flex-col gap-2">
             <Label>Client (optional)</Label>
-            <Select value={clientId} onValueChange={setClientId} disabled={loading}>
-              <SelectTrigger className="min-h-11 text-base">
-                <SelectValue placeholder="Choose a client" />
-              </SelectTrigger>
-              <SelectContent>
+            <SearchableSelect value={clientId} onValueChange={setClientId} disabled={loading} placeholder="Choose a client">
                 <SelectItem value={NONE}>No specific client</SelectItem>
                 {clients.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
                     {c.label}
                   </SelectItem>
                 ))}
-              </SelectContent>
-            </Select>
+              </SearchableSelect>
           </div>
 
           {clientId !== NONE && (
