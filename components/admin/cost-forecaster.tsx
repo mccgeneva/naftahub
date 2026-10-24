@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Calculator, Handshake, Loader2, Send, ShieldAlert } from "lucide-react"
+import { Calculator, Handshake, Loader2, Search, Send, ShieldAlert, X } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -100,9 +100,15 @@ async function call<T>(body: Record<string, unknown>): Promise<T> {
   return (await res.json()) as T
 }
 
+function clientLabel(c: Client): string {
+  return `${c.fullName || c.email}${c.company ? ` · ${c.company}` : ""}`
+}
+
 export function CostForecaster() {
   const [clients, setClients] = useState<Client[]>([])
   const [clientId, setClientId] = useState("")
+  const [clientQuery, setClientQuery] = useState("")
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [ctx, setCtx] = useState<Context | null>(null)
   const [loadingCtx, setLoadingCtx] = useState(false)
   const [sending, setSending] = useState(false)
@@ -144,6 +150,16 @@ export function CostForecaster() {
   }, [clientId])
 
   const client = clients.find((c) => c.id === clientId)
+  const filteredClients = useMemo(() => {
+    const q = clientQuery.trim().toLowerCase()
+    const sorted = [...clients].sort((a, b) => clientLabel(a).localeCompare(clientLabel(b)))
+    if (!q) return sorted
+    const terms = q.split(/\s+/)
+    return sorted.filter((c) => {
+      const hay = `${c.fullName ?? ""} ${c.company ?? ""} ${c.email ?? ""}`.toLowerCase()
+      return terms.every((t) => hay.includes(t))
+    })
+  }, [clients, clientQuery])
   const tiers = ctx?.tiers?.length ? ctx.tiers : DEFAULT_FEE_TIERS
   const cb = (p: CashbackProduct) => ctx?.cashback?.[p] ?? 0
 
@@ -333,19 +349,96 @@ export function CostForecaster() {
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <Label>Client</Label>
-            <Select value={clientId} onValueChange={setClientId}>
-              <SelectTrigger className="min-h-11 w-full min-w-0 text-base">
-                <SelectValue placeholder="Choose a client (optional)" />
-              </SelectTrigger>
-              <SelectContent>
-                {clients.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.fullName || c.email}
-                    {c.company ? ` · ${c.company}` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+              <Input
+                value={pickerOpen ? clientQuery : client ? clientLabel(client) : clientQuery}
+                onChange={(e) => {
+                  setClientQuery(e.target.value)
+                  setPickerOpen(true)
+                }}
+                onFocus={() => {
+                  setClientQuery("")
+                  setPickerOpen(true)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setPickerOpen(false)
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229 && filteredClients[0]) {
+                    e.preventDefault()
+                    setClientId(filteredClients[0].id)
+                    setPickerOpen(false)
+                    e.currentTarget.blur()
+                  }
+                }}
+                placeholder="Search client by name, company or email"
+                aria-label="Search client"
+                role="combobox"
+                aria-expanded={pickerOpen}
+                aria-controls="forecaster-client-list"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                data-1p-ignore
+                data-lpignore="true"
+                className="h-11 min-w-0 pl-9 pr-10 text-base"
+              />
+              {(clientId || clientQuery) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setClientId("")
+                    setClientQuery("")
+                    setPickerOpen(false)
+                  }}
+                  className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center text-muted-foreground hover:text-foreground"
+                  aria-label="Clear client"
+                >
+                  <X className="h-4 w-4" aria-hidden />
+                </button>
+              )}
+            </div>
+            {pickerOpen && (
+              <div className="flex flex-col overflow-hidden rounded-md border border-border bg-card">
+                <ul id="forecaster-client-list" role="listbox" className="max-h-72 overflow-y-auto overscroll-contain">
+                  {filteredClients.length === 0 ? (
+                    <li className="px-3 py-3 text-sm text-muted-foreground">No client matches &ldquo;{clientQuery}&rdquo;</li>
+                  ) : (
+                    filteredClients.map((c) => (
+                      <li key={c.id} role="option" aria-selected={c.id === clientId}>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            setClientId(c.id)
+                            setClientQuery("")
+                            setPickerOpen(false)
+                          }}
+                          className={`flex min-h-11 w-full flex-col items-start justify-center px-3 py-2 text-left hover:bg-muted ${
+                            c.id === clientId ? "bg-muted" : ""
+                          }`}
+                        >
+                          <span className="text-base text-foreground">{c.fullName || c.email}</span>
+                          {(c.company || (c.fullName && c.email)) && (
+                            <span className="text-sm text-muted-foreground">
+                              {[c.company, c.fullName ? c.email : ""].filter(Boolean).join(" · ")}
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    ))
+                  )}
+                </ul>
+                <div className="flex items-center justify-between border-t border-border px-3 py-2 text-xs text-muted-foreground">
+                  <span>
+                    {filteredClients.length} of {clients.length} clients
+                  </span>
+                  <button type="button" onClick={() => setPickerOpen(false)} className="min-h-8 px-2 font-medium text-foreground">
+                    Close
+                  </button>
+                </div>
+              </div>
+            )}
             {loadingCtx && (
               <p className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Loading client figures…
