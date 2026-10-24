@@ -290,6 +290,7 @@ export async function revokeInstrument(
   approvalId: string,
   reason: string,
   actor: string,
+  opts: { replace?: boolean } = {},
 ): Promise<{ ok: true; outcome: RevocationOutcome } | { ok: false; error: string }> {
   const row = await getApprovalById(approvalId)
   if (!row || row.kind !== "instrument") return { ok: false, error: "Instrument not found." }
@@ -305,7 +306,7 @@ export async function revokeInstrument(
   const currency = String(inst.currency ?? "EUR")
   const now = new Date()
 
-  if (ppi) {
+  if (ppi && opts.replace !== false) {
     const bgMeta = findInstrumentType("BG")
     const ids = buildInstrumentIdentifiers("Lloyds Bank", "BG", now)
     const expiry = new Date(now)

@@ -153,7 +153,7 @@ export async function POST(req: Request) {
       if (!reason) {
         return NextResponse.json({ ok: false, error: "A reason is required to revoke an instrument." }, { status: 400 })
       }
-      const res = await revokeInstrument(approvalId, reason, ADMIN_LABEL)
+      const res = await revokeInstrument(approvalId, reason, ADMIN_LABEL, { replace: body.replace !== false })
       if (!res.ok) return NextResponse.json(res, { status: 400 })
       void logActivity({
         action: `Force-revoked bank instrument ${res.outcome.instrumentId} (${res.outcome.mode === "ppi_replacement" ? "replaced by Lloyds Bank BG under PPI" : "facilities collapsed into master account"})`,

@@ -51,6 +51,7 @@ export function AmlInstrumentsPanel({ passcode }: { passcode: string }) {
   const [action, setAction] = useState<{ row: Row; mode: "flag" | "revoke" } | null>(null)
   const [reason, setReason] = useState("")
   const [busy, setBusy] = useState(false)
+  const [replaceWithBg, setReplaceWithBg] = useState(false)
 
   const call = useCallback(
     async (payload: Record<string, unknown>) => {
@@ -110,6 +111,7 @@ export function AmlInstrumentsPanel({ passcode }: { passcode: string }) {
       op: action.mode === "flag" ? "flag-instrument" : "revoke-instrument",
       approvalId: action.row.approvalId,
       reason,
+      replace: action.mode === "revoke" && !!action.row.ppiActive && replaceWithBg,
     })
     setBusy(false)
     if (!data.ok) {
@@ -123,7 +125,9 @@ export function AmlInstrumentsPanel({ passcode }: { passcode: string }) {
       toast.success(
         outcome.mode === "ppi_replacement"
           ? `Revoked and replaced by Lloyds Bank BG ${outcome.replacementInstrumentId ?? ""}. No debit applied.`
-          : "Revoked. Every facility it secured was collapsed into the master account.",
+          : action.row.engagements.length > 0
+            ? "Revoked. Every facility it secured was collapsed into the master account."
+            : "Revoked and removed permanently.",
       )
     }
     setAction(null)
@@ -247,6 +251,7 @@ export function AmlInstrumentsPanel({ passcode }: { passcode: string }) {
                       className="h-11 flex-1"
                       onClick={() => {
                         setReason(r.flag?.reason ?? "")
+                        setReplaceWithBg(false)
                         setAction({ row: r, mode: "revoke" })
                       }}
                     >
@@ -279,17 +284,36 @@ export function AmlInstrumentsPanel({ passcode }: { passcode: string }) {
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
             {action?.mode === "revoke" && target && (
               target.ppiActive ? (
-                <div className="rounded-md border border-primary/40 bg-primary/5 p-3 text-sm leading-relaxed">
-                  <p className="font-medium">PPI policy active — the customer is covered</p>
-                  <p className="text-muted-foreground">
-                    The instrument is deleted and replaced by a fresh-cut Lloyds Bank plc, London Bank Guarantee of{" "}
-                    {money(Number(target.instrument.faceValue) || 0, String(target.instrument.currency ?? "EUR"))} with the
-                    same specifications.{" "}
-                    {target.engagements.length > 0
-                      ? `All ${target.engagements.length} facilities it backs are re-linked to the new BG. `
-                      : ""}
-                    The master account is not debited.
-                  </p>
+                <div className="flex flex-col gap-2" role="radiogroup" aria-label="Revocation method">
+                  <p className="text-sm font-medium">PPI policy active — choose how to revoke</p>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={!replaceWithBg}
+                    onClick={() => setReplaceWithBg(false)}
+                    className={`min-h-11 rounded-md border p-3 text-left text-sm leading-relaxed ${!replaceWithBg ? "border-destructive bg-destructive/10" : "border-border"}`}
+                  >
+                    <span className="block font-medium">Revoke permanently</span>
+                    <span className="block text-muted-foreground">
+                      {target.engagements.length > 0
+                        ? `The instrument is deleted with no replacement. Its ${target.engagements.length} facilities collapse and about ${money(targetDebitTotal, target.engagements[0].currency)} is debited to the master account.`
+                        : "The instrument is deleted with no replacement. Nothing is debited."}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={replaceWithBg}
+                    onClick={() => setReplaceWithBg(true)}
+                    className={`min-h-11 rounded-md border p-3 text-left text-sm leading-relaxed ${replaceWithBg ? "border-primary bg-primary/10" : "border-border"}`}
+                  >
+                    <span className="block font-medium">Revoke &amp; replace under PPI</span>
+                    <span className="block text-muted-foreground">
+                      A new Lloyds Bank plc, London BG of{" "}
+                      {money(Number(target.instrument.faceValue) || 0, String(target.instrument.currency ?? "EUR"))} takes its place
+                      {target.engagements.length > 0 ? ` and its ${target.engagements.length} facilities are re-linked` : ""}. The master account is not debited.
+                    </span>
+                  </button>
                 </div>
               ) : (
                 <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm leading-relaxed">
@@ -321,7 +345,7 @@ export function AmlInstrumentsPanel({ passcode }: { passcode: string }) {
               onClick={submitAction}
             >
               {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {action?.mode === "flag" ? "Flag instrument" : target?.ppiActive ? "Revoke & replace with BG" : "Revoke & collapse"}
+              {action?.mode === "flag" ? "Flag instrument" : target?.ppiActive && replaceWithBg ? "Revoke & replace with BG" : target?.engagements.length ? "Revoke & collapse" : "Revoke permanently"}
             </Button>
           </DialogFooter>
         </DialogContent>
