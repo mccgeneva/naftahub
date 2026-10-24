@@ -46,6 +46,13 @@ type Analysis = {
   availableBalanceEur: number
   guaranteesEur: number
   riskBand: string
+  funds?: {
+    availableEur: number
+    overdraftHeadroomEur: number
+    overdraftLimitEur: number
+    spendableEur: number
+    balances: { currency: string; amount: number }[]
+  }
 }
 
 const eur = (n: number) =>
@@ -475,6 +482,83 @@ export function PpiInsuranceManager({ passcode }: { passcode: string }) {
                       </div>
                     )}
                   </div>
+                  {analysis.funds && (() => {
+                    const f = analysis.funds
+                    const gap = Math.round((finalPremium - f.spendableEur) * 100) / 100
+                    const covered = gap <= 0.01
+                    const usesOverdraft = covered && finalPremium > Math.max(0, f.availableEur) + 0.01
+                    return (
+                      <div
+                        className={`flex flex-col gap-2 rounded-md border p-3 text-sm ${
+                          covered
+                            ? usesOverdraft
+                              ? "border-amber-500/40 bg-amber-500/10"
+                              : "border-emerald-500/40 bg-emerald-500/10"
+                            : "border-destructive/40 bg-destructive/10"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 font-medium">
+                          {covered ? (
+                            <CheckCircle2
+                              className={`h-4 w-4 ${usesOverdraft ? "text-amber-600" : "text-emerald-600"}`}
+                              aria-hidden
+                            />
+                          ) : (
+                            <XCircle className="h-4 w-4 text-destructive" aria-hidden />
+                          )}
+                          {covered
+                            ? usesOverdraft
+                              ? "Affordable — uses the authorized overdraft"
+                              : "Affordable from the Master Account"
+                            : "Not affordable — top-up needed"}
+                        </div>
+                        <dl className="flex flex-col gap-1">
+                          <div className="flex justify-between gap-3">
+                            <dt className="text-muted-foreground">Available balance (all currencies)</dt>
+                            <dd className="shrink-0 font-mono tabular-nums">{eur(f.availableEur)}</dd>
+                          </div>
+                          <div className="flex justify-between gap-3">
+                            <dt className="text-muted-foreground">
+                              Overdraft remaining (limit {eur(f.overdraftLimitEur)})
+                            </dt>
+                            <dd className="shrink-0 font-mono tabular-nums">{eur(f.overdraftHeadroomEur)}</dd>
+                          </div>
+                          <div className="flex justify-between gap-3 font-medium">
+                            <dt>Can spend</dt>
+                            <dd className="shrink-0 font-mono tabular-nums">{eur(f.spendableEur)}</dd>
+                          </div>
+                          <div className="flex justify-between gap-3 font-medium">
+                            <dt>{covered ? "Left after premium" : "Shortfall"}</dt>
+                            <dd
+                              className={`shrink-0 font-mono tabular-nums ${covered ? "" : "text-destructive"}`}
+                            >
+                              {eur(Math.abs(covered ? f.spendableEur - finalPremium : gap))}
+                            </dd>
+                          </div>
+                        </dl>
+                        {f.balances.length > 0 && (
+                          <p className="text-xs leading-relaxed text-muted-foreground">
+                            Per currency:{" "}
+                            {f.balances
+                              .map(
+                                (b) =>
+                                  `${b.currency} ${b.amount.toLocaleString("en-US", {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}`,
+                              )
+                              .join(" · ")}
+                          </p>
+                        )}
+                        {!covered && (
+                          <p className="text-xs leading-relaxed text-muted-foreground">
+                            Approving will ask you to confirm a forced charge into debit. Better: ask the customer to
+                            top up, or negotiate the premium down.
+                          </p>
+                        )}
+                      </div>
+                    )
+                  })()}
                   <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
                     <Button variant="outline" onClick={handleSave} disabled={busy !== null} className="min-h-11">
                       {busy === "save" && <Loader2 className="h-4 w-4 animate-spin" />}

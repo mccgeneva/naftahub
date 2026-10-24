@@ -96,6 +96,36 @@ const LIFECYCLE: Record<
 const fmt = (n: number) =>
   `${PPI_CURRENCY} ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
+/** Same figures the activation gate uses: cash across all currencies + authorized-overdraft headroom, in EUR. */
+async function spendableFor(ownerId: string) {
+  const round2 = (n: number) => Math.round(n * 100) / 100
+  const entries = await readLedgerEntries(ownerId)
+  const byCcy = availableByCurrency(entries)
+  const availableEur = Object.entries(byCcy).reduce(
+    (sum, [ccy, amt]) => sum + convertCurrency(amt, ccy, PPI_CURRENCY),
+    0,
+  )
+  let overdraftHeadroomEur = 0
+  let overdraftLimitEur = 0
+  try {
+    const od = await getOverdraftStatusForOwner(ownerId)
+    overdraftHeadroomEur = Math.max(0, od.remainingEur)
+    overdraftLimitEur = Math.max(0, od.limitEur)
+  } catch {
+    overdraftHeadroomEur = 0
+  }
+  const balances = Object.entries(byCcy)
+    .filter(([, amt]) => Math.abs(amt) > 0.005)
+    .map(([currency, amount]) => ({ currency, amount: round2(amount) }))
+  return {
+    availableEur: round2(availableEur),
+    overdraftHeadroomEur: round2(overdraftHeadroomEur),
+    overdraftLimitEur: round2(overdraftLimitEur),
+    spendableEur: round2(availableEur + overdraftHeadroomEur),
+    balances,
+  }
+}
+
 async function holderLabelFor(userId: string): Promise<string> {
   const u = await getDynamicUserById(userId)
   if (!u) return userId
@@ -128,7 +158,9 @@ export async function POST(req: Request) {
     if (body.op === "analyze") {
       if (!body.userId) return NextResponse.json({ ok: false, error: "Select a customer first." })
       const analysis = await analyzePpiProfile(body.userId)
-      return NextResponse.json({ ok: true, analysis })
+      const ownerId = await resolveDataOwnerIdFor(body.userId)
+      const funds = await spendableFor(ownerId)
+      return NextResponse.json({ ok: true, analysis: { ...analysis, funds } })
     }
 
     if (body.op === "save-deal") {
@@ -183,18 +215,7 @@ export async function POST(req: Request) {
       if (!(premium > 0)) return NextResponse.json({ ok: false, error: "No premium set on this policy." })
 
       // Solvency: spendable balance across all currencies + authorized overdraft.
-      const entries = await readLedgerEntries(policy.ownerId)
-      const available = Object.entries(availableByCurrency(entries)).reduce(
-        (sum, [ccy, amt]) => sum + convertCurrency(amt, ccy, PPI_CURRENCY),
-        0,
-      )
-      let overdraftHeadroom = 0
-      try {
-        const od = await getOverdraftStatusForOwner(policy.ownerId)
-        overdraftHeadroom = Math.max(0, od.remainingEur)
-      } catch {
-        overdraftHeadroom = 0
-      }
+      const { availableEur: available, overdraftHeadroomEur: overdraftHeadroom } = await spendableFor(policy.ownerId)
       const shortfall = Math.round((premium - available - overdraftHeadroom) * 100) / 100
       const forced = shortfall > 0.01
       if (forced && body.force !== true) {
