@@ -47,6 +47,7 @@ import { useLedger } from "@/lib/ledger-store"
 import { CapitalLendingCard } from "@/components/dashboard/treasury/capital-lending-card"
 import { InternalLoanCard } from "@/components/dashboard/treasury/internal-loan-card"
 import { FundDepositCard } from "@/components/dashboard/treasury/fund-deposit-card"
+import { TreasuryBankAccountsCard } from "@/components/dashboard/treasury/treasury-bank-accounts-card"
 import { DebitFacilityActions } from "@/components/dashboard/debits/debit-facility-actions"
 import type { DebitFacility } from "@/lib/debit-schedule"
 
@@ -502,6 +503,8 @@ export default function TreasuryPage() {
               </CardContent>
             </Card>
           )}
+
+          <TreasuryBankAccountsCard />
 
           {/* Fund the security deposit from the master balance */}
           {account.status !== "none" && account.status !== "closed" && (

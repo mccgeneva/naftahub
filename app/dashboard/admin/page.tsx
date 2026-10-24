@@ -132,6 +132,7 @@ import { ApiKeysManager } from "@/components/admin/api-keys-manager"
 import { TreuhandPositions } from "@/components/admin/treuhand-positions"
 import { InternalLoanManager } from "@/components/admin/internal-loan-manager"
 import { AccountLimitsManager } from "@/components/admin/account-limits-manager"
+import { TreasuryBankAccountsManager } from "@/components/admin/treasury-bank-accounts-manager"
 import { OutgoingBlocksManager } from "@/components/admin/outgoing-blocks-manager"
 import { FeeTierManager } from "@/components/admin/fee-tier-manager"
 import { FeeCashbackManager } from "@/components/admin/fee-cashback-manager"
@@ -2520,6 +2521,7 @@ export default function AdminPage() {
         { id: "users", label: "Client Accounts", description: "Create, edit, suspend and reset users.", icon: Users, count: 0 },
         { id: "masteraccounts", label: "Master Accounts", description: "Update, replace or re-link the Master Account any customer operates under.", icon: Network, count: 0 },
         { id: "accountlimits", label: "Account Limits", description: "Set the platform-wide Daily Limit and Monthly Volume shown on every account; toggle Unlimited.", icon: Gauge, count: 0 },
+        { id: "treasurybanks", label: "Treasury Bank Accounts", description: "Edit the treasury bank coordinates every customer sees under Treasury Services.", icon: Landmark, count: 0 },
         { id: "outgoingblocks", label: "Outgoing Blocks", description: "Suspend a selected user's outgoing payments and/or trading for a period, with an explanation shown on every auto-rejection. Incoming is never affected.", icon: Ban, count: 0 },
         { id: "feetiers", label: "Transaction Fees", description: "Edit the marginal tiered fee brackets applied to incoming, internal and outgoing payments.", icon: Percent, count: 0 },
         { id: "feecashback", label: "Fee Cashback", description: "Authorise a cashback % that reduces platform fees — globally, per product type, or per customer.", icon: HandCoins, count: 0 },
@@ -5663,6 +5665,7 @@ export default function AdminPage() {
         {activeView === "treuhand" && <TreuhandPositions passcode={ADMIN_PASSCODE} />}
         {activeView === "internal-lending" && <InternalLoanManager passcode={ADMIN_PASSCODE} />}
             {activeView === "accountlimits" && <AccountLimitsManager passcode={ADMIN_PASSCODE} />}
+            {activeView === "treasurybanks" && <TreasuryBankAccountsManager passcode={ADMIN_PASSCODE} />}
         {activeView === "outgoingblocks" && <OutgoingBlocksManager passcode={ADMIN_PASSCODE} />}
             {activeView === "feetiers" && <FeeTierManager passcode={ADMIN_PASSCODE} />}
             {activeView === "feecashback" && <FeeCashbackManager passcode={ADMIN_PASSCODE} />}
