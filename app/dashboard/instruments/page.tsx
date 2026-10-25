@@ -2321,7 +2321,7 @@ export default function InstrumentsPage() {
                               className="text-[10px] bg-muted text-muted-foreground border-border"
                             >
                               <ArrowRight className="mr-1 h-3 w-3" />
-                              No longer held — transferred out
+                              No longer held ��� transferred out
                             </Badge>
                           ) : (
                             <>
@@ -3738,6 +3738,15 @@ export default function InstrumentsPage() {
                       )}
                     </DialogDescription>
                   </DialogHeader>
+                  {!blocked && returnTarget.status !== "pending" && (
+                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-foreground">
+                      A {INSTRUMENT_MANAGEMENT_FEE_LABEL} management &amp; settlement fee of{" "}
+                      <span className="font-semibold">
+                        {formatInstrumentFee(instrumentManagementFee(returnTarget.faceValue), returnTarget.currency)}
+                      </span>{" "}
+                      will be charged to your master account.
+                    </div>
+                  )}
                   {blocked && (
                     <ul className="list-disc space-y-1 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 pl-8 text-sm text-foreground">
                       {reasons.map((r) => (
@@ -3763,7 +3772,10 @@ export default function InstrumentsPage() {
                             },
                           })
                           toast.success("Returned to marketplace", {
-                            description: `${target.type} ${target.id} has been removed from your portfolio and is available again.`,
+                            description:
+                              target.status === "pending"
+                                ? `${target.type} ${target.id} has been removed from your portfolio and is available again.`
+                                : `${target.type} ${target.id} has been returned. A ${formatInstrumentFee(instrumentManagementFee(target.faceValue), target.currency)} management fee was charged.`,
                           })
                           setReturnTarget(null)
                         }}

@@ -2281,9 +2281,8 @@ export async function deleteMyInstrument(
   options?: { chargeManagementFee?: boolean },
 ): Promise<{ ok: boolean; error?: string; feeCharged?: number; feeCurrency?: string }> {
   // The 0.035% management / settlement fee is charged when a client "settles out"
-  // (DELETES) an instrument. It is NOT charged when the instrument is returned to
-  // the marketplace (that path passes chargeManagementFee: false), nor for a
-  // still-pending request (which the store cancels via cancelMyApproval instead).
+  // (DELETES) an instrument or returns it to the marketplace. It is NOT charged
+  // for a still-pending request (which the store cancels via cancelMyApproval).
   const chargeManagementFee = options?.chargeManagementFee !== false
   const session = await resolveCurrentSession()
   if (!session) return { ok: false, error: "Your session has expired. Please sign in again." }
