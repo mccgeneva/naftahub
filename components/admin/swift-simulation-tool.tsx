@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { AlertTriangle, ClipboardPaste, FileText, FlaskConical, Loader2 } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { AlertTriangle, ClipboardPaste, FileText, FlaskConical, Loader2, Upload } from "lucide-react"
 import { toast } from "sonner"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -31,6 +31,8 @@ export function SwiftSimulationTool() {
   const [busy, setBusy] = useState(false)
   const [history, setHistory] = useState<SwiftSimulationRecord[]>([])
   const [lastWarnings, setLastWarnings] = useState<string[]>([])
+  const [reading, setReading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
 
   const loadHistory = async () => {
     const res = await listSwiftSimulationsAdmin(ADMIN_PASSCODE)
@@ -44,11 +46,50 @@ export function SwiftSimulationTool() {
   const set = (key: keyof SwiftSimulationInput) => (value: string) =>
     setInput((prev) => ({ ...prev, [key]: value }))
 
+  const importDocument = async (file: File) => {
+    setReading(true)
+    try {
+      const body = new FormData()
+      body.append("file", file)
+      body.append("passcode", ADMIN_PASSCODE)
+      const res = await fetch("/api/admin/swift-simulation/extract", {
+        method: "POST",
+        body,
+        signal: AbortSignal.timeout(70000),
+      })
+      const data = (await res.json().catch(() => null)) as
+        | { ok: true; fields: Partial<SwiftSimulationInput>; text: string }
+        | { ok: false; error: string }
+        | null
+      if (!data || !data.ok) {
+        toast.error(data && !data.ok ? data.error : "Couldn't read the document.")
+        return
+      }
+      const count = Object.keys(data.fields).length
+      if (data.text) setNote(data.text.slice(0, 4000))
+      if (!count) {
+        toast.error("No payment details found in this document.")
+        return
+      }
+      setInput((prev) => ({ ...prev, ...data.fields }))
+      toast.success(`Filled ${count} field${count === 1 ? "" : "s"} from ${file.name}. Check them before generating.`)
+    } catch {
+      toast.error("Reading the document took too long. Try again or paste the note.")
+    } finally {
+      setReading(false)
+      if (fileRef.current) fileRef.current.value = ""
+    }
+  }
+
   const importNote = () => {
+    if (!note.trim()) {
+      toast.error("The note box is empty. Paste a payment note or upload a PDF/DOCX document.")
+      return
+    }
     const parsed = parsePaymentNote(note)
     const count = Object.keys(parsed).length
     if (!count) {
-      toast.error("No fields recognised. Use lines like “Beneficiary: Acme Ltd”.")
+      toast.error("No fields recognised. Use lines like “Beneficiary: Acme Ltd”, or upload the document instead.")
       return
     }
     setInput((prev) => ({ ...prev, ...parsed }))
@@ -101,10 +142,37 @@ export function SwiftSimulationTool() {
               placeholder={"Sender: Acme Trading Ltd\nBeneficiary: Global Imports SA\nAmount: EUR 25000\nReference: INV-1042"}
               className="text-base"
             />
-            <Button type="button" variant="outline" onClick={importNote} className="min-h-11 w-full sm:w-auto">
-              <ClipboardPaste className="size-4" aria-hidden />
-              Fill fields from note
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button type="button" variant="outline" onClick={importNote} className="min-h-11 w-full sm:w-auto">
+                <ClipboardPaste className="size-4" aria-hidden />
+                Fill fields from note
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={reading}
+                onClick={() => fileRef.current?.click()}
+                className="min-h-11 w-full sm:w-auto"
+              >
+                {reading ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Upload className="size-4" aria-hidden />}
+                {reading ? "Reading document…" : "Upload PDF or DOCX"}
+              </Button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                className="sr-only"
+                aria-label="Upload a payment document"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) void importDocument(f)
+                }}
+              />
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Uploaded documents are read to fill the fields below and are not stored. Bank codes and account numbers are
+              still replaced with fictitious placeholders.
+            </p>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
