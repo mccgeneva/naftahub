@@ -32,6 +32,7 @@ import {
   BadgeCheck,
   Repeat,
   ScrollText,
+  FlaskConical,
   MessageSquareText,
   MessagesSquare,
   Settings,
@@ -136,6 +137,7 @@ import { TreasuryBankAccountsManager } from "@/components/admin/treasury-bank-ac
 import { OutgoingBlocksManager } from "@/components/admin/outgoing-blocks-manager"
 import { FeeTierManager } from "@/components/admin/fee-tier-manager"
 import { FeeCashbackManager } from "@/components/admin/fee-cashback-manager"
+import { SwiftSimulationTool } from "@/components/admin/swift-simulation-tool"
 import { CostForecaster } from "@/components/admin/cost-forecaster"
 import { SourceOfFundsManager } from "@/components/admin/source-of-funds-manager"
   import { GuaranteesManager } from "@/components/admin/guarantees-manager"
@@ -2525,6 +2527,7 @@ export default function AdminPage() {
         { id: "outgoingblocks", label: "Outgoing Blocks", description: "Suspend a selected user's outgoing payments and/or trading for a period, with an explanation shown on every auto-rejection. Incoming is never affected.", icon: Ban, count: 0 },
         { id: "feetiers", label: "Transaction Fees", description: "Edit the marginal tiered fee brackets applied to incoming, internal and outgoing payments.", icon: Percent, count: 0 },
         { id: "feecashback", label: "Fee Cashback", description: "Authorise a cashback % that reduces platform fees — globally, per product type, or per customer.", icon: HandCoins, count: 0 },
+        { id: "swiftsimulation", label: "SWIFT Simulation (Training)", description: "Generate a clearly-watermarked MT103-style training worksheet from payment-note data. Fictitious codes only; every generation is logged.", icon: FlaskConical, count: 0 },
   { id: "guarantees", label: "Guarantees Accumulator", description: "Independent trust/risk scoring. Tune the factor weights and high-risk threshold; high-risk accounts are blocked from opening new financing.", icon: ShieldAlert, count: 0 },
         { id: "sectionaccess", label: "Section Access", description: "Lock or unlock any dashboard section for an individual user; grant a Visitor full access to a selected section.", icon: Lock, count: 0 },
         { id: "demoid", label: "Demo ID Log", description: "Inspect the ID documents, IP addresses and GPS positions captured from visitors testing the demo account.", icon: Fingerprint, count: 0 },
@@ -5669,6 +5672,7 @@ export default function AdminPage() {
         {activeView === "outgoingblocks" && <OutgoingBlocksManager passcode={ADMIN_PASSCODE} />}
             {activeView === "feetiers" && <FeeTierManager passcode={ADMIN_PASSCODE} />}
             {activeView === "feecashback" && <FeeCashbackManager passcode={ADMIN_PASSCODE} />}
+            {activeView === "swiftsimulation" && <SwiftSimulationTool />}
             {activeView === "costforecast" && <CostForecaster />}
             {activeView === "sourceoffunds" && <SourceOfFundsManager />}
           {activeView === "guarantees" && <GuaranteesManager passcode={ADMIN_PASSCODE} />}
