@@ -211,6 +211,81 @@ export async function adminExtractTrace(passcode: string, needle: string): Promi
   }
 }
 
+export type TraceReceiptSource =
+  | {
+      ok: true
+      entry: {
+        id: string
+        reference?: string
+        direction: string
+        amount: number
+        currency: string
+        status: string
+        date: string
+        category?: string
+        counterparty: string
+        bank?: string
+        account?: string
+        comment?: string
+      }
+      holderName: string
+      holderAddress?: string
+    }
+  | { ok: false; error: string }
+
+/**
+ * Admin: for an older receipt that has no stored copy, find the ledger
+ * transaction it was printed from so the admin UI can rebuild the PDF.
+ * The receipt filename is `receipt-<reference>.pdf`.
+ */
+export async function adminGetTraceReceiptSource(passcode: string, docId: string): Promise<TraceReceiptSource> {
+  if (!(await adminOk(passcode))) return { ok: false, error: "Administrator authorization failed." }
+  try {
+    const trace = await getDocumentTrace(docId)
+    if (!trace) return { ok: false, error: "No record found for that document id." }
+    if (trace.kind !== "receipt" || !trace.filename) {
+      return { ok: false, error: "Only receipts can be rebuilt from their transaction." }
+    }
+    const ref = trace.filename.replace(/^receipt-/i, "").replace(/\.pdf$/i, "")
+    const { readLedgerEntries } = await import("@/lib/ledger-db")
+    const { resolveDataOwnerIdFor, resolveAccountProfileById } = await import("@/lib/session-user")
+    const ownerId = await resolveDataOwnerIdFor(trace.userId)
+    const ids = Array.from(new Set([ownerId, trace.userId].filter(Boolean))) as string[]
+    let match: Awaited<ReturnType<typeof readLedgerEntries>>[number] | undefined
+    for (const id of ids) {
+      const entries = await readLedgerEntries(id)
+      match = entries.find((e) => e.reference === ref) ?? entries.find((e) => e.id === ref)
+      if (match) break
+    }
+    if (!match) return { ok: false, error: "The transaction behind this receipt could not be found." }
+    const profile = (await resolveAccountProfileById(trace.userId)) as unknown as Record<string, unknown>
+    const holderName = String(profile.fullName || profile.company || trace.account || "")
+    const holderAddress = typeof profile.address === "string" ? profile.address : undefined
+    return {
+      ok: true,
+      entry: {
+        id: match.id,
+        reference: match.reference,
+        direction: match.direction,
+        amount: match.amount,
+        currency: match.currency,
+        status: match.status,
+        date: match.date,
+        category: match.category,
+        counterparty: match.counterparty,
+        bank: match.bank,
+        account: match.account,
+        comment: match.comment,
+      },
+      holderName,
+      holderAddress,
+    }
+  } catch (err) {
+    console.log("[v0] adminGetTraceReceiptSource failed:", (err as Error).message)
+    return { ok: false, error: "Could not rebuild the receipt. Please try again." }
+  }
+}
+
 /**
  * Admin: geolocate a bare IP on demand (used when opening a row from the recent
  * list so the location panel is populated consistently).

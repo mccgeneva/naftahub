@@ -40,7 +40,13 @@ import {
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
 import { blobFileUrl } from "@/lib/kyc-types"
 import { downloadFile } from "@/lib/download-file"
-import { adminExtractTrace, adminListTraces, type TraceLookupResult } from "@/app/actions/pdf-trace"
+import {
+  adminExtractTrace,
+  adminGetTraceReceiptSource,
+  adminListTraces,
+  type TraceLookupResult,
+} from "@/app/actions/pdf-trace"
+import { generateReceiptPdf } from "@/lib/receipt-pdf"
 import type { IpGeo } from "@/lib/ip-geo"
 import { extractTraceToken } from "@/lib/pdf-trace"
 import type { DocumentTrace } from "@/lib/pdf-trace-db"
@@ -131,19 +137,109 @@ function GeoPanel({ geo }: { geo: IpGeo }) {
   )
 }
 
+function RebuiltReceipt({ trace }: { trace: DocumentTrace }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  const [downloading, setDownloading] = useState(false)
+  const name = trace.filename || `${trace.docId}.pdf`
+  const canRebuild = trace.kind === "receipt"
+
+  useEffect(() => {
+    return () => {
+      if (blobUrl) URL.revokeObjectURL(blobUrl)
+    }
+  }, [blobUrl])
+
+  async function rebuild() {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await adminGetTraceReceiptSource(ADMIN_PASSCODE, trace.docId)
+      if (!res.ok) {
+        setError(res.error)
+        return
+      }
+      const e = res.entry
+      let amount = `${e.currency} ${e.amount.toFixed(2)}`
+      try {
+        amount = new Intl.NumberFormat("en-US", { style: "currency", currency: e.currency }).format(e.amount)
+      } catch {}
+      const bic = e.bank?.match(/\b(?:BIC|SWIFT)[:\s]+([A-Z0-9]{8,11})/i)?.[1]
+      const bankName = e.bank?.replace(/\s*\(?\b(?:BIC|SWIFT)[:\s]+[A-Z0-9]{8,11}\)?/i, "").trim()
+      const { doc } = generateReceiptPdf({
+        reference: e.reference || e.id,
+        direction: e.direction,
+        amount,
+        currency: e.currency,
+        status: e.status,
+        date: e.date,
+        category: e.category,
+        counterparty: e.counterparty,
+        bank: bankName || e.bank,
+        bic,
+        iban: e.account,
+        notes: e.comment,
+        accountHolder: res.holderName,
+        accountHolderAddress: res.holderAddress,
+      })
+      const blob = doc.output("blob") as Blob
+      setBlobUrl(URL.createObjectURL(blob))
+    } catch (err) {
+      setError((err as Error).message || "Could not rebuild the receipt.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-border bg-secondary/40 p-4">
+      <div className="flex items-start gap-3">
+        <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <p className="text-sm leading-relaxed text-muted-foreground text-pretty">
+          {canRebuild
+            ? "The original file was not archived (generated before archiving was enabled). You can rebuild this receipt from the customer's transaction record — same transaction data, same layout."
+            : "No copy of this document is stored. It was generated before archiving was enabled, so only its details below are available."}
+        </p>
+      </div>
+      {canRebuild && !blobUrl ? (
+        <Button className="h-11 w-full" onClick={rebuild} disabled={busy}>
+          {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+          {busy ? "Rebuilding…" : "Rebuild receipt"}
+        </Button>
+      ) : null}
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {blobUrl ? (
+        <div className="overflow-hidden rounded-lg border border-border bg-card">
+          <iframe src={blobUrl} title={`Rebuilt ${trace.docId}`} className="h-96 w-full bg-secondary" />
+          <div className="border-t border-border p-3">
+            <Button
+              className="h-11 w-full"
+              disabled={downloading}
+              onClick={async () => {
+                setDownloading(true)
+                try {
+                  await downloadFile(blobUrl, name)
+                } finally {
+                  setDownloading(false)
+                }
+              }}
+            >
+              {downloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+              Download receipt
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function TracedDocumentPreview({ trace }: { trace: DocumentTrace }) {
   const [downloading, setDownloading] = useState(false)
 
   if (!trace.filePathname) {
-    return (
-      <div className="flex items-start gap-3 rounded-lg border border-border bg-secondary/40 p-4">
-        <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground text-pretty">
-          No copy of this document is stored. Documents are archived from now on; this one was generated
-          before archiving was enabled, so only its details below are available.
-        </p>
-      </div>
-    )
+    return <RebuiltReceipt trace={trace} />
   }
 
   const url = blobFileUrl(trace.filePathname, ADMIN_PASSCODE)
