@@ -35,8 +35,11 @@ import {
   MapPin,
   ExternalLink,
   Building2,
+  Download,
 } from "lucide-react"
 import { ADMIN_PASSCODE } from "@/lib/admin-config"
+import { blobFileUrl } from "@/lib/kyc-types"
+import { downloadFile } from "@/lib/download-file"
 import { adminExtractTrace, adminListTraces, type TraceLookupResult } from "@/app/actions/pdf-trace"
 import type { IpGeo } from "@/lib/ip-geo"
 import { extractTraceToken } from "@/lib/pdf-trace"
@@ -128,6 +131,67 @@ function GeoPanel({ geo }: { geo: IpGeo }) {
   )
 }
 
+function TracedDocumentPreview({ trace }: { trace: DocumentTrace }) {
+  const [downloading, setDownloading] = useState(false)
+
+  if (!trace.filePathname) {
+    return (
+      <div className="flex items-start gap-3 rounded-lg border border-border bg-secondary/40 p-4">
+        <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <p className="text-sm text-muted-foreground text-pretty">
+          No copy of this document is stored. Documents are archived from now on; this one was generated
+          before archiving was enabled, so only its details below are available.
+        </p>
+      </div>
+    )
+  }
+
+  const url = blobFileUrl(trace.filePathname, ADMIN_PASSCODE)
+  const name = trace.filename || `${trace.docId}.pdf`
+  const sizeLabel = trace.fileSize ? `${(trace.fileSize / 1024).toFixed(0)} KB` : null
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-border bg-card">
+      <div className="flex items-center gap-3 border-b border-border p-3">
+        <div className="rounded-md bg-secondary p-1.5">
+          <FileText className="h-4 w-4 text-primary" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-foreground">{trace.title || name}</p>
+          <p className="truncate text-xs text-muted-foreground">
+            {name}
+            {sizeLabel ? ` · ${sizeLabel}` : ""}
+          </p>
+        </div>
+      </div>
+      <iframe src={url} title={`Document ${trace.docId}`} className="h-96 w-full bg-secondary" />
+      <div className="flex flex-col gap-2 border-t border-border p-3 sm:flex-row">
+        <Button asChild variant="outline" className="h-11 flex-1">
+          <a href={url} target="_blank" rel="noopener noreferrer">
+            <ExternalLink className="mr-2 h-4 w-4" />
+            Open full document
+          </a>
+        </Button>
+        <Button
+          className="h-11 flex-1"
+          disabled={downloading}
+          onClick={async () => {
+            setDownloading(true)
+            try {
+              await downloadFile(url, name)
+            } finally {
+              setDownloading(false)
+            }
+          }}
+        >
+          {downloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+          Download
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function TraceResultCard({ result }: { result: TraceLookupResult }) {
   const trace = result.trace
   const payload = result.payload
@@ -142,6 +206,7 @@ function TraceResultCard({ result }: { result: TraceLookupResult }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {trace ? <TracedDocumentPreview trace={trace} /> : null}
         {trace ? (
           <div className="grid gap-4 sm:grid-cols-2">
             <Field icon={FileText} label="Document ID" value={trace.docId} mono />

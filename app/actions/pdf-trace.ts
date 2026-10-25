@@ -23,6 +23,7 @@ import {
   insertDocumentTrace,
   getDocumentTrace,
   listDocumentTraces,
+  setDocumentTraceFile,
   type DocumentTrace,
 } from "@/lib/pdf-trace-db"
 import { decodeTraceToken, extractTraceToken, type TracePayload } from "@/lib/pdf-trace"
@@ -127,6 +128,28 @@ export async function recordDocumentTrace(
   } catch (err) {
     console.log("[v0] recordDocumentTrace failed:", (err as Error).message)
     return { ok: false, error: "Could not record trace." }
+  }
+}
+
+/**
+ * Link the archived copy of a generated PDF (uploaded straight from the
+ * browser to Blob) to its audit row, so administrators can open the exact
+ * document the customer produced. Identity comes from the session.
+ */
+export async function attachDocumentTraceFile(input: {
+  docId: string
+  pathname: string
+  size?: number
+}): Promise<{ ok: boolean }> {
+  try {
+    if (!input?.docId || !input?.pathname?.startsWith("doc-traces/")) return { ok: false }
+    const session = await resolveCurrentSession()
+    if (!session) return { ok: false }
+    const ok = await setDocumentTraceFile(input.docId, session.id, input.pathname, input.size ?? null)
+    return { ok }
+  } catch (err) {
+    console.log("[v0] attachDocumentTraceFile failed:", (err as Error).message)
+    return { ok: false }
   }
 }
 

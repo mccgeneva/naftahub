@@ -14,7 +14,7 @@ import { useCurrentUser } from "@/lib/use-current-user"
 import { DEMO_USER_ID, UNKNOWN_USER_ID } from "@/lib/users"
 import { PdfPreviewModal } from "@/components/pdf-preview-modal"
 import { newDocumentId, encodeTraceToken, embedTraceToken } from "@/lib/pdf-trace"
-import { recordDocumentTrace } from "@/app/actions/pdf-trace"
+import { attachDocumentTraceFile, recordDocumentTrace } from "@/app/actions/pdf-trace"
 
 interface PdfViewerState {
   doc: jsPDF
@@ -92,7 +92,28 @@ export function PdfViewerProvider({ children }: { children: React.ReactNode }) {
         embedTraceToken(doc, token, docId)
         // Fire-and-forget: the server resolves the true identity + IP from the
         // request itself, so a spoofed client payload can't corrupt the record.
-        void recordDocumentTrace({ docId, kind, title, filename, isDemo }).catch(() => {})
+        // Snapshot the final bytes now (the doc object may be reused later), then
+        // archive a copy once the audit row exists so admins can open the exact
+        // document. Entirely best-effort and off the critical path.
+        let pdfBlob: Blob | null = null
+        try {
+          pdfBlob = doc.output("blob")
+        } catch {
+          pdfBlob = null
+        }
+        void recordDocumentTrace({ docId, kind, title, filename, isDemo })
+          .then(async (res) => {
+            if (!res?.ok || !pdfBlob) return
+            const { upload } = await import("@vercel/blob/client")
+            const stored = await upload(`doc-traces/${user.id}/${docId}.pdf`, pdfBlob, {
+              access: "public",
+              contentType: "application/pdf",
+              handleUploadUrl: "/api/documents/blob-upload",
+              abortSignal: AbortSignal.timeout(90000),
+            })
+            await attachDocumentTraceFile({ docId, pathname: stored.pathname, size: pdfBlob.size })
+          })
+          .catch(() => {})
       } catch {
         // Tracing must never block a document from being shown.
       }

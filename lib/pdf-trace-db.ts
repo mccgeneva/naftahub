@@ -27,6 +27,9 @@ export interface DocumentTrace {
   biometricHash: string | null
   isDemo: boolean
   createdAt: string
+  /** Blob pathname of the archived copy of the generated PDF, when stored. */
+  filePathname: string | null
+  fileSize: number | null
 }
 
 export interface RecordTraceInput {
@@ -63,6 +66,8 @@ async function ensureTable(): Promise<void> {
   // Helpful indexes for the two admin lookups: by user and by recency.
   await query(`CREATE INDEX IF NOT EXISTS document_traces_user_idx ON document_traces (user_id)`)
   await query(`CREATE INDEX IF NOT EXISTS document_traces_created_idx ON document_traces (created_at DESC)`)
+  await query(`ALTER TABLE document_traces ADD COLUMN IF NOT EXISTS file_pathname text`)
+  await query(`ALTER TABLE document_traces ADD COLUMN IF NOT EXISTS file_size bigint`)
   ensured = true
 }
 
@@ -80,7 +85,30 @@ function rowToTrace(row: Record<string, unknown>): DocumentTrace {
     biometricHash: (row.biometric_hash as string | null) ?? null,
     isDemo: !!row.is_demo,
     createdAt: created instanceof Date ? created.toISOString() : (created as string) ?? new Date().toISOString(),
+    filePathname: (row.file_pathname as string | null) ?? null,
+    fileSize: row.file_size != null ? Number(row.file_size) : null,
   }
+}
+
+/**
+ * Attach the archived PDF copy to an existing trace row. Scoped to the owning
+ * user and write-once (only when no file is attached yet), so a client can
+ * neither overwrite an existing copy nor attach a file to someone else's row.
+ */
+export async function setDocumentTraceFile(
+  docId: string,
+  userId: string,
+  pathname: string,
+  size: number | null,
+): Promise<boolean> {
+  await ensureTable()
+  const { rows } = await query(
+    `UPDATE document_traces SET file_pathname = $3, file_size = $4
+     WHERE doc_id = $1 AND user_id = $2 AND file_pathname IS NULL
+     RETURNING doc_id`,
+    [docId, userId, pathname, size],
+  )
+  return rows.length > 0
 }
 
 /**
