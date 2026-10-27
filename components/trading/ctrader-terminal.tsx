@@ -1552,11 +1552,8 @@ export function CtraderTerminal(props: CtraderTerminalProps) {
             </button>
           )}
           {!searchFocused && (
-            <div
-              className="flex size-9 shrink-0 items-center justify-center rounded-full"
-              style={{ backgroundColor: "#e8352410" }}
-            >
-              <img src="/images/nqai-logo.png" alt="NQAi" className="size-7 rounded-full object-contain" />
+            <div className="flex h-9 shrink-0 items-center justify-center rounded-md bg-white px-2">
+              <img src="/images/nqai-logo.png" alt="NQAi" className="h-4 w-auto object-contain" />
             </div>
           )}
           <div
