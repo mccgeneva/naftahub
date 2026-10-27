@@ -3,7 +3,8 @@
 import { SearchableSelect } from "@/components/ui/searchable-select"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArrowDownLeft, ArrowUpRight, Trash2, Wallet, Plus, Loader2, Pencil, Undo2 } from "lucide-react"
+import { ArrowDownLeft, ArrowUpRight, Trash2, Wallet, Plus, Loader2, Pencil, Undo2, Search } from "lucide-react"
+import { IbanSearchDialog } from "@/components/admin/iban-search-dialog"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -112,6 +113,7 @@ export function BalanceManager() {
   const [swift, setSwift] = useState("")
   const [bankName, setBankName] = useState("")
   const [bankAddress, setBankAddress] = useState("")
+  const [ibanSearchOpen, setIbanSearchOpen] = useState(false)
   // The last values we auto-filled from an IBAN lookup. A field is only
   // overwritten by a new lookup when the admin hasn't manually edited it (i.e.
   // it still equals what we last auto-filled, or is empty), so manual overrides
@@ -563,17 +565,46 @@ export function BalanceManager() {
               onChange={(e) => setCounterparty(e.target.value)}
             />
           </div>
-          <VerifiedBankField
-            id="bm-account"
-            label={isIncoming ? "Sender IBAN / account" : "Beneficiary IBAN / account"}
-            kind="iban"
-            lenient
-            value={account}
-            onChange={setAccount}
-            onResolved={handleResolvedBank}
-            placeholder="e.g. DE77202208000056457149"
-          />
+          <div className="flex min-w-0 flex-col gap-2">
+            <VerifiedBankField
+              id="bm-account"
+              label={isIncoming ? "Sender IBAN / account" : "Beneficiary IBAN / account"}
+              kind="iban"
+              lenient
+              value={account}
+              onChange={setAccount}
+              onResolved={handleResolvedBank}
+              placeholder="e.g. DE77202208000056457149"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 w-full sm:w-auto sm:self-start"
+              onClick={() => setIbanSearchOpen(true)}
+            >
+              <Search className="size-4" />
+              Find IBAN on platform or externally
+            </Button>
+          </div>
         </div>
+        <IbanSearchDialog
+          open={ibanSearchOpen}
+          onOpenChange={setIbanSearchOpen}
+          initialQuery={account || counterparty}
+          onSelect={(p) => {
+            setAccount(p.iban)
+            if (p.holder) setCounterparty(p.holder)
+            if (p.swift) setSwift(p.swift)
+            if (p.bankName) setBankName(p.bankName)
+            if (p.bankAddress) setBankAddress(p.bankAddress)
+            autoFilledRef.current = {
+              swift: p.swift || autoFilledRef.current.swift,
+              bankName: p.bankName || autoFilledRef.current.bankName,
+              bankAddress: p.bankAddress || autoFilledRef.current.bankAddress,
+            }
+            toast.success(p.external ? "External IBAN applied" : `Filled from ${p.holder}`)
+          }}
+        />
 
         {/* Received-into account — attributes an incoming payment to one of the
             client's registered banks so they see a per-bank sub-balance. Only
