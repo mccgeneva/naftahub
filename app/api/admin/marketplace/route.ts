@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { adminActionAuthorized } from "@/lib/admin-auth"
+import { adminActionAuthorized, adminAuthorizationFailureReason } from "@/lib/admin-auth"
 import {
   getAdminMarketplaceInstruments,
   publishInstrument,
@@ -42,7 +42,9 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const passcode = req.headers.get("x-admin-passcode") ?? ""
   if (!(await adminActionAuthorized(passcode))) {
-    return NextResponse.json({ ok: false, error: "Administrator authorization failed." }, { status: 401 })
+    const reason = await adminAuthorizationFailureReason(passcode)
+    console.log("[v0] /api/admin/marketplace POST refused:", reason)
+    return NextResponse.json({ ok: false, error: reason }, { status: 401 })
   }
 
   let body: Record<string, unknown>

@@ -109,10 +109,10 @@ export async function resolveActingUserId(): Promise<string | null> {
     const token = cookieStore.get(SESSION_COOKIE)?.value
     if (!token) return null
     try {
-      const dyn = await getDynamicUserBySessionToken(token)
+      const dyn = await withDbRetry(() => getDynamicUserBySessionToken(token))
       if (dyn && dyn.status === "active") return dyn.id
     } catch {
-      // DB unreachable — cannot authorize.
+      // DB unreachable even after a retry — cannot authorize.
     }
     return null
   } catch {
@@ -132,10 +132,39 @@ export async function isCurrentSessionAdmin(): Promise<boolean> {
   const actingId = await resolveActingUserId()
   if (!actingId) return false
   try {
-    const rec = await getDynamicUserById(actingId)
+    const rec = await withDbRetry(() => getDynamicUserById(actingId))
     return isAdminEmail(rec?.email)
   } catch {
     return false
+  }
+}
+
+/**
+ * Why an admin action was refused, so the UI can tell a wrong PIN apart from a
+ * non-admin / unverifiable session instead of one opaque message.
+ */
+export async function adminAuthorizationFailureReason(pin: string | null | undefined): Promise<string> {
+  if (!verifyAdminPin(pin)) return "The administrator PIN is incorrect. Re-open the admin panel and enter the PIN again."
+  const actingId = await resolveActingUserId()
+  if (!actingId) return "Your administrator session could not be verified. Please sign in again."
+  try {
+    const rec = await withDbRetry(() => getDynamicUserById(actingId))
+    if (!isAdminEmail(rec?.email)) {
+      return `You are signed in as ${rec?.email ?? "a non-administrator account"}, which is not an administrator. Sign in with an administrator account.`
+    }
+  } catch {
+    return "The administrator check could not reach the database. Please try again in a moment."
+  }
+  return "Administrator authorization failed. Please try again."
+}
+
+/** Retry a DB read once after a short pause so a transient blip doesn't read as "not an admin". */
+async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn()
+  } catch {
+    await new Promise((r) => setTimeout(r, 300))
+    return fn()
   }
 }
 

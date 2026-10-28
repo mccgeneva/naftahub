@@ -1,7 +1,7 @@
 "use server"
 
 import { query } from "@/lib/db"
-import { adminActionAuthorized } from "@/lib/admin-auth"
+import { adminActionAuthorized, adminAuthorizationFailureReason } from "@/lib/admin-auth"
 import { type UserProfile } from "@/lib/users"
 import { resolveCurrentSession } from "@/lib/session-user"
 import { logActivity } from "@/app/actions/log-activity"
@@ -160,7 +160,7 @@ async function getSessionUser(): Promise<UserProfile | undefined> {
 async function requireAdmin(passcode: string): Promise<UserProfile> {
   const user = await getSessionUser()
   if (!user) throw new Error("Your session has expired. Please sign in again.")
-  if (!(await adminActionAuthorized(passcode))) throw new Error("Administrator authorization failed.")
+  if (!(await adminActionAuthorized(passcode))) throw new Error(await adminAuthorizationFailureReason(passcode))
   return user
 }
 
