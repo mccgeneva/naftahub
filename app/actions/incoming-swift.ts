@@ -88,6 +88,21 @@ import { findInstrumentType } from "@/lib/instrument-marketplace"
 import { buildInstrumentIdentifiers } from "@/lib/instrument-identifiers"
 import type { GatewayAccount } from "@/lib/gateway-store"
 import type { LedgerEntry } from "@/lib/ledger-store"
+import { resolveFinancialMemberIds } from "@/lib/session-user"
+import type { NewNotification } from "@/lib/notifications-db"
+
+// A credit lands on the Master's shared ledger, so every member of that pool
+// (Master + Joint + Sub accounts) must be told, not only the matched holder.
+async function notifyFinancialPool(userId: string, n: Omit<NewNotification, "userId">): Promise<void> {
+  let ids: string[] = [userId]
+  try {
+    ids = await resolveFinancialMemberIds(userId)
+    if (!ids.includes(userId)) ids.push(userId)
+  } catch {
+    // fall back to the matched holder only
+  }
+  await Promise.all(ids.map((id) => insertNotification({ ...n, userId: id }).catch(() => undefined)))
+}
 
 /** FX spread applied when the received currency differs from the account. */
 const GATEWAY_FX_FEE_RATE = 0.005
@@ -842,8 +857,7 @@ export async function creditIncomingSwiftAdmin(passcode: string, id: string): Pr
       return { ok: false, alreadyCredited: true, error: "This message has already been credited." }
     }
 
-    await insertNotification({
-      userId: message.userId,
+    await notifyFinancialPool(message.userId, {
       tone: "success",
       title: `Payment received — ${creditedLabel}`,
       body: `You received ${creditedLabel} from ${senderName}${
@@ -1138,8 +1152,7 @@ export async function recordGuaranteeInstrumentAdmin(
       return { ok: false, alreadyBooked: true, error: "This message has already been processed." }
     }
 
-    await insertNotification({
-      userId: message.userId,
+    await notifyFinancialPool(message.userId, {
       tone: "success",
       title: `Bank instrument received — ${instrumentLabel}`,
       body: `A ${bookLabel} of ${instrumentLabel} from ${issuer} was booked to your Bank Instruments. A ${feeLabel} receipt fee (0.2%) was applied. You can pledge it for a treasury leverage / PPP line under Leverage → Bank Instruments.`,
