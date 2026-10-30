@@ -54,7 +54,9 @@ export function ImageLightbox({ src, alt, onClose }: { src: string; alt: string;
           type="button"
           onClick={(e) => {
             e.stopPropagation()
-            void downloadFile(src, alt)
+            void downloadFile(src, alt).then((ok) => {
+              if (!ok) window.alert("The image could not be downloaded. Please try again.")
+            })
           }}
           className="flex h-11 w-11 items-center justify-center rounded-full border border-border bg-secondary text-foreground transition-colors hover:bg-secondary/70"
           title="Download"
