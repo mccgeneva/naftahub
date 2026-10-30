@@ -105,7 +105,11 @@ export interface SerializableUserProfile {
    *  hit the 8h absolute cap, and the client-side guard stands down. User-set
    *  from the profile page; absent ⇒ standard idle/absolute session. */
   persistentSession?: boolean
-}
+  /** Security lock: sign-in is blocked until the user sets a new password via
+   *  the emailed reset link (set when the user reports the account compromised). */
+  passwordResetRequired?: boolean
+  passwordResetRequiredAt?: string
+  }
 
 // Pick a sensible icon for a profile row based on its label so hydrated dynamic
 // profiles look consistent with the hand-authored static ones.

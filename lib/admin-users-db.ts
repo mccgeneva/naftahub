@@ -192,6 +192,17 @@ export async function updateDynamicUserProfile(
   return rows[0] ? rowToRecord(rows[0]) : undefined
 }
 
+/**
+ * Replace the account's session token. Every existing session cookie carries the
+ * old token, so this signs the account out on every device at once.
+ */
+export async function rotateDynamicUserSessionToken(id: string): Promise<void> {
+  await ensureTable()
+  const { randomBytes } = await import("node:crypto")
+  const token = `st_${randomBytes(24).toString("hex")}`
+  await query(`UPDATE admin_users SET session_token = $2, updated_at = now() WHERE id = $1`, [id, token])
+}
+
 export async function setDynamicUserStatus(id: string, status: UserStatus): Promise<DynamicUserRecord | undefined> {
   await ensureTable()
   const { rows } = await query(

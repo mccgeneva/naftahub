@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useActionState, useEffect, useState } from "react"
 import { useFormStatus } from "react-dom"
 import { Lock, Mail, ShieldCheck, AlertCircle, ScanFace, ArrowLeft, Info } from "lucide-react"
@@ -173,7 +174,15 @@ export function LoginForm() {
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="password">Password</Label>
+        <div className="flex items-center justify-between gap-2">
+          <Label htmlFor="password">Password</Label>
+          <Link
+            href="/forgot-password"
+            className="inline-flex min-h-11 items-center text-xs font-medium text-primary underline-offset-4 hover:underline"
+          >
+            Forgot or compromised password?
+          </Link>
+        </div>
         <div className="relative">
           <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input

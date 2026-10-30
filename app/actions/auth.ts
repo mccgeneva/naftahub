@@ -118,7 +118,12 @@ interface AuthMatch {
   active: boolean
   /** The account opted into a persistent ("never log out") session. */
   persist: boolean
+  /** Security lock — sign-in blocked until a new password is set via email. */
+  resetRequired?: boolean
 }
+
+const RESET_REQUIRED_MESSAGE =
+  "This account is locked for security. Use the link we emailed to your registered address to set a new password, or request a new link with “Forgot or compromised password?”."
 
 /**
  * Resolve a login email to a credential record from the database. All accounts
@@ -137,6 +142,7 @@ async function findAuthMatchByEmail(email: string): Promise<AuthMatch | undefine
         company: dyn.profile.company || "",
         active: dyn.status === "active",
         persist: dyn.profile.persistentSession === true,
+        resetRequired: dyn.profile.passwordResetRequired === true,
       }
     }
   } catch {
@@ -335,6 +341,12 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
   const passwordMatches = !!matchedUser && password === matchedUser.password
   const accountActive = !!matchedUser && matchedUser.active
 
+  if (matchedUser && passwordMatches && accountActive && matchedUser.resetRequired) {
+    await clearAllSessionCookies()
+    await logFailedLogin(email, "account locked — password reset required")
+    return { error: RESET_REQUIRED_MESSAGE }
+  }
+
   if (matchedUser && passwordMatches && accountActive) {
     // ------------------------------------------------------------------
     // PREVIEW-ONLY 2FA BYPASS (sandbox / local development).
@@ -430,6 +442,10 @@ export async function completeFaceLogin(
   if (!rec || rec.status !== "active") {
     await clearAllSessionCookies()
     return { error: "Invalid email or password. Access denied." }
+  }
+  if (rec.profile.passwordResetRequired === true) {
+    await clearAllSessionCookies()
+    return { error: RESET_REQUIRED_MESSAGE }
   }
 
   const face = await getFaceState(uid)
