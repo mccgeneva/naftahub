@@ -63,22 +63,33 @@ export function leverageAuditFee(equity: number, ratio: number): number {
 export const LEVERAGE_PPI_RATE = 0.0075
 
 /**
+ * Minimum PPI premium as a share of the FULL insured buying power. Real-world
+ * cover for a leveraged position costs at least ~0.6% of the amount insured
+ * (e.g. EUR 85M → at least ~EUR 500k), so a good trust score can lower the
+ * premium down to this floor but never below it.
+ */
+export const LEVERAGE_PPI_MIN_RATE = 0.006
+
+/**
  * Compute the PPI premium for a leverage application.
  *
- * The base premium is 0.75% of buying power. When a Guarantees Accumulator
- * `trustScore` is supplied, the adopted trust-score formula is applied on top
- * (PPI = base/100 × score, and 0 when the score is 0). When no score is passed
- * (undefined) the base premium is returned unchanged — so any caller that has
- * not been updated keeps the standard premium rather than silently zeroing.
+ * The premium insures the FULL buying power (equity × ratio) — unlike the audit
+ * fee it is NOT capped at the 1:30 level, because the insured exposure is the
+ * whole leveraged position. Base = 0.75% of buying power. When a Guarantees
+ * Accumulator `trustScore` is supplied the adopted trust-score formula is
+ * applied (base/100 × score), but the result is floored at
+ * LEVERAGE_PPI_MIN_RATE × buying power so insurance is never priced below a
+ * realistic market minimum. With no score the base premium is returned.
  * Returns 0 for any non-finite or non-positive input.
  */
 export function leveragePpiPremium(equity: number, ratio: number, trustScore?: number): number {
   if (!Number.isFinite(equity) || !Number.isFinite(ratio)) return 0
   if (equity <= 0 || ratio <= 0) return 0
-  const buyingPower = equity * Math.min(ratio, MAX_FEE_LEVERAGE_RATIO)
+  const buyingPower = equity * ratio
   const base = round2(LEVERAGE_PPI_RATE * buyingPower)
   if (trustScore === undefined) return base
-  return round2(ppiFromTrustScore(base, trustScore))
+  const floor = round2(LEVERAGE_PPI_MIN_RATE * buyingPower)
+  return round2(Math.max(floor, ppiFromTrustScore(base, trustScore)))
 }
 
 /** The full set of upfront charges for a leverage application. */

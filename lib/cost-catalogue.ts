@@ -24,7 +24,7 @@ import {
 } from "@/lib/sub-account-fees"
 import { INSTRUMENT_MANAGEMENT_FEE_RATE } from "@/lib/instrument-fees"
 import { INSTRUMENT_UPGRADE_FEE_RATE } from "@/lib/instrument-upgrade"
-import { LEVERAGE_AUDIT_FEE_RATE, LEVERAGE_PPI_RATE } from "@/lib/leverage-audit-fee"
+import { LEVERAGE_AUDIT_FEE_RATE, LEVERAGE_PPI_MIN_RATE, LEVERAGE_PPI_RATE } from "@/lib/leverage-audit-fee"
 import { EQUITY_RATE_AT_MIN_LTV, EQUITY_RATE_AT_MAX_LTV, PPI_RATE } from "@/lib/monetization-equity"
 import { DEBIT_INTEREST_SCALE } from "@/lib/leverage-rates"
 import { ACQUISITION_FEE_RATES, MCC_BENEFIT_SHARE, CLIENT_BENEFIT_SHARE } from "@/lib/instrument-marketplace"
@@ -316,7 +316,7 @@ export const COST_SECTIONS: CostSection[] = [
       },
       {
         item: "Payment Protection Insurance (PPI)",
-        fee: `${pct(LEVERAGE_PPI_RATE)} of buying power`,
+        fee: `${pct(LEVERAGE_PPI_RATE)} of full buying power, trust-score adjusted, minimum ${pct(LEVERAGE_PPI_MIN_RATE)}`,
         when: "Charged upfront with the audit fee. Fully refunded if the line is declined or withdrawn.",
       },
       {
