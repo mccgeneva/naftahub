@@ -409,6 +409,12 @@ export const COST_SECTIONS: CostSection[] = [
         when: "Debit interest on the used (negative) overdraft balance, accrued daily (22% p.a. ÷ 365) while the Master Account is in overdraft and charged to the Master Account. Stops as soon as the balance returns to positive.",
       },
       {
+        item: "Unauthorized overdraft interest",
+        // from lib/overdraft-interest.ts OVERDRAFT_EXCESS_ANNUAL_RATE (3 × 0.22)
+        fee: "66% p.a.",
+        when: "The part of the overdraft beyond your authorized overdraft limit is charged 3× the standard rate (66% p.a., accrued daily). It appears as a separate daily surcharge line next to the standard 22% line and stops once the overdraft is back within the authorized limit.",
+      },
+      {
         item: "Document generation",
         fee: "Included",
         when: "Statements, certificates, receipts, SKR, corporate offers (FCO) and confirmations are generated at no additional charge.",

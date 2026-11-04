@@ -139,3 +139,77 @@ export function buildOverdraftInterestPosts(opts: {
   }
   return posts
 }
+
+// ---------------------------------------------------------------------------
+// Unauthorized-overdraft surcharge.
+//
+// The part of the overdraft that goes BEYOND the authorized overdraft limit is
+// charged at 3× the standard rate (66% p.a.). The standard 22% line above is
+// already charged on the WHOLE overdraft, so the excess carries an extra
+// surcharge line at the difference (44% p.a.) — together exactly 66% on the
+// unauthorized part. One deterministic line per charged day
+// (`OD-XS-<YYYY-MM-DD>`), derived from that day's `OD-INT-` charge, so every
+// already-charged day is surcharged once (backfill) and never twice.
+// ---------------------------------------------------------------------------
+
+/** Rate multiplier applied to the unauthorized (beyond-limit) overdraft. */
+export const OVERDRAFT_EXCESS_MULTIPLIER = 3
+/** Total annual rate on the unauthorized part (66% p.a.). */
+export const OVERDRAFT_EXCESS_ANNUAL_RATE = OVERDRAFT_DEBIT_ANNUAL_RATE * OVERDRAFT_EXCESS_MULTIPLIER
+export const OVERDRAFT_EXCESS_ANNUAL_LABEL = "66%"
+/** Surcharge rate posted on top of the standard line (66% − 22% = 44% p.a.). */
+const EXCESS_SURCHARGE_RATE = OVERDRAFT_EXCESS_ANNUAL_RATE - OVERDRAFT_DEBIT_ANNUAL_RATE
+export const OVERDRAFT_EXCESS_ID_PREFIX = "OD-XS-"
+
+/** The overdraft basis a given `OD-INT-` charge was computed on (EUR). */
+function interestBasisEur(e: Pick<LedgerEntry, "amount" | "comment">): number {
+  const m = /used overdraft of EUR ([\d,]+(?:\.\d+)?)/.exec(e.comment ?? "")
+  if (m) {
+    const v = Number(m[1].replace(/,/g, ""))
+    if (Number.isFinite(v)) return v
+  }
+  return ((e.amount || 0) * 365) / OVERDRAFT_DEBIT_ANNUAL_RATE
+}
+
+/**
+ * Build the unauthorized-overdraft surcharge lines still missing from the
+ * ledger, one per charged day whose overdraft exceeded `limitEur`.
+ *
+ * @param entries   the owner's ledger rows, INCLUDING any `OD-INT-` lines just
+ *                  posted in this pass.
+ * @param limitEur  the authorized overdraft ceiling (EUR); 0 = none authorized,
+ *                  so the whole overdraft is unauthorized.
+ */
+export function buildOverdraftExcessPosts(opts: {
+  entries: ReadonlyArray<LedgerEntry>
+  limitEur: number
+}): LedgerEntry[] {
+  const limit = Math.max(0, opts.limitEur || 0)
+  const existing = new Set(opts.entries.map((e) => e.id))
+  const posts: LedgerEntry[] = []
+  for (const e of opts.entries) {
+    if (!isOverdraftInterestEntry(e.id)) continue
+    const key = e.id.slice(OVERDRAFT_INTEREST_ID_PREFIX.length)
+    const id = `${OVERDRAFT_EXCESS_ID_PREFIX}${key}`
+    if (existing.has(id)) continue
+    const basis = interestBasisEur(e)
+    const excess = round2(Math.max(0, basis - limit))
+    if (excess <= 0.01) continue
+    const amount = round2((excess * EXCESS_SURCHARGE_RATE) / 365)
+    if (amount <= 0) continue
+    const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    posts.push({
+      id,
+      direction: "debit",
+      amount,
+      currency: OVERDRAFT_INTEREST_CURRENCY,
+      status: "completed",
+      date: e.date,
+      counterparty: "MCC Capital — Overdraft Interest",
+      category: "Unauthorized Overdraft Interest",
+      comment: `Unauthorized overdraft: EUR ${fmt(excess)} beyond the authorized limit of EUR ${fmt(limit)} is charged ${OVERDRAFT_EXCESS_ANNUAL_LABEL} p.a. (3× the ${OVERDRAFT_DEBIT_ANNUAL_LABEL} rate) for ${key}. This line is the surcharge on top of the standard ${OVERDRAFT_DEBIT_ANNUAL_LABEL} line.`,
+    })
+    existing.add(id)
+  }
+  return posts
+}

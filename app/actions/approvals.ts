@@ -30,7 +30,7 @@ import { getOverdraftStatusForOwner, computeOverdraftStatus, getSettledBalanceEu
 import { FACILITY_TYPE_LABELS, isLoanFacility, loanArrangementFee } from "@/lib/loan-products"
 import { fundingCapitalCreditEntry } from "@/lib/funding-capital"
 import type { ProjectFundingRequest } from "@/lib/project-funding-store"
-import { buildOverdraftInterestPosts } from "@/lib/overdraft-interest"
+import { buildOverdraftInterestPosts, buildOverdraftExcessPosts } from "@/lib/overdraft-interest"
 import { buildTreasuryFinancingLedgerPosts, pickAuthoritativeTreasuryFinancing } from "@/lib/treasury-financing"
 import { query } from "@/lib/db"
 import { gatherGuaranteeProfile, getFinancingRingfence } from "@/lib/guarantees-profile"
@@ -3472,6 +3472,20 @@ export async function reconcileMyApprovedCredits(): Promise<{ ok: boolean; appli
       for (const post of odPosts) {
         await upsertLedgerEntry(odOwnerId, post)
         applied += 1
+      }
+      // Unauthorized part (beyond the authorized overdraft) pays 3× the rate:
+      // surcharge every charged day — including past ones — exactly once.
+      const hasInterest = odRows.some((e) => e.id.startsWith("OD-INT-")) || odPosts.length > 0
+      if (hasInterest) {
+        const od = await getOverdraftStatusForOwner(odOwnerId)
+        const xsPosts = buildOverdraftExcessPosts({
+          entries: [...odRows, ...odPosts],
+          limitEur: od.limitEur,
+        })
+        for (const post of xsPosts) {
+          await upsertLedgerEntry(odOwnerId, post)
+          applied += 1
+        }
       }
     } catch (err) {
       console.log("[v0] overdraft interest accrual failed:", (err as Error).message)
