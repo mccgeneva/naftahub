@@ -41,7 +41,22 @@ export const DEBIT_INTEREST_SCALE: LeverageRateAnchor[] = [
   { ratio: 20, rate: 0.14 },
   { ratio: 25, rate: 0.18 },
   { ratio: 30, rate: 0.22 },
+  // Extended ladder — Master Banking lines only (see MASTER_BANKING_LEVERAGE_RATIOS).
+  { ratio: 50, rate: 0.23 },
+  { ratio: 100, rate: 0.245 },
+  { ratio: 200, rate: 0.26 },
+  { ratio: 300, rate: 0.275 },
+  { ratio: 500, rate: 0.3 },
 ]
+
+/** Ceiling of the standard ladder offered to every facility. */
+export const STANDARD_MAX_LEVERAGE = 30
+
+/**
+ * Upfront fees (audit + PPI) stop growing above this ratio, otherwise at 1:500
+ * they would exceed the client's own equity.
+ */
+export const MAX_FEE_LEVERAGE_RATIO = STANDARD_MAX_LEVERAGE
 
 /**
  * Borrowed / deployable / interest-bearing funds for a leverage line — the
@@ -66,9 +81,14 @@ export function borrowedFundsFor(equity: number, ratio: number, account: string)
 }
 
 /** Full ladder of selectable leverage ratios (the anchor points): 1:2 … 1:30. */
-export const LEVERAGE_RATIOS: number[] = DEBIT_INTEREST_SCALE.map((a) => a.ratio)
+export const LEVERAGE_RATIOS: number[] = DEBIT_INTEREST_SCALE.map((a) => a.ratio).filter(
+  (r) => r <= STANDARD_MAX_LEVERAGE,
+)
 
-/** Highest leverage the platform offers (1:30). */
+/** Master Banking ladder: the standard 1:2 … 1:30 plus 1:50 … 1:500. */
+export const MASTER_BANKING_LEVERAGE_RATIOS: number[] = DEBIT_INTEREST_SCALE.map((a) => a.ratio)
+
+/** Highest leverage on the standard ladder (1:30). */
 export const MAX_LEVERAGE_LADDER = LEVERAGE_RATIOS[LEVERAGE_RATIOS.length - 1]
 
 /** Treasury financing offers the full ladder (1:2 … 1:30), same as trading lines. */

@@ -1218,7 +1218,7 @@ export default function LeveragePage() {
                     equity × ratio — is borrowed and deployable; a cash-funded line commits your own cash as
                     margin, so only the top-up — equity × (ratio − 1) — is borrowed. Debit interest accrues on
                     the borrowed funds under a risk-based scale where a higher ratio carries a higher rate (2% at
-                    1:2, 3% at 1:5, up to 22% at 1:30). One twelfth of the annual interest is charged to your
+                    1:2, 3% at 1:5, up to 22% at 1:30; Master Banking lines go up to 1:500 at 30%). One twelfth of the annual interest is charged to your
                     Master Account each month; the borrowed principal is repaid when you switch the line off.
                   </p>
                 </div>
@@ -2221,7 +2221,9 @@ export default function LeveragePage() {
                 collateral held separately, or only the top-up (equity × (ratio − 1)) for a cash-funded line
                 where your own cash is committed margin. Debit interest follows a risk-based scale: a higher
                 leverage multiple carries more risk and a higher annual rate — 2% at 1:2, 3% at 1:5, 8% at 1:10, 10% at 1:15,
-                14% at 1:20, 18% at 1:25 and 22% at 1:30. One twelfth of the annual interest is automatically
+                14% at 1:20, 18% at 1:25 and 22% at 1:30. Master Banking lines can also choose 1:50 (23%),
+                1:100 (24.5%), 1:200 (26%), 1:300 (27.5%) or 1:500 (30%); upfront audit and PPI charges above
+                1:30 stay at the 1:30 level. One twelfth of the annual interest is automatically
                 charged to your Master Account each month (you receive a notification with the amount and
                 remaining balance), and any remainder is settled when you switch the line off.
               </AccordionContent>

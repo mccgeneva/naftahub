@@ -11,6 +11,7 @@ import {
 } from "@/app/actions/approvals"
 import {
   LEVERAGE_RATIOS,
+  MASTER_BANKING_LEVERAGE_RATIOS,
   TREASURY_LEVERAGE_RATIOS,
   debitInterestRateFor,
   borrowedFundsFor,
@@ -50,7 +51,7 @@ export const LEVERAGE_ACCOUNTS: LeverageAccountOption[] = [
     key: "master",
     label: "Master Banking",
     description: "Cash equity held in the MCC master banking account.",
-    maxLeverage: 30,
+    maxLeverage: 500,
   },
   {
     key: "instruments",
@@ -90,6 +91,9 @@ export function maxLeverageFor(account: LeverageAccountKey): number {
 export function leverageRatiosFor(account: LeverageAccountKey): number[] {
   if (account === "treasury") {
     return TREASURY_LEVERAGE_RATIOS.slice()
+  }
+  if (account === "master") {
+    return MASTER_BANKING_LEVERAGE_RATIOS.slice()
   }
   const cap = maxLeverageFor(account)
   return LEVERAGE_RATIOS.filter((r) => r <= cap)

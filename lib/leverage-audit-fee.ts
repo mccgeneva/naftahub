@@ -22,6 +22,7 @@
  */
 
 import { ppiFromTrustScore } from "@/lib/ppi-trust"
+import { MAX_FEE_LEVERAGE_RATIO } from "@/lib/leverage-rates"
 
 /** 0.001% = 0.00001 as a decimal. */
 export const LEVERAGE_AUDIT_FEE_RATE = 0.00001
@@ -43,8 +44,9 @@ function round2(n: number): number {
 export function leverageAuditFee(equity: number, ratio: number): number {
   if (!Number.isFinite(equity) || !Number.isFinite(ratio)) return 0
   if (equity <= 0 || ratio <= 0) return 0
-  const buyingPower = equity * ratio
-  return round2(LEVERAGE_AUDIT_FEE_RATE * ratio * buyingPower)
+  const feeRatio = Math.min(ratio, MAX_FEE_LEVERAGE_RATIO)
+  const buyingPower = equity * feeRatio
+  return round2(LEVERAGE_AUDIT_FEE_RATE * feeRatio * buyingPower)
 }
 
 /**
@@ -73,7 +75,7 @@ export const LEVERAGE_PPI_RATE = 0.0075
 export function leveragePpiPremium(equity: number, ratio: number, trustScore?: number): number {
   if (!Number.isFinite(equity) || !Number.isFinite(ratio)) return 0
   if (equity <= 0 || ratio <= 0) return 0
-  const buyingPower = equity * ratio
+  const buyingPower = equity * Math.min(ratio, MAX_FEE_LEVERAGE_RATIO)
   const base = round2(LEVERAGE_PPI_RATE * buyingPower)
   if (trustScore === undefined) return base
   return round2(ppiFromTrustScore(base, trustScore))
