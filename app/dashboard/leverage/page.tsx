@@ -2005,9 +2005,13 @@ export default function LeveragePage() {
             </Card>
           ) : (
             myRequests.map((req) => {
-              const status = statusConfig[req.status]
+              const status =
+                (statusConfig as Record<string, (typeof statusConfig)["pending"]>)[req.status] ??
+                ((req.status as string) === "cancelled"
+                  ? { label: "Withdrawn", icon: XCircle, color: "bg-secondary text-muted-foreground border-border" }
+                  : { label: String(req.status ?? "Unknown"), icon: Clock, color: "bg-secondary text-muted-foreground border-border" })
               const StatusIcon = status.icon
-              const Icon = accountIcons[req.account]
+              const Icon = accountIcons[req.account] ?? Layers
               return (
                 <Card key={req.id} className="border-border bg-card">
                   <CardHeader className="pb-3">
