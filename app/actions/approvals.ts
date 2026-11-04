@@ -399,6 +399,48 @@ export async function submitApproval(input: SubmitApprovalInput): Promise<Submit
     // combined total. Fails CLOSED (a balance that can't be verified blocks).
     const isPpiAppeal = rec.ppiAppeal === true
     const charges = leverageApplicationCharges(equity, ratio, ppiTrustScore)
+
+    // PPI = FRESH MONEY ONLY. The PPI premium can never be financed by a debit
+    // (borrowed/leveraged/loan proceeds, overdraft, or a held/appeal reserve). It
+    // must be covered by the client's OWN unborrowed funds on the Master Account:
+    // free funds = spendable balance − outstanding borrowed/financed principal.
+    // For a cash-funded line the pledged equity margin also comes out of those
+    // same free funds, so margin + PPI must fit together. Otherwise the
+    // application is REJECTED outright (no appeal, no hold). Fails CLOSED.
+    if (charges.ppi > 0) {
+      const fmtEur = (n: number) =>
+        `EUR ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      let freeEur: number
+      try {
+        const cfg = await getGuaranteeConfig()
+        const { score } = await gatherGuaranteeProfile(session.id, cfg)
+        freeEur = Math.max(0, (score.inputs.availableBalance || 0) - (score.inputs.totalExposure || 0))
+      } catch (err) {
+        console.log("[v0] PPI fresh-money check could not verify (rejecting):", (err as Error).message)
+        return {
+          ok: false,
+          error:
+            "We could not verify that the PPI premium is covered by your own funds, so this application was not submitted. Please try again.",
+        }
+      }
+      const ppiEur = convertCurrency(charges.ppi, feeCurrency, BASE_CURRENCY)
+      const cashFunded = ["treasury", "master", "naftahub"].includes(String(rec.account ?? ""))
+      const marginEur = cashFunded && Number.isFinite(equity) && equity > 0
+        ? convertCurrency(equity, feeCurrency, BASE_CURRENCY)
+        : 0
+      const neededEur = ppiEur + marginEur
+      if (neededEur > freeEur + 0.01) {
+        return {
+          ok: false,
+          error: `Rejected: the PPI insurance premium (${fmtEur(ppiEur)}${
+            marginEur > 0 ? ` plus your ${fmtEur(marginEur)} margin` : ""
+          }) must be paid with fresh money from your Master Account — it cannot be covered by borrowed funds, loans, leverage or overdraft. Your own free funds are ${fmtEur(
+            freeEur,
+          )}. Deposit at least ${fmtEur(neededEur - freeEur)} of new funds and apply again.`,
+        }
+      }
+    }
+
     const requiredNow = isPpiAppeal ? 0 : charges.total
     if (requiredNow > 0) {
       try {

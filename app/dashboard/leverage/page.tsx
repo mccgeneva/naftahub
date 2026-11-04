@@ -104,6 +104,8 @@ const accountIcons: Record<LeverageAccountKey, typeof Building2> = {
 // additional settlement currencies the client can hold and trade in. EUR is
 // listed first and used as the default so the leverage screen matches the
 // account's base currency instead of defaulting to USD.
+import { convertCurrency } from "@/lib/fx"
+
 const BASE_CURRENCY = "EUR"
 const SUPPORTED_CURRENCIES = ["EUR", "USD", "GBP", "CHF"]
 
@@ -733,7 +735,9 @@ export default function LeveragePage() {
   // covered — never a dead end. Under an appeal the audit fee is charged if
   // affordable, otherwise reserved as a temporary hold alongside the PPI hold
   // (available balance may go negative), pending administrator review.
-  const canAppealPpi = !canAffordCharges && totalUpfrontCharge > 0
+  // The PPI appeal (reserving the PPI as a hold the client can't fund) is
+  // disabled: PPI must be paid with fresh money, so an unfunded PPI is rejected.
+  const canAppealPpi = false
 
   // MARGIN AVAILABILITY (cash-funded lines). The equity a client pledges must be
   // money they actually hold. For an EUR line the cap is FREE EQUITY (available
@@ -752,6 +756,18 @@ export default function LeveragePage() {
   const marginKnown = isCashFunded && (currency !== BASE_CURRENCY || marginInfo !== null)
   const equityExceedsMargin =
     marginKnown && marginAvailable != null && numericEquity > marginAvailable + 0.01
+
+  // PPI = FRESH MONEY ONLY. The PPI premium must be paid from the client's OWN
+  // unborrowed funds (free funds = available − borrowed/financed principal) —
+  // never from debits, loans, leverage or overdraft. A cash-funded line's margin
+  // comes out of the same free funds, so margin + PPI must fit together.
+  // Otherwise the application is rejected (the server enforces the same rule).
+  const ppiEur = convertCurrency(ppiPremium, currency, BASE_CURRENCY)
+  const marginEurForPpi = isCashFunded ? convertCurrency(numericEquity, currency, BASE_CURRENCY) : 0
+  const freshFundsEur = marginInfo?.freeEur ?? null
+  const freshFundsNeededEur = ppiEur + marginEurForPpi
+  const ppiExceedsFreshFunds =
+    ppiPremium > 0 && freshFundsEur !== null && freshFundsNeededEur > freshFundsEur + 0.01
 
   // When the funding category changes, clamp the chosen ratio to that
   // category's ceiling so an out-of-range value can never be submitted.
@@ -861,6 +877,17 @@ export default function LeveragePage() {
       if (!feeAcknowledged) {
         setFormError(
           `Please confirm you accept the ${formatMoney2(totalUpfrontCharge, currency)} audit, compliance & PPI charges before submitting.`,
+        )
+        return
+      }
+      if (ppiExceedsFreshFunds && freshFundsEur !== null) {
+        setFormError(
+          `Rejected: the ${formatMoney2(ppiEur, BASE_CURRENCY)} PPI premium${
+            marginEurForPpi > 0 ? ` plus your ${formatMoney2(marginEurForPpi, BASE_CURRENCY)} margin` : ""
+          } must be paid with fresh money — not borrowed funds, loans, leverage or overdraft. Your own free funds are ${formatMoney2(
+            freshFundsEur,
+            BASE_CURRENCY,
+          )}. Deposit at least ${formatMoney2(freshFundsNeededEur - freshFundsEur, BASE_CURRENCY)} of new funds and apply again.`,
         )
         return
       }
@@ -1632,8 +1659,32 @@ export default function LeveragePage() {
                     </span>
                   </label>
 
-                  {/* Insufficient funds for the PPI → appeal / negotiate path */}
-                  {!canAffordCharges && (
+                  {/* PPI must be fresh money — not covered → rejected */}
+                  {ppiExceedsFreshFunds && freshFundsEur !== null ? (
+                    <div className="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-xs leading-relaxed">
+                      <div className="flex items-center gap-2 text-red-400">
+                        <AlertTriangle className="h-4 w-4 shrink-0" />
+                        <span className="font-semibold">PPI must be paid with fresh money</span>
+                      </div>
+                      <p className="mt-2 text-muted-foreground">
+                        The PPI premium cannot be paid by debits, loans, leverage or overdraft. You need{" "}
+                        <span className="font-medium text-foreground">
+                          {formatMoney2(freshFundsNeededEur, BASE_CURRENCY)}
+                        </span>{" "}
+                        of your own funds
+                        {marginEurForPpi > 0 ? " (PPI + margin)" : ""}, but you have{" "}
+                        <span className="font-medium text-foreground">
+                          {formatMoney2(freshFundsEur, BASE_CURRENCY)}
+                        </span>
+                        . Deposit at least{" "}
+                        <span className="font-medium text-foreground">
+                          {formatMoney2(freshFundsNeededEur - freshFundsEur, BASE_CURRENCY)}
+                        </span>{" "}
+                        of new funds to apply.
+                      </p>
+                    </div>
+                  ) : null}
+                  {!canAffordCharges && !ppiExceedsFreshFunds && (
                     <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs leading-relaxed">
                       <div className="flex items-center gap-2 text-amber-500">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
@@ -1697,14 +1748,17 @@ export default function LeveragePage() {
                       checkingMargin ||
                       equityExceedsMargin ||
                       (totalUpfrontCharge > 0 && !feeAcknowledged) ||
-                      (totalUpfrontCharge > 0 && !canAffordCharges)
+                      (totalUpfrontCharge > 0 && !canAffordCharges) ||
+                      ppiExceedsFreshFunds
                     }
                   >
                     {checkingMargin
                       ? "Checking margin…"
                       : equityExceedsMargin
                         ? "Insufficient equity"
-                        : "Submit for Approval"}
+                        : ppiExceedsFreshFunds
+                          ? "Deposit fresh funds for PPI"
+                          : "Submit for Approval"}
                     {!checkingMargin && !equityExceedsMargin && <ArrowRight className="ml-2 h-4 w-4" />}
                   </Button>
                 )}
