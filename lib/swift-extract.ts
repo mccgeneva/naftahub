@@ -17,6 +17,7 @@ import { generateText, Output, type LanguageModel } from "ai"
 import * as z from "zod"
 import { docAnalysisModel, nqaiChatModel, XAI_FALLBACK_MODEL, documentReaderModels } from "@/lib/ai-models"
 import { detectMediaType } from "@/lib/kyc-analyze"
+import { repairIban } from "@/lib/iban"
 
 export const swiftExtractSchema = z.object({
   finMessage: z
@@ -60,7 +61,33 @@ const EXTRACT_PROMPT =
   "customer to confirm.\n\n" +
   "Rules: transcribe ONLY what the document actually shows. Do NOT invent BICs, IBANs, amounts, references, or " +
   "parties. Use empty strings for anything absent. For 'amount' return digits only (no currency symbol or " +
-  "commas). Identify the message type precisely (e.g. MT760)."
+  "commas). Identify the message type precisely (e.g. MT760).\n\n" +
+  "IBANs / account numbers: copy them CHARACTER BY CHARACTER and count the digits. Long runs of zeros are easy " +
+  "to misread — count each zero individually. Output IBANs in uppercase with no spaces. The printout may be a " +
+  "bank wire form (e.g. a 'Wire Transfer Outgoing Request') rather than a raw FIN message: in that case the " +
+  "recipient 'Account Number' is the :59: beneficiary account, the recipient 'Account Name' is the :59: " +
+  "beneficiary name, and the receiving bank SWIFT code is :57A:."
+
+/**
+ * Post-process an extraction: fix an IBAN that OCR misread (a dropped/extra
+ * zero) everywhere it appears, using the MOD-97 checksum to confirm the fix.
+ */
+function repairExtraction(out: SwiftExtraction): SwiftExtraction {
+  let finMessage = out.finMessage
+  let beneficiaryIban = out.beneficiaryIban
+  const fixAccount = (raw: string): string => {
+    const fixed = repairIban(raw)
+    return fixed && fixed !== raw.replace(/\s+/g, "").toUpperCase() ? fixed : raw
+  }
+  if (beneficiaryIban) beneficiaryIban = fixAccount(beneficiaryIban)
+  // Fix the account line of any :59x: field in the FIN text.
+  finMessage = finMessage.replace(/(:59[A-Z]?:\s*\/?)([A-Za-z]{2}\d{2}[A-Za-z0-9 ]{8,40})/g, (_m, tag, acct) => {
+    const trimmed = String(acct).replace(/\s+$/, "")
+    const fixed = fixAccount(trimmed)
+    return tag + (fixed === trimmed ? acct : fixed)
+  })
+  return { ...out, finMessage, beneficiaryIban }
+}
 
 /** One structured-extraction attempt on a given model. Throws on failure. */
 async function structuredAttempt(
@@ -162,7 +189,7 @@ export async function extractSwiftDocument(buffer: Buffer, mediaType: string): P
 
   // 1) Structured extraction on the top document-analysis model (Opus).
   try {
-    return await structuredAttempt(docAnalysisModel(), buffer, detected)
+    return repairExtraction(await structuredAttempt(docAnalysisModel(), buffer, detected))
   } catch (err) {
     errors.push(`doc/structured: ${err instanceof Error ? err.message : String(err)}`)
   }
@@ -170,21 +197,21 @@ export async function extractSwiftDocument(buffer: Buffer, mediaType: string): P
   // 2) Structured extraction on the chat model (Sonnet) — a different tier that
   //    is exercised constantly by the live console, so it's a reliable retry.
   try {
-    return await structuredAttempt(nqaiChatModel(), buffer, detected)
+    return repairExtraction(await structuredAttempt(nqaiChatModel(), buffer, detected))
   } catch (err) {
     errors.push(`chat/structured: ${err instanceof Error ? err.message : String(err)}`)
   }
 
   // 3) Plain-text transcription fallback (no schema) — most robust for docs.
   try {
-    return await structuredAttempt(XAI_FALLBACK_MODEL, buffer, detected)
+    return repairExtraction(await structuredAttempt(XAI_FALLBACK_MODEL, buffer, detected))
   } catch (err) {
     console.log("[v0] SWIFT xai structured attempt failed:", err instanceof Error ? err.message : String(err))
   }
   for (const model of documentReaderModels()) {
     try {
       const result = await plainTextAttempt(model, buffer, detected)
-      if (result) return result
+      if (result) return repairExtraction(result)
     } catch (err) {
       errors.push(`plaintext: ${err instanceof Error ? err.message : String(err)}`)
     }

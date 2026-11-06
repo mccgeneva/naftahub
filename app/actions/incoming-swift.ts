@@ -1,5 +1,7 @@
 "use server"
 
+import { repairIban } from "@/lib/iban"
+
 import { query } from "@/lib/db"
 import { adminActionAuthorized, adminEmails } from "@/lib/admin-auth"
 import { getDynamicUserByEmail, listDynamicUsers } from "@/lib/admin-users-db"
@@ -329,7 +331,10 @@ function extractIncoming(raw: string) {
   // wrongly shows the header sender BIC instead of the applicant's name.
   const g = msg.guarantee
   const beneficiaryParty = msg.beneficiary ?? g?.beneficiary ?? msg.beneficiaryInstitution
-  const beneficiaryIban = beneficiaryParty?.account ?? ""
+  const rawBeneficiaryIban = beneficiaryParty?.account ?? ""
+  // OCR'd printouts often drop/double a zero in a long zero run; restore it
+  // when the MOD-97 checksum confirms exactly one correct reading.
+  const beneficiaryIban = repairIban(rawBeneficiaryIban) ?? rawBeneficiaryIban
   const beneficiaryName = firstLine(beneficiaryParty?.nameAndAddress) || beneficiaryParty?.bic || ""
   // The receiving institution: the account-with-institution (:57a:) is the
   // beneficiary's bank; fall back to the message destination in the header.

@@ -152,6 +152,44 @@ export function normalizeIban(iban: string): string {
   return iban.replace(/\s+/g, "").toUpperCase()
 }
 
+/**
+ * Repair an IBAN that OCR misread by dropping or doubling zeros in a long run
+ * of zeros (e.g. "LU66 8150 0000 0000 1136 2" read as "LU66815000000011362").
+ * Inserts/removes zeros inside existing zero runs until the IBAN reaches its
+ * country's exact length, and accepts the result ONLY if exactly one candidate
+ * passes the MOD-97 checksum. Returns the normalized IBAN unchanged when it is
+ * already valid, or null when it can't be repaired unambiguously. The checksum
+ * makes this safe: a wrong repair is rejected rather than guessed.
+ */
+export function repairIban(value: string | null | undefined): string | null {
+  if (!value) return null
+  const iban = normalizeIban(value).replace(/[^A-Z0-9]/g, "")
+  if (isValidIban(iban)) return iban
+  const spec = IBAN_SPECS[iban.slice(0, 2)]
+  if (!spec) return null
+  const diff = spec.length - iban.length
+  if (diff === 0 || Math.abs(diff) > 4) return null
+
+  const candidates = new Set<string>()
+  if (diff > 0) {
+    const zeros = "0".repeat(diff)
+    for (let i = 4; i <= iban.length; i++) {
+      // Only grow an existing zero run (the typical OCR mistake).
+      if (iban[i - 1] !== "0" && iban[i] !== "0") continue
+      const cand = iban.slice(0, i) + zeros + iban.slice(i)
+      if (isValidIban(cand)) candidates.add(cand)
+    }
+  } else {
+    const n = -diff
+    for (let i = 4; i + n <= iban.length; i++) {
+      if (iban.slice(i, i + n) !== "0".repeat(n)) continue
+      const cand = iban.slice(0, i) + iban.slice(i + n)
+      if (isValidIban(cand)) candidates.add(cand)
+    }
+  }
+  return candidates.size === 1 ? [...candidates][0] : null
+}
+
 /** Format an IBAN in groups of four for display. */
 export function formatIban(iban: string): string {
   return normalizeIban(iban).replace(/(.{4})/g, "$1 ").trim()
