@@ -92,11 +92,21 @@ export function matchIncomingSwift(
   const ibanMatches = accounts.filter((a) => a.iban && normalizeIban(a.iban) === benIban)
 
   if (ibanMatches.length === 0) {
+    const near = accounts.filter((a) => a.iban && withinOneEdit(normalizeIban(a.iban), benIban))
+    const validity = ibanLooksValid(benIban)
+      ? ""
+      : ` The IBAN on the message is not a valid IBAN (wrong length or checksum) — it was most likely mistyped.`
+    const suggestion =
+      near.length > 0
+        ? ` Closest platform account: ${near
+            .map((a) => `${formatIban(a.iban!)}${a.company ? ` (${a.company})` : ""}`)
+            .join(", ")} — one character differs.`
+        : ""
     return {
       status: "unmatched",
       bicConfirmed: false,
-      reason: `No active platform account holds the beneficiary IBAN ${extract.beneficiaryIban}. Logged for administrator review.`,
-      candidates: [],
+      reason: `No active platform account holds the beneficiary IBAN ${formatIban(benIban)}.${validity}${suggestion} Logged for administrator review.`,
+      candidates: near,
     }
   }
 
@@ -136,4 +146,45 @@ export function matchIncomingSwift(
     reason: `${ibanMatches.length} active accounts share the beneficiary IBAN and the receiver BIC did not resolve a single owner. Sent to administrator review.`,
     candidates: ibanMatches,
   }
+}
+
+/** Group a normalized IBAN into blocks of four for display. */
+function formatIban(raw: string): string {
+  return normalizeIban(raw).replace(/(.{4})/g, "$1 ").trim()
+}
+
+/** ISO 13616 MOD-97 check — catches missing/extra/swapped characters. */
+function ibanLooksValid(iban: string): boolean {
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(iban)) return false
+  const rearranged = iban.slice(4) + iban.slice(0, 4)
+  let remainder = 0
+  for (const ch of rearranged) {
+    const v = /\d/.test(ch) ? ch : String(ch.charCodeAt(0) - 55)
+    for (const d of v) remainder = (remainder * 10 + Number(d)) % 97
+  }
+  return remainder === 1
+}
+
+/** True when `a` and `b` differ by at most one insertion, deletion, or substitution. */
+function withinOneEdit(a: string, b: string): boolean {
+  if (!a || !b || a === b) return false
+  if (Math.abs(a.length - b.length) > 1) return false
+  let i = 0
+  let j = 0
+  let edits = 0
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i++
+      j++
+      continue
+    }
+    if (++edits > 1) return false
+    if (a.length > b.length) i++
+    else if (b.length > a.length) j++
+    else {
+      i++
+      j++
+    }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1
 }
