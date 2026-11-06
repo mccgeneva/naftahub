@@ -93,6 +93,20 @@ export function matchIncomingSwift(
 
   if (ibanMatches.length === 0) {
     const near = accounts.filter((a) => a.iban && withinOneEdit(normalizeIban(a.iban), benIban))
+    // A one-character IBAN typo is only resolved when the beneficiary NAME on
+    // the message independently identifies exactly one of the close accounts.
+    // The credit itself still requires administrator approval.
+    const nearByName = narrowByName(near, extract.beneficiaryName)
+    if (!ibanLooksValid(benIban) && nearByName.length === 1) {
+      const account = nearByName[0]
+      return {
+        status: "matched",
+        account,
+        bicConfirmed: !!recvBic && normalizeBicRoot(account.bic) === recvBic,
+        reason: `The beneficiary IBAN ${formatIban(benIban)} on the message is mistyped (invalid); it is one character from ${formatIban(account.iban!)}, and the beneficiary name "${extract.beneficiaryName}" matches ${account.accountHolder}. Matched to account ${account.accountId} — verify before crediting.`,
+        candidates: near,
+      }
+    }
     const validity = ibanLooksValid(benIban)
       ? ""
       : ` The IBAN on the message is not a valid IBAN (wrong length or checksum) — it was most likely mistyped.`
@@ -140,12 +154,53 @@ export function matchIncomingSwift(
     }
   }
 
+  // Shared (omnibus) IBAN: the beneficiary name identifies the owner.
+  const namePool = bicNarrowed.length > 1 ? bicNarrowed : ibanMatches
+  const nameNarrowed = narrowByName(namePool, extract.beneficiaryName)
+  if (nameNarrowed.length === 1) {
+    const account = nameNarrowed[0]
+    return {
+      status: "matched",
+      account,
+      bicConfirmed: !!recvBic && normalizeBicRoot(account.bic) === recvBic,
+      reason: `${ibanMatches.length} accounts share the beneficiary IBAN; the beneficiary name "${extract.beneficiaryName}" uniquely resolved account ${account.accountId} (${account.accountHolder}).`,
+      candidates: ibanMatches,
+    }
+  }
+
   return {
     status: "unmatched",
     bicConfirmed: false,
-    reason: `${ibanMatches.length} active accounts share the beneficiary IBAN and the receiver BIC did not resolve a single owner. Sent to administrator review.`,
+    reason: `${ibanMatches.length} active accounts share the beneficiary IBAN and neither the receiver BIC nor the beneficiary name resolved a single owner. Sent to administrator review.`,
     candidates: ibanMatches,
   }
+}
+
+const LEGAL_SUFFIXES = new Set([
+  "llc", "inc", "ltd", "limited", "sa", "ag", "gmbh", "sarl", "sas", "spa", "srl", "bv", "nv",
+  "plc", "corp", "corporation", "co", "company", "the",
+])
+
+/** Lower-case alphanumeric tokens of a name, without legal-form suffixes. */
+function nameKey(raw: string | undefined | null): string {
+  return (raw ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(" ")
+    .filter((t) => t && !LEGAL_SUFFIXES.has(t))
+    .join(" ")
+}
+
+/** Accounts whose holder or company name matches the message beneficiary name. */
+function narrowByName(accounts: MatchAccount[], beneficiaryName: string | undefined): MatchAccount[] {
+  const ben = nameKey(beneficiaryName)
+  if (ben.length < 4) return []
+  return accounts.filter((a) =>
+    [a.accountHolder, a.company].some((n) => {
+      const key = nameKey(n)
+      return key.length >= 4 && (key === ben || ben.includes(key) || key.includes(ben))
+    }),
+  )
 }
 
 /** Group a normalized IBAN into blocks of four for display. */
