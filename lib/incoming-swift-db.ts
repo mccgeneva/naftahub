@@ -15,7 +15,7 @@ import { query } from "@/lib/db"
  * their next load from any device and the full audit trail is durable.
  */
 
-export type IncomingSwiftStatus = "matched" | "unmatched" | "assigned" | "rejected"
+export type IncomingSwiftStatus = "matched" | "unmatched" | "assigned" | "rejected" | "revoked"
 
 export interface IncomingSwiftMessage {
   id: string
@@ -315,6 +315,41 @@ export async function rejectIncomingSwift(id: string, reason: string): Promise<I
     `UPDATE incoming_swift_messages
        SET status = 'rejected', match_reason = $2
      WHERE id = $1 AND credited_at IS NULL AND status <> 'rejected'
+     RETURNING *`,
+    [id, reason],
+  )
+  return rows[0] ? rowToMessage(rows[0]) : null
+}
+
+/**
+ * Cash credits the administrator already executed (ledger id `ISWC-…`) and that
+ * are still live — the candidates for a revoke. Guarantee bookings are excluded
+ * (they materialise an instrument, not a cash credit).
+ */
+export async function listCreditedIncomingSwift(limit = 100): Promise<IncomingSwiftMessage[]> {
+  await ensureTable()
+  const { rows } = await query(
+    `SELECT * FROM incoming_swift_messages
+       WHERE status IN ('matched','assigned') AND user_id IS NOT NULL
+         AND credited_at IS NOT NULL AND credited_entry_id LIKE 'ISWC-%'
+     ORDER BY credited_at DESC
+     LIMIT $1`,
+    [limit],
+  )
+  return rows.map(rowToMessage)
+}
+
+/**
+ * Flip a credited message to `revoked`. Guarded so only a live credited message
+ * can be revoked, and only once. The credited_* columns are kept for the audit
+ * trail. `revoked` drops it from the customer inbox (which lists matched/assigned).
+ */
+export async function revokeIncomingSwift(id: string, reason: string): Promise<IncomingSwiftMessage | null> {
+  await ensureTable()
+  const { rows } = await query(
+    `UPDATE incoming_swift_messages
+       SET status = 'revoked', match_reason = $2
+     WHERE id = $1 AND credited_at IS NOT NULL AND status IN ('matched','assigned')
      RETURNING *`,
     [id, reason],
   )

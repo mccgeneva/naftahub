@@ -17,6 +17,7 @@ import {
   Upload,
   FileText,
   XCircle,
+  RotateCcw,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -49,6 +50,8 @@ import {
   creditIncomingSwiftAdmin,
   recordGuaranteeInstrumentAdmin,
   rejectIncomingSwiftAdmin,
+  listCreditedIncomingSwiftAdmin,
+  revokeIncomingSwiftCreditAdmin,
   type IngestResult,
 } from "@/app/actions/incoming-swift"
 import { listSelectableClients, type SelectableClient } from "@/app/actions/admin-users"
@@ -189,6 +192,39 @@ export function IncomingSwiftDelivery() {
   const [rejectOpen, setRejectOpen] = useState<string | null>(null)
   const [rejectReason, setRejectReason] = useState<Record<string, string>>({})
   const [reassignOpen, setReassignOpen] = useState<string | null>(null)
+
+  const [credited, setCredited] = useState<IncomingSwiftMessage[]>([])
+  const [loadingCredited, setLoadingCredited] = useState(false)
+  const [revokeOpen, setRevokeOpen] = useState<string | null>(null)
+  const [revokeReason, setRevokeReason] = useState<Record<string, string>>({})
+  const [revoking, setRevoking] = useState<string | null>(null)
+
+  const loadCredited = async () => {
+    setLoadingCredited(true)
+    const res = await listCreditedIncomingSwiftAdmin(ADMIN_PASSCODE)
+    setCredited(res.messages)
+    setLoadingCredited(false)
+  }
+
+  useEffect(() => {
+    void loadCredited()
+  }, [])
+
+  const handleRevoke = async (m: IncomingSwiftMessage) => {
+    setRevoking(m.id)
+    try {
+      const res = await revokeIncomingSwiftCreditAdmin(ADMIN_PASSCODE, m.id, revokeReason[m.id])
+      if (!res.ok) {
+        toast.error(res.error ?? "Could not revoke the credit.")
+        return
+      }
+      toast.success(`Credit revoked — ${res.revokedLabel} removed and the customer's balance restored.`)
+      setCredited((prev) => prev.filter((x) => x.id !== m.id))
+      setRevokeOpen(null)
+    } finally {
+      setRevoking(null)
+    }
+  }
 
   const loadQueue = async () => {
     setLoadingQueue(true)
@@ -959,6 +995,108 @@ export function IncomingSwiftDelivery() {
                       Assign &amp; deliver
                     </Button>
                   </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Credited payments — revoke */}
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <RotateCcw className="h-4 w-4" /> Credited payments
+                {credited.length > 0 && <Badge variant="secondary">{credited.length}</Badge>}
+              </CardTitle>
+              <CardDescription className="text-pretty">
+                Payments already credited to a customer. Revoking one removes it from the customer&apos;s account and
+                restores the balance they had before the credit.
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={loadCredited}
+              disabled={loadingCredited}
+              className="gap-2 bg-transparent"
+            >
+              {loadingCredited ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Refresh
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {credited.length === 0 ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">
+              {loadingCredited ? "Loading…" : "No credited payments."}
+            </p>
+          ) : (
+            <div className="flex flex-col gap-4">
+              {credited.map((m) => (
+                <div key={m.id} className="rounded-lg border border-border p-4">
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">Credited</Badge>
+                    <Badge className="bg-primary/15 text-primary">{m.messageType}</Badge>
+                    <span className="text-sm font-semibold text-foreground">{m.creditedAmount ?? m.amount ?? "—"}</span>
+                    <span className="ml-auto text-xs text-muted-foreground">{fmtDate(m.creditedAt ?? m.createdAt)}</span>
+                  </div>
+                  <div className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
+                    <Detail label="Credited to" value={m.matchedAccountHolder || m.beneficiaryName || "—"} />
+                    <Detail label="Beneficiary IBAN" value={m.beneficiaryIban || "—"} mono />
+                    <Detail label="Ordering customer" value={m.orderingCustomer || "—"} />
+                    {m.reference && <Detail label="Reference" value={m.reference} />}
+                    <Detail label="Ledger entry" value={m.creditedEntryId || "—"} mono />
+                  </div>
+
+                  {revokeOpen === m.id ? (
+                    <div className="mt-3 flex flex-col gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+                      <p className="flex items-start gap-1.5 text-sm text-destructive">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>
+                          This removes {m.creditedAmount ?? "the credit"} from the customer&apos;s account. If they have
+                          already spent it, their balance may go negative.
+                        </span>
+                      </p>
+                      <Textarea
+                        value={revokeReason[m.id] ?? ""}
+                        onChange={(e) => setRevokeReason((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                        placeholder="Reason (optional, shown to the customer)"
+                        className="min-h-16 text-base"
+                      />
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <Button
+                          variant="destructive"
+                          onClick={() => handleRevoke(m)}
+                          disabled={revoking === m.id}
+                          className="min-h-11 gap-1.5"
+                        >
+                          {revoking === m.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <RotateCcw className="h-4 w-4" />
+                          )}
+                          Confirm revoke
+                        </Button>
+                        <Button variant="ghost" onClick={() => setRevokeOpen(null)} className="min-h-11">
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-3">
+                      <Button
+                        variant="outline"
+                        onClick={() => setRevokeOpen(m.id)}
+                        className="min-h-11 gap-1.5 border-destructive/40 bg-transparent text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                        Revoke payment
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

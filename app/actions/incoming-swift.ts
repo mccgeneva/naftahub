@@ -27,6 +27,8 @@ import {
   markIncomingSwiftRead,
   markAllIncomingSwiftRead,
   rejectIncomingSwift,
+  listCreditedIncomingSwift,
+  revokeIncomingSwift,
   type IncomingSwiftMessage,
 } from "@/lib/incoming-swift-db"
 import { convertCurrency } from "@/lib/fx"
@@ -776,6 +778,109 @@ export async function rejectIncomingSwiftAdmin(
   } catch (err) {
     console.log("[v0] rejectIncomingSwiftAdmin failed:", (err as Error).message)
     return { ok: false, error: "Could not reject the message." }
+  }
+}
+
+/** Live cash credits the administrator can revoke (newest first). */
+export async function listCreditedIncomingSwiftAdmin(
+  passcode: string,
+): Promise<{ ok: boolean; error?: string; messages: IncomingSwiftMessage[] }> {
+  if (!(await adminActionAuthorized(passcode))) {
+    return { ok: false, error: "Administrator authorization failed.", messages: [] }
+  }
+  try {
+    return { ok: true, messages: await listCreditedIncomingSwift() }
+  } catch {
+    return { ok: true, messages: [] }
+  }
+}
+
+export interface RevokeResult {
+  ok: boolean
+  error?: string
+  revokedLabel?: string
+}
+
+/**
+ * Administrator REVOKES an inbound payment that was already credited. The single
+ * net credit row (`ISWC-<messageId>`, fees already deducted inside it) is deleted
+ * from the customer's ledger, so their balance returns exactly to what it was
+ * before the credit and the transaction disappears from their history. The
+ * message is flipped to `revoked` (audit trail kept) and leaves their inbox.
+ */
+export async function revokeIncomingSwiftCreditAdmin(
+  passcode: string,
+  id: string,
+  reason?: string,
+): Promise<RevokeResult> {
+  if (!(await adminActionAuthorized(passcode))) {
+    return { ok: false, error: "Administrator authorization failed." }
+  }
+  const message = await getIncomingSwiftById(id)
+  if (!message) return { ok: false, error: "Message not found." }
+  if (!message.creditedAt || !message.creditedEntryId) {
+    return { ok: false, error: "This message has not been credited, so there is nothing to revoke." }
+  }
+  if (message.status === "revoked") return { ok: false, error: "This credit was already revoked." }
+  if (!message.creditedEntryId.startsWith("ISWC-")) {
+    return { ok: false, error: "Only cash credits can be revoked here. A booked guarantee is managed under Bank Instruments." }
+  }
+
+  const trimmed = (reason ?? "").trim()
+  const finalReason = trimmed ? `Credit revoked by the administrator: ${trimmed}` : "Credit revoked by the administrator."
+
+  try {
+    const ownerId = message.userId ? ((await resolveDataOwnerIdFor(message.userId)) ?? message.userId) : null
+    // Delete the exact credit row. Scoped to the owner first; fall back to the
+    // deterministic entry id alone in case the account's data owner changed.
+    let deleted = ownerId
+      ? await query(`DELETE FROM ledger_entries WHERE user_id = $1 AND entry_id = $2 RETURNING amount, currency`, [
+          ownerId,
+          message.creditedEntryId,
+        ])
+      : { rows: [] as Record<string, unknown>[] }
+    if (deleted.rows.length === 0) {
+      deleted = await query(`DELETE FROM ledger_entries WHERE entry_id = $1 RETURNING amount, currency`, [
+        message.creditedEntryId,
+      ])
+    }
+
+    const updated = await revokeIncomingSwift(id, finalReason)
+    if (!updated) return { ok: false, error: "This credit was already revoked." }
+
+    const row = deleted.rows[0] as { amount?: unknown; currency?: unknown } | undefined
+    const revokedLabel = row
+      ? `${String(row.currency)} ${Number(row.amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : (message.creditedAmount ?? "the credited amount")
+
+    if (message.userId) {
+      await notifyFinancialPool(message.userId, {
+        tone: "warning",
+        title: `Payment revoked — ${revokedLabel}`,
+        body: `The inbound SWIFT ${message.messageType} credit of ${revokedLabel}${
+          message.reference ? ` (reference ${message.reference})` : ""
+        } was revoked by the administrator and removed from your account.${trimmed ? ` Reason: ${trimmed}` : ""}`,
+        href: "/dashboard",
+      }).catch(() => undefined)
+    }
+
+    await logActivity({
+      action: `Inbound SWIFT ${message.messageType} credit revoked (${revokedLabel})${message.matchedAccountHolder ? ` for ${message.matchedAccountHolder}` : ""}`,
+      category: "SWIFT",
+      details: {
+        summary: `Administrator revoked the credit for inbound SWIFT ${message.messageType} (${message.id}). Ledger entry ${message.creditedEntryId} (${revokedLabel}) was removed and the customer's balance restored. ${finalReason}`,
+        messageId: message.id,
+        matchedUserId: message.userId,
+        ledgerReference: message.creditedEntryId,
+        amount: revokedLabel,
+        decision: "Revoked",
+      },
+    }).catch(() => undefined)
+
+    return { ok: true, revokedLabel }
+  } catch (err) {
+    console.log("[v0] revokeIncomingSwiftCreditAdmin failed:", (err as Error).message)
+    return { ok: false, error: "Could not revoke the credit." }
   }
 }
 
