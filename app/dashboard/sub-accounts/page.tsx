@@ -193,6 +193,27 @@ export default function SubAccountsPage() {
   const mainBalance = balanceFor(transferCurrency)
   const sourceNeed = fromId === MAIN_ACCOUNT_ID ? amountNum + transferFee : amountNum
   const feeCoveredByMain = fromId === MAIN_ACCOUNT_ID || transferFee <= mainBalance + 0.001
+  // Largest amount (in cents) that leaves room for the 2% fee: from Main the
+  // amount + fee must fit the Main balance; from a sub-account the amount must
+  // fit the sub-account and the fee must fit the Main balance.
+  const maxTransferable = useMemo(() => {
+    const fits = (a: number) => {
+      const fee = transferFeeFor(a)
+      return fromId === MAIN_ACCOUNT_ID
+        ? a + fee <= fromBalance + 0.001
+        : a <= fromBalance + 0.001 && fee <= mainBalance + 0.001
+    }
+    let lo = 0
+    let hi = Math.max(0, Math.floor(fromBalance * 100))
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2)
+      if (fits(mid / 100)) lo = mid
+      else hi = mid - 1
+    }
+    return lo / 100
+  }, [fromId, fromBalance, mainBalance])
+  const maxTransferFee = maxTransferable > 0 ? transferFeeFor(maxTransferable) : 0
+
   const transferInvalid =
     !transferAmount ||
     Number.isNaN(amountNum) ||
@@ -954,12 +975,33 @@ export default function SubAccountsPage() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="transfer-amount">Amount</Label>
+              <div className="flex items-stretch gap-2">
                 <MoneyInput
                   id="transfer-amount"
                   value={transferAmount}
                   onValueChange={setTransferAmount}
                   placeholder="0.00"
+                  className="min-w-0 flex-1"
                 />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-auto min-h-11 shrink-0 px-4"
+                  disabled={maxTransferable <= 0}
+                  onClick={() => setTransferAmount(maxTransferable.toFixed(2))}
+                >
+                  Max
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {maxTransferable > 0
+                  ? `Max you can send: ${formatMoney(maxTransferable, transferCurrency)} + ${formatMoney(maxTransferFee, transferCurrency)} fee (charged to Main account).`
+                  : fromId === MAIN_ACCOUNT_ID
+                    ? "Nothing available to transfer from this account after the fee."
+                    : fromBalance > 0
+                      ? "Your Main account can't cover the transfer fee — add funds to Main first."
+                      : "Nothing available to transfer from this account."}
+              </p>
               {transferAmount && sourceNeed > fromBalance + 0.001 && (
                 <p className="text-xs text-destructive">
                   {fromId === MAIN_ACCOUNT_ID
