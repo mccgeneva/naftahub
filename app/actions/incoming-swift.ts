@@ -83,6 +83,7 @@ import { cashbackNote, applyCashback } from "@/lib/fee-cashback"
 import { getFeeTiers } from "@/lib/tiered-fees-db"
 import { upsertLedgerEntry, readLedgerEntries, availableByCurrency } from "@/lib/ledger-db"
 import { getOverdraftStatusForOwner } from "@/lib/overdraft"
+import { listAllSubAccounts, getSubAccountById } from "@/lib/sub-account-db"
 import { adminIssueInstrument } from "@/app/actions/approvals"
 import { findInstrumentType } from "@/lib/instrument-marketplace"
 import { buildInstrumentIdentifiers } from "@/lib/instrument-identifiers"
@@ -252,7 +253,41 @@ async function readActiveMatchAccounts(): Promise<MatchAccount[]> {
     console.log("[v0] readActiveMatchAccounts master-banking scan failed:", (err as Error).message)
   }
 
+  // Active sub-accounts each carry their OWN administrator-assigned IBAN. A
+  // payment to that IBAN must match the sub-account (and later credit its
+  // compartment), not fall through as "no account holds this IBAN".
+  try {
+    const subs = await listAllSubAccounts("active")
+    for (const s of subs) {
+      if (!s.iban) continue
+      accounts.push({
+        userId: s.userId,
+        accountId: `${SUB_ACCOUNT_MATCH_PREFIX}${s.id}`,
+        accountHolder: s.beneficiaryName || s.label || "",
+        company: s.label,
+        iban: s.iban,
+        bic: s.bic,
+        currency: s.currency,
+      })
+    }
+  } catch (err) {
+    console.log("[v0] readActiveMatchAccounts sub-account scan failed:", (err as Error).message)
+  }
+
   return accounts
+}
+
+const SUB_ACCOUNT_MATCH_PREFIX = "sub-"
+
+/** Resolve the matched sub-account (if the match points at one). */
+async function readMatchedSubAccount(matchedAccountId: string | null | undefined) {
+  if (!matchedAccountId || !matchedAccountId.startsWith(SUB_ACCOUNT_MATCH_PREFIX)) return null
+  try {
+    const sub = await getSubAccountById(matchedAccountId.slice(SUB_ACCOUNT_MATCH_PREFIX.length))
+    return sub && sub.status === "active" ? sub : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -786,10 +821,11 @@ export async function creditIncomingSwiftAdmin(passcode: string, id: string): Pr
     }
     if (!receivedCurrency) return { ok: false, error: "The message has no currency to credit." }
 
-    const account = await readActiveGatewayAccount(message.userId, message.matchedAccountId)
+    const subAccount = await readMatchedSubAccount(message.matchedAccountId)
+    const account = subAccount ? null : await readActiveGatewayAccount(message.userId, message.matchedAccountId)
     // Credit in the ACCOUNT currency when we can resolve it (so a balance never
     // mixes currencies); otherwise fall back to the received currency.
-    const accountCurrency = (account?.currency ?? receivedCurrency).toUpperCase()
+    const accountCurrency = (subAccount?.currency ?? account?.currency ?? receivedCurrency).toUpperCase()
 
     const isFx = receivedCurrency !== accountCurrency
     const grossConverted = isFx ? convertCurrency(receivedAmount, receivedCurrency, accountCurrency) : receivedAmount
@@ -830,8 +866,8 @@ export async function creditIncomingSwiftAdmin(passcode: string, id: string): Pr
     await query(
       `INSERT INTO ledger_entries
          (user_id, entry_id, direction, amount, currency, status, entry_date,
-          counterparty, account, bank, reference, comment, category)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          counterparty, account, bank, reference, comment, category, sub_account_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        ON CONFLICT (user_id, entry_id) DO NOTHING`,
       [
         ledgerOwnerId,
@@ -842,11 +878,12 @@ export async function creditIncomingSwiftAdmin(passcode: string, id: string): Pr
         "completed",
         new Date().toISOString(),
         senderName,
-        account?.id ?? null,
+        subAccount?.iban ?? account?.id ?? null,
         bankName,
         reference,
-        `Inbound SWIFT ${message.messageType} from ${senderName} (reference ${reference}${message.uetr ? `, UETR ${message.uetr}` : ""}) verified and credited to the Master Account by the administrator.${fxNote}${feeNote}`,
+        `Inbound SWIFT ${message.messageType} from ${senderName} (reference ${reference}${message.uetr ? `, UETR ${message.uetr}` : ""}) verified and credited to the ${subAccount ? `sub-account "${subAccount.label}"` : "Master Account"} by the administrator.${fxNote}${feeNote}`,
         isFx ? "Inbound SWIFT Credit (FX)" : "Inbound SWIFT Credit",
+        subAccount?.id ?? null,
       ],
     )
 
