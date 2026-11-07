@@ -479,8 +479,9 @@ export async function transferToSubAccount(input: {
     try {
       const balancesAfter = availableByCurrency(await readLedgerEntries(ownerId))
       for (const [cur, after] of Object.entries(balancesAfter)) {
-        const before = balancesBefore[cur] ?? 0
-        if (after < -0.01 && after < before - 0.01) {
+        const before = Math.round((balancesBefore[cur] ?? 0) * 100) / 100
+        const afterRounded = Math.round(after * 100) / 100
+        if (afterRounded < -0.01 && afterRounded < before - 0.01) {
           throw new Error(`INSUFFICIENT_FUNDS: transfer would overdraw ${cur} (${after.toFixed(2)})`)
         }
       }
@@ -489,9 +490,17 @@ export async function transferToSubAccount(input: {
       await deleteLedgerEntry(ownerId, `${ref}-OUT`)
       await deleteLedgerEntry(ownerId, `${ref}-IN`)
       await deleteLedgerEntry(ownerId, `${ref}-FEE`)
-      return { ok: false, error: "The transfer could not be completed. Please try again." }
+      return {
+        ok: false,
+        error: `The transfer was reversed because it would overdraw your account. ${(guardErr as Error).message.replace(
+          /^INSUFFICIENT_FUNDS:\s*/,
+          "",
+        )}`,
+      }
     }
 
+    // The transfer is committed at this point; an audit-log hiccup must never
+    // report it as failed.
     await logActivity({
       action: `Moved ${feeFmt(amount)} from ${from.label} to ${to.label}`,
       category: "Accounts",
@@ -502,11 +511,11 @@ export async function transferToSubAccount(input: {
         referenceId: ref,
         note: note || "(none)",
       },
-    })
+    }).catch((e) => console.log("[v0] transferToSubAccount audit log failed:", (e as Error).message))
 
     return { ok: true, data: { reference: ref } }
   } catch (err) {
     console.log("[v0] transferToSubAccount failed:", (err as Error).message)
-    return { ok: false, error: "The transfer could not be completed. Please try again." }
+    return { ok: false, error: `The transfer could not be completed: ${(err as Error).message}` }
   }
 }
