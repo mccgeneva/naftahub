@@ -191,17 +191,17 @@ export default function SubAccountsPage() {
   // the Main account must independently cover the fee.
   const transferFee = amountNum > 0 && !Number.isNaN(amountNum) ? transferFeeFor(amountNum) : 0
   const mainBalance = balanceFor(transferCurrency)
-  const sourceNeed = fromId === MAIN_ACCOUNT_ID ? amountNum + transferFee : amountNum
-  const feeCoveredByMain = fromId === MAIN_ACCOUNT_ID || transferFee <= mainBalance + 0.001
-  // Largest amount (in cents) that leaves room for the 2% fee: from Main the
-  // amount + fee must fit the Main balance; from a sub-account the amount must
-  // fit the sub-account and the fee must fit the Main balance.
+  // From a sub-account the fee is charged to Main when Main can cover it,
+  // otherwise it is taken from the source sub-account (mirrors the server).
+  const feeFromSource = fromId !== MAIN_ACCOUNT_ID && transferFee > mainBalance + 0.001
+  const sourceNeed = fromId === MAIN_ACCOUNT_ID || feeFromSource ? amountNum + transferFee : amountNum
+  const feeCoveredByMain = true
   const maxTransferable = useMemo(() => {
     const fits = (a: number) => {
       const fee = transferFeeFor(a)
-      return fromId === MAIN_ACCOUNT_ID
-        ? a + fee <= fromBalance + 0.001
-        : a <= fromBalance + 0.001 && fee <= mainBalance + 0.001
+      if (fromId === MAIN_ACCOUNT_ID) return a + fee <= fromBalance + 0.001
+      if (fee <= mainBalance + 0.001) return a <= fromBalance + 0.001
+      return a + fee <= fromBalance + 0.001
     }
     let lo = 0
     let hi = Math.max(0, Math.floor(fromBalance * 100))
@@ -995,24 +995,18 @@ export default function SubAccountsPage() {
               </div>
               <p className="text-xs text-muted-foreground">
                 {maxTransferable > 0
-                  ? `Max you can send: ${formatMoney(maxTransferable, transferCurrency)} + ${formatMoney(maxTransferFee, transferCurrency)} fee (charged to Main account).`
-                  : fromId === MAIN_ACCOUNT_ID
-                    ? "Nothing available to transfer from this account after the fee."
-                    : fromBalance > 0
-                      ? "Your Main account can't cover the transfer fee — add funds to Main first."
-                      : "Nothing available to transfer from this account."}
+                  ? `Max you can send: ${formatMoney(maxTransferable, transferCurrency)} + ${formatMoney(maxTransferFee, transferCurrency)} fee (${
+                      fromId !== MAIN_ACCOUNT_ID && maxTransferFee > mainBalance + 0.001
+                        ? "taken from this sub-account"
+                        : "charged to Main account"
+                    }).`
+                  : "Nothing available to transfer from this account."}
               </p>
               {transferAmount && sourceNeed > fromBalance + 0.001 && (
                 <p className="text-xs text-destructive">
-                  {fromId === MAIN_ACCOUNT_ID
+                  {fromId === MAIN_ACCOUNT_ID || feeFromSource
                     ? `Amount plus the ${formatMoney(transferFee, transferCurrency)} fee exceeds your available balance of ${formatMoney(fromBalance, transferCurrency)}.`
                     : `Exceeds available balance of ${formatMoney(fromBalance, transferCurrency)}.`}
-                </p>
-              )}
-              {transferAmount && sourceNeed <= fromBalance + 0.001 && !feeCoveredByMain && (
-                <p className="text-xs text-destructive">
-                  The {formatMoney(transferFee, transferCurrency)} fee is charged to your Main account, which
-                  only has {formatMoney(mainBalance, transferCurrency)} available.
                 </p>
               )}
             </div>
@@ -1024,15 +1018,18 @@ export default function SubAccountsPage() {
                 </div>
                 <div className="mt-1 flex items-center justify-between">
                   <span className="text-muted-foreground">
-                    {(TRANSFER_FEE_RATE * 100).toFixed(0)}% fee (charged to Main account)
+                    {(TRANSFER_FEE_RATE * 100).toFixed(0)}% fee (
+                    {feeFromSource ? "taken from this sub-account" : "charged to Main account"})
                   </span>
                   <span className="font-medium">{formatMoney(transferFee, transferCurrency)}</span>
                 </div>
                 <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
-                  <span className="text-muted-foreground">Total debited from Main</span>
+                  <span className="text-muted-foreground">
+                    {fromId === MAIN_ACCOUNT_ID || feeFromSource ? "Total debited from source" : "Total debited from Main"}
+                  </span>
                   <span className="font-semibold">
                     {formatMoney(
-                      fromId === MAIN_ACCOUNT_ID ? amountNum + transferFee : transferFee,
+                      fromId === MAIN_ACCOUNT_ID || feeFromSource ? amountNum + transferFee : transferFee,
                       transferCurrency,
                     )}
                   </span>

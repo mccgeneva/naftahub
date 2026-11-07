@@ -400,30 +400,22 @@ export async function transferToSubAccount(input: {
     // debited from main, so require amount + fee there.
     const entries = await readLedgerEntries(ownerId)
     const available = compartmentBalance(entries, currency, from.tag)
-    const sourceNeed = from.tag === undefined ? amount + fee : amount
+    // The fee is charged to Main when Main can cover it; otherwise (sub-account
+    // source with an empty Main) it is taken from the source sub-account so
+    // money can always be moved out of a funded compartment.
+    const mainAvailableForFee = compartmentBalance(entries, currency, undefined)
+    const feeFromSource = from.tag !== undefined && fee > mainAvailableForFee + 0.001
+    const feeTag = feeFromSource ? from.tag : undefined
+    const sourceNeed = from.tag === undefined || feeFromSource ? amount + fee : amount
     if (sourceNeed > available + 0.001) {
       return {
         ok: false,
         error:
-          from.tag === undefined
+          from.tag === undefined || feeFromSource
             ? `Insufficient funds in ${from.label}. This transfer needs ${feeFmt(amount)} plus a ${feeFmt(
                 fee,
               )} fee (${feeFmt(sourceNeed)} total), but only ${feeFmt(available)} is available.`
             : `Insufficient funds in ${from.label}. Available ${feeFmt(available)}.`,
-      }
-    }
-
-    // When the source is a sub-account, the fee still comes out of the main
-    // account, so main must independently cover it.
-    if (from.tag !== undefined && fee > 0) {
-      const mainAvailable = compartmentBalance(entries, currency, undefined)
-      if (fee > mainAvailable + 0.001) {
-        return {
-          ok: false,
-          error: `The ${feeFmt(fee)} transfer fee is charged to your Main account, which only has ${feeFmt(
-            mainAvailable,
-          )} available.`,
-        }
       }
     }
 
@@ -471,8 +463,11 @@ export async function transferToSubAccount(input: {
         date: nowIso,
         counterparty: "NAFTAhub",
         reference: ref,
-        comment: `2% transfer fee on ${feeFmt(amount)} (${from.label} → ${to.label}).`,
+        comment: `2% transfer fee on ${feeFmt(amount)} (${from.label} → ${to.label})${
+          feeFromSource ? `, charged to ${from.label} because the Main account could not cover it` : ""
+        }.`,
         category: "Transfer Fee",
+        subAccountId: feeTag,
       })
     }
 
