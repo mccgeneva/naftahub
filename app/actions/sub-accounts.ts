@@ -18,7 +18,6 @@ import {
 import {
   readLedgerEntries,
   upsertLedgerEntry,
-  assertOwnerSolvent,
   deleteLedgerEntry,
   availableByCurrency,
 } from "@/lib/ledger-db"
@@ -473,9 +472,20 @@ export async function transferToSubAccount(input: {
 
     // Non-negativity guard on the whole owner ledger. Roll back every leg on any
     // surprise (e.g. the fee tipping the master balance negative).
+    // Only reject when THIS transfer worsens a deficit. A pre-existing negative
+    // pocket (e.g. an overdrawn Main) must not block a transfer that leaves it
+    // unchanged or repays it — that is exactly how a customer clears it.
+    const balancesBefore = availableByCurrency(entries)
     try {
-      await assertOwnerSolvent(ownerId)
-    } catch {
+      const balancesAfter = availableByCurrency(await readLedgerEntries(ownerId))
+      for (const [cur, after] of Object.entries(balancesAfter)) {
+        const before = balancesBefore[cur] ?? 0
+        if (after < -0.01 && after < before - 0.01) {
+          throw new Error(`INSUFFICIENT_FUNDS: transfer would overdraw ${cur} (${after.toFixed(2)})`)
+        }
+      }
+    } catch (guardErr) {
+      console.log("[v0] transferToSubAccount solvency rollback:", (guardErr as Error).message)
       await deleteLedgerEntry(ownerId, `${ref}-OUT`)
       await deleteLedgerEntry(ownerId, `${ref}-IN`)
       await deleteLedgerEntry(ownerId, `${ref}-FEE`)
