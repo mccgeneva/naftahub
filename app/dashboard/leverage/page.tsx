@@ -762,12 +762,36 @@ export default function LeveragePage() {
   // never from debits, loans, leverage or overdraft. A cash-funded line's margin
   // comes out of the same free funds, so margin + PPI must fit together.
   // Otherwise the application is rejected (the server enforces the same rule).
-  const ppiEur = convertCurrency(ppiPremium, currency, BASE_CURRENCY)
+  // The client pays audit fee + PPI from his own money and leverages the rest,
+  // so margin + audit fee + PPI must fit together in his free funds.
+  const ppiEur = convertCurrency(totalUpfrontCharge, currency, BASE_CURRENCY)
   const marginEurForPpi = isCashFunded ? convertCurrency(numericEquity, currency, BASE_CURRENCY) : 0
   const freshFundsEur = marginInfo?.freeEur ?? null
   const freshFundsNeededEur = ppiEur + marginEurForPpi
   const ppiExceedsFreshFunds =
-    ppiPremium > 0 && freshFundsEur !== null && freshFundsNeededEur > freshFundsEur + 0.01
+    totalUpfrontCharge > 0 && freshFundsEur !== null && freshFundsNeededEur > freshFundsEur + 0.01
+
+  // MAX EQUITY — the largest margin he can commit so that margin + audit fee +
+  // PPI (both of which grow with the margin) still fit in his own funds.
+  // Binary search so it stays exact whatever the charge formulas do.
+  const maxEquity: number | null = (() => {
+    if (!isCashFunded || freshFundsEur === null || numericRatio <= 0) return null
+    const freeInCcy = convertCurrency(freshFundsEur, BASE_CURRENCY, currency)
+    const cap = currency === BASE_CURRENCY ? freeInCcy : Math.min(freeInCcy, Math.max(0, balanceFor(currency)))
+    if (!(cap > 0)) return 0
+    const fits = (e: number) =>
+      e + leverageApplicationCharges(e, numericRatio, marginInfo?.trustScore).total <= cap + 0.005
+    let lo = 0
+    let hi = cap
+    for (let i = 0; i < 60; i++) {
+      const mid = (lo + hi) / 2
+      if (fits(mid)) lo = mid
+      else hi = mid
+    }
+    return Math.floor(lo * 100) / 100
+  })()
+  const maxEquityCharges =
+    maxEquity && maxEquity > 0 ? leverageApplicationCharges(maxEquity, numericRatio, marginInfo?.trustScore).total : 0
 
   // When the funding category changes, clamp the chosen ratio to that
   // category's ceiling so an out-of-range value can never be submitted.
@@ -1406,11 +1430,35 @@ export default function LeveragePage() {
                         </span>
                       )}
                     </div>
-                    <MoneyInput
-                      placeholder="e.g. 250,000"
-                      value={equity}
-                      onValueChange={setEquity}
-                    />
+                    <div className="flex items-stretch gap-2">
+                      <MoneyInput
+                        placeholder="e.g. 250,000"
+                        value={equity}
+                        onValueChange={setEquity}
+                        className="min-w-0 flex-1"
+                      />
+                      {isCashFunded && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-auto min-h-11 shrink-0 px-3"
+                          disabled={maxEquity === null || maxEquity <= 0}
+                          onClick={() => maxEquity && setEquity(maxEquity.toFixed(2))}
+                        >
+                          Max
+                        </Button>
+                      )}
+                    </div>
+                    {isCashFunded && maxEquity !== null && (
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        {maxEquity > 0
+                          ? `Max margin: ${formatMoney2(maxEquity, currency)} — the audit fee + PPI (${formatMoney2(
+                              maxEquityCharges,
+                              currency,
+                            )}) are paid from your own funds, the rest is leveraged.`
+                          : "No free funds left to cover margin plus the audit fee and PPI."}
+                      </p>
+                    )}
                     {equityExceedsMargin && (
                       <p className="text-xs text-red-400">
                         {currency === BASE_CURRENCY

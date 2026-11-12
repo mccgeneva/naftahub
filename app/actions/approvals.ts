@@ -407,7 +407,7 @@ export async function submitApproval(input: SubmitApprovalInput): Promise<Submit
     // For a cash-funded line the pledged equity margin also comes out of those
     // same free funds, so margin + PPI must fit together. Otherwise the
     // application is REJECTED outright (no appeal, no hold). Fails CLOSED.
-    if (charges.ppi > 0) {
+    if (charges.total > 0) {
       const fmtEur = (n: number) =>
         `EUR ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
       let freeEur: number
@@ -423,20 +423,22 @@ export async function submitApproval(input: SubmitApprovalInput): Promise<Submit
             "We could not verify that the PPI premium is covered by your own funds, so this application was not submitted. Please try again.",
         }
       }
-      const ppiEur = convertCurrency(charges.ppi, feeCurrency, BASE_CURRENCY)
+      // The client pays the audit fee + PPI from his own money and leverages the
+      // REST: margin + audit fee + PPI must fit together inside his free funds.
+      const chargesEur = convertCurrency(charges.total, feeCurrency, BASE_CURRENCY)
       const cashFunded = ["treasury", "master", "naftahub"].includes(String(rec.account ?? ""))
       const marginEur = cashFunded && Number.isFinite(equity) && equity > 0
         ? convertCurrency(equity, feeCurrency, BASE_CURRENCY)
         : 0
-      const neededEur = ppiEur + marginEur
+      const neededEur = chargesEur + marginEur
       if (neededEur > freeEur + 0.01) {
         return {
           ok: false,
-          error: `Rejected: the PPI insurance premium (${fmtEur(ppiEur)}${
+          error: `Rejected: the audit fee and PPI insurance premium (${fmtEur(chargesEur)})${
             marginEur > 0 ? ` plus your ${fmtEur(marginEur)} margin` : ""
-          }) must be paid with fresh money from your Master Account — it cannot be covered by borrowed funds, loans, leverage or overdraft. Your own free funds are ${fmtEur(
+          } must be paid with your own money from your Master Account — not borrowed funds, loans, leverage or overdraft. Your own free funds are ${fmtEur(
             freeEur,
-          )}. Deposit at least ${fmtEur(neededEur - freeEur)} of new funds and apply again.`,
+          )}. Lower the margin (use "Max") or deposit at least ${fmtEur(neededEur - freeEur)} and apply again.`,
         }
       }
     }
