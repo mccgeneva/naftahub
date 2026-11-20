@@ -225,6 +225,59 @@ function guardTools<T extends Record<string, unknown>>(tools: T): T {
 export function createNqaiTools(ctx: NqaiToolContext = {}) {
   const tools = {
   /**
+   * Live market quote for any exchange-traded symbol (futures, FX, indices,
+   * equities) from Yahoo Finance's public chart endpoint — no key required.
+   */
+  getMarketQuote: tool({
+    description:
+      "Get the LIVE last price, previous close, daily change, 52-week range and quote timestamp for any market symbol. Use Yahoo Finance tickers: futures like ZW=F (CBOT wheat, US cents/bu), KE=F (KC HRW wheat), ZC=F (corn), ZS=F (soybeans), BZ=F (Brent), CL=F (WTI), HO=F (heating oil/ULSD), RB=F (gasoline), NG=F (Henry Hub gas), GC=F (gold), SI=F (silver), HG=F (copper); FX like EURUSD=X, USDCHF=X; indices like ^GSPC. ALWAYS call this before quoting any current price in an answer or report.",
+    inputSchema: z.object({
+      symbols: z.array(z.string()).min(1).max(10).describe("Yahoo Finance tickers, e.g. ['ZW=F','BZ=F']"),
+    }),
+    execute: async ({ symbols }) => {
+      const results = await Promise.all(
+        symbols.map(async (raw) => {
+          const symbol = raw.trim().toUpperCase()
+          for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+            try {
+              const res = await fetch(
+                `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=5d`,
+                { headers: { "User-Agent": "Mozilla/5.0 (compatible; NAFTAhub/1.0)" }, cache: "no-store" },
+              )
+              if (!res.ok) continue
+              const json = (await res.json()) as {
+                chart?: { result?: { meta?: Record<string, unknown> }[] }
+              }
+              const m = json.chart?.result?.[0]?.meta
+              const price = m?.regularMarketPrice
+              if (typeof price !== "number") continue
+              const prev = (m?.chartPreviousClose ?? m?.previousClose) as number | undefined
+              const time = m?.regularMarketTime as number | undefined
+              return {
+                symbol,
+                name: (m?.shortName ?? m?.longName ?? symbol) as string,
+                currency: (m?.currency ?? null) as string | null,
+                exchange: (m?.fullExchangeName ?? m?.exchangeName ?? null) as string | null,
+                price,
+                previousClose: typeof prev === "number" ? prev : null,
+                changePct: typeof prev === "number" && prev !== 0 ? Number((((price - prev) / prev) * 100).toFixed(2)) : null,
+                fiftyTwoWeekHigh: (m?.fiftyTwoWeekHigh ?? null) as number | null,
+                fiftyTwoWeekLow: (m?.fiftyTwoWeekLow ?? null) as number | null,
+                asOf: time ? new Date(time * 1000).toISOString() : null,
+                source: "Yahoo Finance (exchange data, may be delayed up to 15 min)",
+              }
+            } catch {
+              // try next host
+            }
+          }
+          return { symbol, error: "No quote available for this symbol." }
+        }),
+      )
+      return { ok: true, quotes: results }
+    },
+  }),
+
+  /**
    * Verify a vessel by IMO. Runs the official IMO check-digit validation, the
    * free OFAC sanctions screen, and (if an AIS provider is linked) live master
    * data. Falls back to free public-registry enrichment when no key is set.

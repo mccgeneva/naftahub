@@ -1,4 +1,5 @@
 import { nqaiChatModel, docAnalysisModel } from "@/lib/ai-models"
+import { anthropic } from "@ai-sdk/anthropic"
 import {
   convertToModelMessages,
   generateText,
@@ -107,6 +108,14 @@ TANK TERMINALS & WORLDWIDE STORAGE TOOLS (query real storage infrastructure at g
 - findTankStorage(port?, region?, product?, minCapacityCbm?): find tank terminals / storage facilities by port (Rotterdam, Houston, Singapore, Fujairah, Ras Tanura, Cushing, …), region (Middle East, US Gulf Coast, ARA, …), the product to store (diesel, crude, LNG, fuel oil, chemicals), and/or minimum nameplate capacity. Use for requests like "Show tank storage availability in Rotterdam for diesel" or "List major crude storage terminals in the Middle East".
 - getTerminalDetails(query): drill into one named terminal or operator (e.g. "Vopak Europoort", "VTTI Fujairah") for its full product slate, capacity, tank count, connectivity and services.
 - Storage guidance: combine storage with vessel/port context when useful (e.g. a Fujairah bunker terminal near a candidate VLCC). Present terminals as a compact table (operator, port, products, nameplate capacity in m³, connectivity). CRITICAL HONESTY: the capacities are operator-published NAMEPLATE reference figures, NOT real-time free space — always tell the client that live open/booked capacity and ullage must be confirmed with the terminal or the MCC desk (or via a commercial storage feed such as Kpler/Vortexa/Genscape). Never invent a specific live availability number.
+
+LIVE MARKET DATA & DATA DISCIPLINE (MANDATORY for any price, market analysis, outlook or report):
+- getMarketQuote(symbols): live exchange prices for futures, FX, indices and equities. Call it BEFORE stating any current price; never quote a price from memory.
+- web_search / web_fetch: search the live web and read pages. For market and commodity reports, go SOURCE-FIRST: find the LATEST official release before writing — e.g. USDA WASDE + weekly Export Sales + FAS for grains; national agencies (ABARES, Statistics Canada, IGC, EU MARS/Commission, Rosstat/SovEcon, CONAB); IEA Oil Market Report, OPEC MOMR, EIA STEO/weekly for oil and gas; CFTC Commitments of Traders for positioning; central-bank statements for FX. Prefer the primary agency page over news articles, and the newest release over older ones.
+- Every key figure MUST carry its source and date inline, e.g. "822.4 Mt (USDA WASDE, Sep 2026)". If you cannot find a figure from a current source, say "not found in current sources" — NEVER fill gaps with an estimate presented as fact, and never use training-memory figures for supply, stocks, production or prices.
+- Before drafting a report, cross-check: do your figures match the latest sources? Is any figure older than the most recent release? Correct it first.
+- Balance is required: every outlook/recommendation must include a bull case AND a bear case (the strongest argument against your view — e.g. record stocks, weak export sales, a factor already priced in), and compare at least buy / sell / hedge / stay-flat options. Never present a one-directional recommendation.
+- End each market report with a "Sources & data dates" list (title, publisher, date, link) and a short note that prices are indicative and must be confirmed with the desk before execution.
 
 KNOWLEDGE & RESEARCH TOOLS (open scholarly intelligence — university research, peer-reviewed papers, preprints):
 - searchResearch(query, fromYear?, openAccessOnly?): search global academic literature across OpenAlex, arXiv and Crossref. Use whenever a user asks what the science/research/evidence says, for technical due diligence, energy-transition/decarbonization questions, materials/engineering topics, or methodology. Returns ranked works with authors, year, venue, citations, open-access status and links.
@@ -495,10 +504,16 @@ export async function POST(req: Request) {
   const result = streamText({
     model: activeModel,
     messages: modelMessages,
-    tools: createNqaiTools({ senderName }),
+    tools: {
+      ...createNqaiTools({ senderName }),
+      // Anthropic server-side web tools: live news, official releases (USDA
+      // WASDE, IEA, OPEC, EIA, central banks) and page reading for reports.
+      web_search: anthropic.tools.webSearch_20250305({ maxUses: 8 }),
+      web_fetch: anthropic.tools.webFetch_20250910({ maxUses: 5 }),
+    },
     // Allow several tool round-trips (e.g. discover deals → verify a vessel →
     // answer) within a single turn before the model must produce its reply.
-    stopWhen: stepCountIs(6),
+    stopWhen: stepCountIs(10),
     // Generous output ceiling. Without this the Anthropic provider applies a
     // modest per-model default, and a long document authored via the
     // `createDocument` tool overruns it MID tool-call — the tool's JSON
