@@ -1457,9 +1457,24 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                 <Sparkles className="h-3 w-3" />
                 NQAi · Neural Quantum Artificial Intelligence
               </p>
-              <p className="whitespace-pre-line text-pretty text-[14px] leading-relaxed text-foreground/90 sm:text-[13px]">
-                {NQAI_WELCOME}
-              </p>
+  <div className="flex flex-col gap-3 text-pretty text-[14px] leading-relaxed text-foreground/90 sm:text-[13px]">
+  {NQAI_WELCOME.split("\n\n").map((section, i) => {
+  const [heading, ...rest] = section.split("\n")
+  if (i === 0 || rest.length === 0) {
+  return (
+  <p key={i} className={i === 0 ? "font-medium text-foreground" : undefined}>
+  {section}
+  </p>
+  )
+  }
+  return (
+  <div key={i} className="flex flex-col gap-0.5">
+  <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">{heading}</p>
+  <p className="whitespace-pre-line">{rest.join("\n")}</p>
+  </div>
+  )
+  })}
+  </div>
               <p className="mt-2.5 border-t border-border pt-2 text-[10px] text-muted-foreground">
                 Running on RISC-V · Research cloud, UC Berkeley · Proprietary architecture
               </p>
