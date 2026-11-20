@@ -30,6 +30,7 @@ import {
 import type { SerializableUserProfile, SerializableProfileItem, AccountRelationship } from "@/lib/profile-types"
 import { effectiveRelationship } from "@/lib/account-hierarchy"
 import { validateIban, validateBic } from "@/lib/iban-swift"
+import { checkAccountId } from "@/lib/account-number"
 import { extractCurrencyBankingCoordinates, currenciesWithBankingRows } from "@/lib/banking-coordinates"
 import { MANAGED_BANK_CURRENCIES } from "@/lib/managed-bank-currencies"
 import type { KycDocument, KycPassportMeta } from "@/lib/kyc-types"
@@ -913,8 +914,8 @@ export async function updateMasterBankProfileAdmin(input: UpdateMasterBankInput)
       if (acct.iban !== undefined) {
         const raw = acct.iban.trim()
         if (raw) {
-          const c = validateIban(raw)
-          if (!c.valid) return { ok: false, error: `${cur} IBAN is not valid: ${c.error}` }
+          const c = checkAccountId(raw)
+          if (!c.valid) return { ok: false, error: `${cur} IBAN / account number is not valid: ${c.error}` }
           upsertBankingRow(rows, ibanMatch, `${cur} IBAN`, c.formatted)
         } else {
           upsertBankingRow(rows, ibanMatch, `${cur} IBAN`, "")
@@ -938,9 +939,9 @@ export async function updateMasterBankProfileAdmin(input: UpdateMasterBankInput)
       const curIban = rows.find((r) => ibanMatch(r.label.toLowerCase()))?.value
       const curSwift = rows.find((r) => swiftMatch(r.label.toLowerCase()))?.value
       if (curIban && curSwift) {
-        const ic = validateIban(curIban)
+        const ic = checkAccountId(curIban)
         const bc = validateBic(curSwift)
-        if (ic.valid && bc.valid && ic.countryCode !== bc.countryCode) {
+        if (ic.valid && ic.kind === "iban" && bc.valid && ic.countryCode !== bc.countryCode) {
           return {
             ok: false,
             error: `The ${cur} account's IBAN country (${ic.countryCode}) and SWIFT/BIC country (${bc.countryCode}) don't match — correct one of them before saving.`,

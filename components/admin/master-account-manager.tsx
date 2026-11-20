@@ -21,6 +21,7 @@ import type {
 import { MANAGED_BANK_CURRENCIES } from "@/lib/managed-bank-currencies"
 import { relationshipLabel } from "@/lib/account-hierarchy"
 import { validateIban, validateBic, lookupBankByIban, isGenericBankInfo } from "@/lib/iban-swift"
+import { checkAccountId } from "@/lib/account-number"
 import { resolveIbanExternal } from "@/app/actions/bank-resolve"
 
 // Default account currency for an IBAN's country code (ISO 3166 → ISO 4217).
@@ -338,11 +339,11 @@ export function MasterAccountManager() {
     for (const row of currencyRows) {
       const ib = row.iban?.trim()
       const sw = row.swift?.trim()
-      const ibc = ib ? validateIban(ib) : null
+      const ibc = ib ? checkAccountId(ib) : null
       const swc = sw ? validateBic(sw) : null
-      if (ibc && !ibc.valid) issues[row.id] = ibc.error || "Invalid IBAN"
+      if (ibc && !ibc.valid) issues[row.id] = ibc.error
       else if (swc && !swc.valid) issues[row.id] = swc.error || "Invalid SWIFT/BIC"
-      else if (ibc?.valid && swc?.valid && ibc.countryCode !== swc.countryCode)
+      else if (ibc?.valid && ibc.kind === "iban" && swc?.valid && ibc.countryCode !== swc.countryCode)
         issues[row.id] = `IBAN country (${ibc.countryCode}) and SWIFT/BIC country (${swc.countryCode}) don't match.`
     }
     return issues
@@ -647,7 +648,9 @@ export function MasterAccountManager() {
                   </p>
                   {currencyRows.map((row) => {
                     const issue = currencyIssues[row.id]
-                    const ibanCk = row.iban.trim() ? validateIban(row.iban) : null
+                    const idCk = row.iban.trim() ? checkAccountId(row.iban) : null
+                    const ibanCk = idCk?.valid && idCk.kind === "iban" ? idCk : null
+                    const isDomestic = !!(idCk?.valid && idCk.kind === "account")
                     const looking = !!currencyLookup[row.id]
                     const resolvedSwift = row.swift.trim()
                     // Currency options for THIS block: the supported settlement
@@ -675,13 +678,13 @@ export function MasterAccountManager() {
                         </div>
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div className="space-y-1.5">
-                            <Label htmlFor={`ma-${row.id}-iban`}>IBAN</Label>
+                            <Label htmlFor={`ma-${row.id}-iban`}>IBAN / Account number</Label>
                             <div className="relative">
                               <Input
                                 id={`ma-${row.id}-iban`}
                                 value={row.iban}
                                 onChange={(e) => handleCurrencyIban(row.id, e.target.value)}
-                                placeholder={`${row.currency} account IBAN`}
+                                placeholder={`${row.currency} IBAN or account number`}
                                 autoComplete="off"
                                 spellCheck={false}
                                 className={cn(
@@ -706,6 +709,11 @@ export function MasterAccountManager() {
                                   : resolvedSwift
                                     ? ` · SWIFT/BIC ${resolvedSwift} auto-filled`
                                     : " · bank not found in the directory — enter the SWIFT/BIC and bank name manually"}
+                              </p>
+                            )}
+                            {isDomestic && !issue && (
+                              <p className="text-[11px] text-emerald-400">
+                                Domestic account number (non-IBAN country) · enter the bank&apos;s SWIFT/BIC and name
                               </p>
                             )}
                           </div>
