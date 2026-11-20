@@ -127,6 +127,8 @@ DOCUMENT GENERATION (you can produce downloadable PDFs):
 - Use the createDocument tool to author a downloadable, professionally formatted PDF whenever the client asks you to prepare/draft/create/generate a document, report, summary, briefing, quotation, memo or analysis — anything they want to download or share. Give it a clear title and the full body in Markdown (headings, bullet/numbered lists, tables).
 - After calling createDocument, write only a SHORT chat reply summarizing what you produced (the client downloads the full document via the Download button) — never paste the entire document body back into the chat.
 - Keep generated documents desk-grade and clearly mark indicative figures as indicative.
+- DOCUMENT LENGTH LIMIT: the createDocument body must stay UNDER ~3,500 words (roughly 8–10 pages). For large reports (annual outlooks, market studies), write a tight executive-grade version: executive summary, key tables, and concise sections. Never attempt an exhaustive 20+ page document in one call; it will be cut off before it can render. If the client wants more depth, offer a follow-up document covering the remaining sections.
+- Call createDocument promptly: write at most ONE short sentence before it, never a long preamble.
 - ALWAYS set the createDocument \`brand\` to the correct company letterhead by context: use "petroli" (MCC Petroli) for ANY oil/gas/petroleum/crude/diesel/refined-product document — FCO, SPA, quotation, cargo/vessel paperwork, procedure; use "naftahub" (NAFTAhub) for platform onboarding, the client handbook or product material; use "capital" (MCC Capital) for banking, instruments (SBLC/BG/MTN), statements, payments and general trade. When unsure, pick the closest fit rather than leaving it unset.
 
 CONDUCT:
@@ -503,7 +505,11 @@ export async function POST(req: Request) {
     // runs `execute`, the tool part is stuck at input-streaming, and the chat's
     // "Drafting document" spinner hangs forever. A high cap lets multi-page
     // reports finish streaming their arguments so the PDF can actually render.
-    maxOutputTokens: 32000,
+    // Capped so even the deep tier finishes streaming a document inside the
+    // 300s function budget. At 32k a long report kept streaming past the
+    // deadline, the function was killed mid tool-call, and the chat hung on
+    // "Drafting document". ~14k tokens comfortably holds a ~3,500-word report.
+    maxOutputTokens: 14000,
     temperature: 0.6,
     // Stop server-side work the moment the client disconnects or cancels, so a
     // navigated-away/aborted request never keeps an expensive model call running

@@ -88,6 +88,7 @@ const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
  *  must restart" symptom. These bound how aggressively we auto-resume. */
 const MAX_AUTO_RECOVERIES = 2 // per turn, so a genuinely broken turn can't loop
 const STALL_MS = 45000 // no streamed content for this long ⇒ hung (safety net); above the ~22s tool-call ceiling to avoid false trips
+const TURN_MAX_MS = 320000 // server function budget is 300s; past this the turn is dead
 const VISIBILITY_GRACE_MS = 3500 // after returning to the tab, wait this long for the stream to resume on its own before restarting
 const POST_RETURN_ERROR_WINDOW_MS = 12000 // an error surfacing within this long after returning is treated as a dropped-socket casualty, not a genuine fault
 
@@ -602,6 +603,40 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
   useEffect(() => {
     if (status === "ready") recoveryAttemptsRef.current = 0
   }, [status])
+
+  // Absolute ceiling: the server can't run past 300s, so a turn still "busy"
+  // after TURN_MAX_MS was killed mid-stream (typically an oversized document).
+  // Stop it and tell the client plainly instead of spinning forever.
+  const turnStartRef = useRef(0)
+  useEffect(() => {
+    if (status === "submitted" && !turnStartRef.current) turnStartRef.current = Date.now()
+    if (status === "ready" || status === "error") turnStartRef.current = 0
+  }, [status])
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      const s = statusRef.current
+      if (s !== "submitted" && s !== "streaming") return
+      if (!turnStartRef.current || Date.now() - turnStartRef.current < TURN_MAX_MS) return
+      turnStartRef.current = 0
+      recoveryAttemptsRef.current = MAX_AUTO_RECOVERIES
+      void stop().then(() => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `timeout-${Date.now()}`,
+            role: "assistant",
+            parts: [
+              {
+                type: "text",
+                text: "This request took too long and was cut off before the document could be produced. Please ask again for a shorter version (for example, an executive summary with key tables), or split it into sections and I'll prepare each one.",
+              },
+            ],
+          } as UIMessage,
+        ])
+      })
+    }, 5000)
+    return () => window.clearInterval(t)
+  }, [stop, setMessages])
 
   // Auto-recover when a turn ERRORS shortly after returning from the background.
   // iOS aborts the in-flight fetch on backgrounding, so the turn surfaces an
