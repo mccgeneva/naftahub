@@ -37,6 +37,7 @@ import {
   Brain,
   Check,
   ArrowLeft,
+  Copy,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -1205,6 +1206,32 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
     setAttachments([])
   }
 
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const copyMessage = async (id: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+    } catch {
+      const ta = document.createElement("textarea")
+      ta.value = value
+      ta.setAttribute("readonly", "")
+      ta.style.position = "fixed"
+      ta.style.opacity = "0"
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand("copy")
+      document.body.removeChild(ta)
+    }
+    setCopiedId(id)
+    window.setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1800)
+  }
+
+  const resendMessage = (message: UIMessage) => {
+    if (busy) return
+    const parts = message.parts.filter((p) => p.type === "text" || p.type === "file")
+    if (parts.length === 0) return
+    sendMessage({ role: "user", parts })
+  }
+
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     submit(input)
@@ -1535,7 +1562,13 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
               )}
               <div
                 className={cn(
-                  "min-w-0 max-w-[88%] break-words rounded-sm border px-3 py-2 text-[15px] leading-relaxed sm:max-w-[85%] sm:text-[13px]",
+                  "flex min-w-0 max-w-[88%] flex-col gap-1 sm:max-w-[85%]",
+                  isUser ? "items-end" : "items-start",
+                )}
+              >
+              <div
+                className={cn(
+                  "min-w-0 max-w-full break-words rounded-sm border px-3 py-2 text-[15px] leading-relaxed sm:text-[13px]",
                   isUser
                     ? "border-primary/30 bg-primary/10 text-foreground"
                     : "border-border bg-card text-foreground/90",
@@ -1652,6 +1685,52 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                     ))}
                   </div>
                 )}
+              </div>
+              {text && !isLive && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => void copyMessage(message.id, text)}
+                    aria-label="Copy message"
+                    className="inline-flex h-9 items-center gap-1.5 rounded-sm px-2.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                  >
+                    {copiedId === message.id ? (
+                      <Check className="h-3.5 w-3.5 text-primary" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                    <span>{copiedId === message.id ? "Copied" : "Copy"}</span>
+                  </button>
+                  {isUser ? (
+                    <button
+                      type="button"
+                      onClick={() => resendMessage(message)}
+                      disabled={busy}
+                      aria-label="Resend message"
+                      className="inline-flex h-9 items-center gap-1.5 rounded-sm px-2.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      <span>Resend</span>
+                    </button>
+                  ) : (
+                    mi === messages.length - 1 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearError()
+                          void regenerate()
+                        }}
+                        disabled={busy}
+                        aria-label="Regenerate response"
+                        className="inline-flex h-9 items-center gap-1.5 rounded-sm px-2.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        <span>Regenerate</span>
+                      </button>
+                    )
+                  )}
+                </div>
+              )}
               </div>
             </div>
           )
