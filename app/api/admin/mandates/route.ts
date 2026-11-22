@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server"
 import { adminActionAuthorized, resolveActingUserId } from "@/lib/admin-auth"
-import { listDynamicUsers } from "@/lib/admin-users-db"
+import { getDynamicUserByEmail, listDynamicUsers } from "@/lib/admin-users-db"
+
+const TREASURY_EMAIL = "admin@mccgva.ch"
 import { resolveDataOwnerIdFor } from "@/lib/session-user"
 import {
   assertOwnerSolvent,
@@ -187,10 +189,48 @@ export async function POST(req: Request) {
       return fail("You created this mandate — tick the sole-administrator attestation to confirm financing yourself.")
     }
     const available = availableByCurrency(await readLedgerEntries(m.ownerId))[m.currency] ?? 0
-    if (available + 0.01 < m.deposit) {
-      return fail(`Client has ${m.currency} ${available.toFixed(2)} available — the ${m.currency} ${m.deposit.toFixed(2)} deposit can't be reserved.`)
-    }
+    const shortfall = round2(Math.max(0, m.deposit - available))
     const now = new Date().toISOString()
+    let treasuryOwnerId: string | null = null
+    const fundIds = { out: `MANDATE-FUND-${m.id}-OUT`, in: `MANDATE-FUND-${m.id}-IN` }
+
+    if (shortfall > 0.01) {
+      if (body.fundFromTreasury !== true) {
+        return fail(`Client has ${m.currency} ${available.toFixed(2)} available — the ${m.currency} ${m.deposit.toFixed(2)} deposit can't be reserved.`)
+      }
+      const treasury = await getDynamicUserByEmail(TREASURY_EMAIL)
+      if (!treasury) return fail("Treasury account admin@mccgva.ch was not found.")
+      treasuryOwnerId = await resolveDataOwnerIdFor(treasury.id)
+      if (treasuryOwnerId === m.ownerId) return fail("The treasury can't fund its own mandate.")
+      const outErr = await postSolvently(treasuryOwnerId, [
+        {
+          id: fundIds.out,
+          direction: "debit",
+          amount: shortfall,
+          currency: m.currency,
+          status: "completed",
+          date: now,
+          counterparty: m.holderLabel,
+          reference: m.id,
+          category: "Managed Mandate Financing",
+          comment: `Treasury financing of the deposit for managed mandate "${m.title}". Repayable by the client.`,
+        },
+      ])
+      if (outErr) return fail(`Treasury can't fund ${m.currency} ${shortfall.toFixed(2)}: ${outErr}`)
+      await upsertLedgerEntry(m.ownerId, {
+        id: fundIds.in,
+        direction: "credit",
+        amount: shortfall,
+        currency: m.currency,
+        status: "completed",
+        date: now,
+        counterparty: "MCC Treasury",
+        reference: m.id,
+        category: "Managed Mandate Financing",
+        comment: `Deposit financed by MCC Treasury for "${m.title}". This amount is borrowed and repayable.`,
+      })
+    }
+
     const err = await postSolvently(m.ownerId, [
       {
         id: reserveId(m.id),
@@ -205,10 +245,34 @@ export async function POST(req: Request) {
         comment: `Capital reserved for managed mandate "${m.title}". Released when the mandate closes.`,
       },
     ])
-    if (err) return fail(err)
-    await updateMandate(m.id, { status: "active", activatedAt: now, activatedBy: actor, lastInterestAt: now })
-    await audit("Mandate activated", { mandate: m.id, deposit: m.deposit, singleAdminOverride: selfActivation ? "yes" : "no" }, m.userId)
-    await notify(m.userId, "Managed mandate active", `${m.currency} ${m.deposit.toLocaleString("en-US")} is now reserved for "${m.title}".`, "success")
+    if (err) {
+      if (treasuryOwnerId) {
+        await deleteLedgerEntry(m.ownerId, fundIds.in)
+        await deleteLedgerEntry(treasuryOwnerId, fundIds.out)
+      }
+      return fail(err)
+    }
+    const treasuryFunded = treasuryOwnerId ? shortfall : 0
+    await updateMandate(m.id, {
+      status: "active",
+      activatedAt: now,
+      activatedBy: actor,
+      lastInterestAt: now,
+      ...(treasuryFunded > 0 ? { borrowed: round2(m.borrowed + treasuryFunded) } : {}),
+    })
+    await audit(
+      "Mandate activated",
+      { mandate: m.id, deposit: m.deposit, treasuryFunded, singleAdminOverride: selfActivation ? "yes" : "no" },
+      m.userId,
+    )
+    await notify(
+      m.userId,
+      "Managed mandate active",
+      treasuryFunded > 0
+        ? `${m.currency} ${m.deposit.toLocaleString("en-US")} is now reserved for "${m.title}". ${m.currency} ${treasuryFunded.toLocaleString("en-US")} of it was financed by MCC Treasury and is repayable.`
+        : `${m.currency} ${m.deposit.toLocaleString("en-US")} is now reserved for "${m.title}".`,
+      "success",
+    )
     return NextResponse.json({ ok: true })
   }
 
