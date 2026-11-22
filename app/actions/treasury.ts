@@ -12,6 +12,8 @@ import {
 import { logActivity } from "@/app/actions/log-activity"
 import { readLedgerEntries, upsertLedgerEntry, availableByCurrency, assertOwnerSolvent } from "@/lib/ledger-db"
 import { convertCurrency } from "@/lib/fx"
+import { getDynamicUserById, updateDynamicUserProfile } from "@/lib/admin-users-db"
+import { badgeForTier, MEMBERSHIP_TIER_LABEL } from "@/lib/membership"
 import { captureServerError } from "@/lib/debug-log-db"
 import {
   buildTreasuryFinancingLedgerPosts,
@@ -593,6 +595,17 @@ export async function saveTreasuryRecordAdmin(
       },
     })
 
+    // A fully secured deposit IS the membership: switch the client's tier to
+    // match the deposit profile automatically, so an Avant-Garde deposit no
+    // longer leaves the account stuck on PRO waiting for a separate step.
+    if (status === "secured") {
+      try {
+        await syncMembershipTierFromTreasury(userId, fields.profile, financed > 0.01, admin)
+      } catch (syncErr) {
+        console.log("[v0] treasury tier sync failed:", (syncErr as Error).message)
+      }
+    }
+
     return { ok: true, account: rowToAccount(rows[0]) }
   } catch (err) {
     // The record write failed after the contribution debit was applied — undo
@@ -600,6 +613,50 @@ export async function saveTreasuryRecordAdmin(
     if (rollbackContribution) await rollbackContribution()
     console.log("[v0] saveTreasuryRecordAdmin failed:", (err as Error).message)
     return { ok: false, error: "The treasury record could not be saved. Please try again." }
+  }
+}
+
+async function syncMembershipTierFromTreasury(
+  userId: string,
+  profile: TreasuryProfileKey,
+  leveraged: boolean,
+  admin: UserProfile,
+): Promise<void> {
+  const dyn = await getDynamicUserById(userId)
+  const currentBadge = String(dyn?.profile?.accountBadge ?? "").toLowerCase()
+  const alreadyAvant = currentBadge.includes("avant") || currentBadge.includes("institutional")
+  // Never downgrade an Avant-Garde account because a PRO-profile deposit was saved.
+  if (profile === "pro" && alreadyAvant) return
+
+  const badge = badgeForTier(profile)
+  if (dyn && dyn.profile?.accountBadge !== badge) {
+    await updateDynamicUserProfile(userId, { profile: { ...dyn.profile, accountBadge: badge } })
+  }
+
+  const now = new Date().toISOString()
+  const decidedBy = `${admin.fullName} (${admin.company})`
+  try {
+    await query(
+      `UPDATE membership_upgrades
+          SET status = 'active', tier = $2, deposit_basis = $3,
+              validated_at = COALESCE(validated_at, $4), decided_by = COALESCE(decided_by, $5), updated_at = $4
+        WHERE user_id = $1 AND status IN ('pending','approved','active')`,
+      [userId, profile, leveraged ? "leverage" : "cash", now, decidedBy],
+    )
+  } catch {
+    // No membership request table/row — the badge already drives the tier.
+  }
+
+  try {
+    await insertNotification({
+      userId,
+      tone: "success",
+      title: `${MEMBERSHIP_TIER_LABEL[profile]} membership active`,
+      body: `Your security deposit is fully secured, so your account is now ${MEMBERSHIP_TIER_LABEL[profile]}.`,
+      href: "/dashboard/plans",
+    })
+  } catch {
+    // best-effort
   }
 }
 
