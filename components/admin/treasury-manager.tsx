@@ -385,14 +385,7 @@ export function TreasuryManager() {
           </div>
           <div className="space-y-2">
             <Label htmlFor="tm-required">Required security deposit (EUR)</Label>
-            <Input
-              id="tm-required"
-              type="number"
-              min="0"
-              step="1000"
-              value={requiredDeposit}
-              onChange={(e) => setRequiredDeposit(e.target.value)}
-            />
+            <MoneyInput id="tm-required" value={requiredDeposit} onValueChange={setRequiredDeposit} />
           </div>
         </div>
 
@@ -416,13 +409,10 @@ export function TreasuryManager() {
               )}
             </span>
           </div>
-          <Input
+          <MoneyInput
             id="tm-contribution"
-            type="number"
-            min="0"
-            step="1000"
             value={contribution}
-            onChange={(e) => setContribution(e.target.value)}
+            onValueChange={setContribution}
             aria-invalid={cashFlowBreached}
             className={cn(cashFlowBreached && "border-red-500/60 focus-visible:ring-red-500/30")}
           />
@@ -521,14 +511,7 @@ export function TreasuryManager() {
 
               <div className="space-y-2">
                 <Label htmlFor="tm-exposure">Transaction exposure (EUR)</Label>
-                <Input
-                  id="tm-exposure"
-                  type="number"
-                  min="0"
-                  step="1000"
-                  value={transactionExposure}
-                  onChange={(e) => setTransactionExposure(e.target.value)}
-                />
+                <MoneyInput id="tm-exposure" value={transactionExposure} onValueChange={setTransactionExposure} />
                 <p className="text-[11px] text-muted-foreground">
                   Additional financial transaction exposure tied to the leverage facility (the cycle fee
                   applies to the leveraged amount plus this exposure).

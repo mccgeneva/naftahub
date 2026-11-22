@@ -202,6 +202,7 @@ export type AdminMembershipResult =
 
 interface TreasuryMembershipInfo {
   status: string
+  profile: string
   financed: number
   updatedAt: string | null
 }
@@ -210,11 +211,12 @@ async function readTreasuryMembershipInfo(): Promise<Map<string, TreasuryMembers
   const map = new Map<string, TreasuryMembershipInfo>()
   try {
     const { rows } = await query(
-      `SELECT user_id, status, financed_amount, updated_at FROM treasury_accounts`,
+      `SELECT user_id, status, profile, financed_amount, updated_at FROM treasury_accounts`,
     )
     for (const r of rows) {
       map.set(String(r.user_id), {
         status: String(r.status ?? "none"),
+        profile: String(r.profile ?? ""),
         financed: Number(r.financed_amount ?? 0),
         updatedAt: r.updated_at ? new Date(r.updated_at as string).toISOString() : null,
       })
@@ -244,7 +246,8 @@ function derivedMembership(
   const treasuryLive = !!treasury && treasury.status !== "none" && treasury.status !== "closed"
   const isVisitor = (badge ?? "").toLowerCase().includes("visitor")
   if (isVisitor) return null
-  const tier = explicitTierFromBadge(badge) ?? (treasuryLive ? "pro" : null)
+  const securedAvant = !!treasury && treasury.status === "secured" && treasury.profile === "avantgarde"
+  const tier = securedAvant ? "avantgarde" : explicitTierFromBadge(badge) ?? (treasuryLive ? "pro" : null)
   if (!tier) return null
   return {
     tier,
