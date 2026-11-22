@@ -1,9 +1,13 @@
 "use client"
 
+import { useState } from "react"
+import Link from "next/link"
 import useSWR from "swr"
-import { Briefcase, Info } from "lucide-react"
+import { toast } from "sonner"
+import { Briefcase, Info, Landmark, Loader2 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 
 interface ClientMandate {
   id: string
@@ -14,6 +18,9 @@ interface ClientMandate {
   borrowed: number
   annualInterestRate: number
   status: "pending_financing" | "active" | "closed" | "cancelled"
+  exchangeRequestedAt: string | null
+  exchangedAt: string | null
+  bondReference: string | null
   distributions: { id: string; periodLabel: string; amount: number; interestCharged: number; approvedAt?: string }[]
 }
 
@@ -29,8 +36,97 @@ const fmt = (n: number, ccy: string) =>
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
+function ExchangePanel({ mandate: m, onChange }: { mandate: ClientMandate; onChange: () => void }) {
+  const [busy, setBusy] = useState(false)
+  if (m.status === "closed" || m.status === "cancelled") return null
+  const faceValue = m.deposit * m.leverageRatio
+
+  if (m.exchangedAt) {
+    return (
+      <div className="flex flex-col gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">
+        <p className="flex items-center gap-2 font-medium">
+          <Landmark className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+          Exchanged for HSBC Hong Kong Treasury Bond
+        </p>
+        <p className="font-mono text-xs tabular-nums text-muted-foreground">
+          {fmt(faceValue, m.currency)}
+          {m.bondReference ? ` · ${m.bondReference}` : ""}
+        </p>
+        <Button asChild variant="outline" className="h-11">
+          <Link href="/dashboard/instruments">View in Bank Instruments</Link>
+        </Button>
+      </div>
+    )
+  }
+
+  async function send(op: "request_exchange" | "withdraw_exchange") {
+    setBusy(true)
+    try {
+      const res = await fetch("/api/mandates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ op, id: m.id }),
+      })
+      const json = (await res.json()) as { ok: boolean; error?: string }
+      if (!json.ok) throw new Error(json.error ?? "Request failed")
+      toast.success(op === "request_exchange" ? "Exchange requested" : "Exchange request withdrawn", {
+        description:
+          op === "request_exchange"
+            ? "MCC Capital will lodge the treasury bond once HSBC Hong Kong confirms issuance."
+            : undefined,
+      })
+      onChange()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Request failed")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/40 p-3 text-sm">
+      <div className="flex flex-col gap-1">
+        <p className="flex items-center gap-2 font-medium">
+          <Landmark className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+          Exchange for a Treasury Bond
+        </p>
+        <p className="leading-relaxed text-muted-foreground">
+          Swap this mandate for a Treasury Bond issued by our partner bank HSBC Hong Kong, lodged in your Bank
+          Instruments.
+        </p>
+      </div>
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-1">
+        <dt className="text-muted-foreground">Bond face value</dt>
+        <dd className="text-right font-mono tabular-nums">{fmt(faceValue, m.currency)}</dd>
+        <dt className="col-span-2 text-xs text-muted-foreground">
+          {fmt(m.deposit, m.currency)} × 1:{m.leverageRatio}
+          {m.borrowed > 0 ? ` — includes ${fmt(m.borrowed, m.currency)} financed by MCC, which stays owed` : ""}
+        </dt>
+      </dl>
+      {m.exchangeRequestedAt ? (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {m.status === "active"
+              ? "Requested — awaiting HSBC Hong Kong issuance."
+              : "Requested — the bond is issued once financing is confirmed and the mandate is active."}
+          </p>
+          <Button variant="outline" className="h-11" disabled={busy} onClick={() => send("withdraw_exchange")}>
+            {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+            Withdraw request
+          </Button>
+        </div>
+      ) : (
+        <Button className="h-11" disabled={busy} onClick={() => send("request_exchange")}>
+          {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+          Request exchange
+        </Button>
+      )}
+    </div>
+  )
+}
+
 export function ManagedMandatesCard() {
-  const { data } = useSWR<{ ok: boolean; mandates: ClientMandate[] }>("/api/mandates", fetcher, { refreshInterval: 30000 })
+  const { data, mutate } = useSWR<{ ok: boolean; mandates: ClientMandate[] }>("/api/mandates", fetcher, { refreshInterval: 30000 })
   const mandates = data?.mandates ?? []
   if (mandates.length === 0) return null
 
@@ -77,6 +173,7 @@ export function ManagedMandatesCard() {
                   </>
                 )}
               </dl>
+              <ExchangePanel mandate={m} onChange={() => mutate()} />
               {m.distributions.length > 0 && (
                 <ul className="flex flex-col divide-y divide-border rounded-md border border-border text-sm">
                   {m.distributions.map((d) => (

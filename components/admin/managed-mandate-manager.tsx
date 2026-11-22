@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
-import { Briefcase, Check, Loader2, Plus, X } from "lucide-react"
+import { Briefcase, Check, Landmark, Loader2, Plus, X } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -40,6 +40,9 @@ interface Mandate {
   distributions: Distribution[]
   createdBy: string
   activatedAt: string | null
+  exchangeRequestedAt: string | null
+  exchangedAt: string | null
+  bondReference: string | null
 }
 
 const STATUS_LABEL: Record<Status, string> = {
@@ -62,6 +65,7 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ userId: "", title: "", currency: "EUR", deposit: "", leverageRatio: "1", targetNote: "" })
+  const [bondForm, setBondForm] = useState<Record<string, { isin: string; ref: string }>>({})
   const [distForm, setDistForm] = useState<Record<string, { amount: string; periodLabel: string; note: string }>>({})
 
   const call = useCallback(
@@ -207,6 +211,7 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
         ) : (
           mandates.map((m) => {
             const df = distForm[m.id] ?? { amount: "", periodLabel: "", note: "" }
+            const bf = bondForm[m.id] ?? { isin: "", ref: "" }
             const pending = m.distributions.filter((d) => d.status === "pending")
             const credited = m.distributions.filter((d) => d.status === "credited")
             const totalCredited = credited.reduce((s, d) => s + d.amount, 0)
@@ -256,6 +261,51 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
                       Cancel
                     </Button>
                   </div>
+                )}
+
+                {m.exchangedAt ? (
+                  <p className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">
+                    <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                    <span className="min-w-0 break-words">
+                      HSBC Hong Kong Treasury Bond lodged · {fmt(m.deposit * m.leverageRatio, m.currency)}
+                      {m.bondReference ? ` · ${m.bondReference}` : ""}
+                    </span>
+                  </p>
+                ) : (
+                  (m.status === "active" || m.exchangeRequestedAt) &&
+                  m.status !== "closed" &&
+                  m.status !== "cancelled" && (
+                    <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                      <p className="flex items-center gap-2 text-sm font-medium">
+                        <Landmark className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                        Exchange for HSBC Hong Kong Treasury Bond
+                        {m.exchangeRequestedAt && <Badge variant="secondary">Client requested</Badge>}
+                      </p>
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        Face value {fmt(m.deposit * m.leverageRatio, m.currency)} ({fmt(m.deposit, m.currency)} × 1:{m.leverageRatio}).
+                        Enter the ISIN and reference HSBC Hong Kong issued. The bond is non-transferable, can&apos;t be monetized,
+                        and is retired when the mandate closes.
+                      </p>
+                      {m.status !== "active" ? (
+                        <p className="text-xs text-muted-foreground">Confirm financing first — the bond can only be issued on an active mandate.</p>
+                      ) : (
+                        <>
+                          <div className="flex flex-col gap-2 sm:flex-row">
+                            <Input className="h-11 text-base sm:w-44" placeholder="ISIN" value={bf.isin} onChange={(e) => setBondForm({ ...bondForm, [m.id]: { ...bf, isin: e.target.value.toUpperCase() } })} aria-label="ISIN" />
+                            <Input className="h-11 min-w-0 flex-1 text-base" placeholder="HSBC HK issuance / custody reference" value={bf.ref} onChange={(e) => setBondForm({ ...bondForm, [m.id]: { ...bf, ref: e.target.value } })} aria-label="HSBC reference" />
+                          </div>
+                          <Button
+                            className="h-11"
+                            disabled={busy === `bond-${m.id}` || bf.isin.trim().length !== 12 || !bf.ref.trim()}
+                            onClick={() => run(`bond-${m.id}`, { op: "issue_bond", id: m.id, isin: bf.isin, bondReference: bf.ref }, "Treasury bond lodged in client's Bank Instruments")}
+                          >
+                            {busy === `bond-${m.id}` && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+                            Issue &amp; lodge bond
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  )
                 )}
 
                 {pending.map((d) => (
