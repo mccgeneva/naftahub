@@ -14,6 +14,44 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 type Status = "pending_financing" | "active" | "closed" | "cancelled"
 
+interface BondForm {
+  isin: string
+  ref: string
+  issueDate: string
+  maturityDate: string
+  couponRate: string
+  rating: string
+  custodyAccount: string
+  commonCode: string
+  notes: string
+}
+
+const BOND_RATINGS = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB"]
+
+const EMPTY_BOND: BondForm = {
+  isin: "",
+  ref: "",
+  issueDate: "",
+  maturityDate: "",
+  couponRate: "",
+  rating: "AA-",
+  custodyAccount: "",
+  commonCode: "",
+  notes: "",
+}
+
+function BondField({ id, label, hint, children }: { id: string; label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <Label htmlFor={id} className="text-xs">
+        {label}
+      </Label>
+      {children}
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+    </div>
+  )
+}
+
 interface Distribution {
   id: string
   periodLabel: string
@@ -65,7 +103,7 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ userId: "", title: "", currency: "EUR", deposit: "", leverageRatio: "1", targetNote: "" })
-  const [bondForm, setBondForm] = useState<Record<string, { isin: string; ref: string }>>({})
+  const [bondForm, setBondForm] = useState<Record<string, BondForm>>({})
   const [distForm, setDistForm] = useState<Record<string, { amount: string; periodLabel: string; note: string }>>({})
 
   const call = useCallback(
@@ -211,7 +249,10 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
         ) : (
           mandates.map((m) => {
             const df = distForm[m.id] ?? { amount: "", periodLabel: "", note: "" }
-            const bf = bondForm[m.id] ?? { isin: "", ref: "" }
+            const bf = bondForm[m.id] ?? EMPTY_BOND
+            const setBf = (patch: Partial<BondForm>) => setBondForm((prev) => ({ ...prev, [m.id]: { ...(prev[m.id] ?? EMPTY_BOND), ...patch } }))
+            const bondReady =
+              bf.isin.trim().length === 12 && !!bf.ref.trim() && !!bf.maturityDate && (!bf.issueDate || bf.maturityDate > bf.issueDate)
             const pending = m.distributions.filter((d) => d.status === "pending")
             const credited = m.distributions.filter((d) => d.status === "credited")
             const totalCredited = credited.reduce((s, d) => s + d.amount, 0)
@@ -283,21 +324,78 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
                       </p>
                       <p className="text-xs leading-relaxed text-muted-foreground">
                         Face value {fmt(m.deposit * m.leverageRatio, m.currency)} ({fmt(m.deposit, m.currency)} × 1:{m.leverageRatio}).
-                        Enter the ISIN and reference HSBC Hong Kong issued. The bond is non-transferable, can&apos;t be monetized,
-                        and is retired when the mandate closes.
+                        Copy the details from HSBC Hong Kong&apos;s issuance confirmation (fields marked * are required). The bond is
+                        non-transferable, can&apos;t be monetized, and is retired when the mandate closes.
                       </p>
                       {m.status !== "active" ? (
                         <p className="text-xs text-muted-foreground">Confirm financing first — the bond can only be issued on an active mandate.</p>
                       ) : (
                         <>
-                          <div className="flex flex-col gap-2 sm:flex-row">
-                            <Input className="h-11 text-base sm:w-44" placeholder="ISIN" value={bf.isin} onChange={(e) => setBondForm({ ...bondForm, [m.id]: { ...bf, isin: e.target.value.toUpperCase() } })} aria-label="ISIN" />
-                            <Input className="h-11 min-w-0 flex-1 text-base" placeholder="HSBC HK issuance / custody reference" value={bf.ref} onChange={(e) => setBondForm({ ...bondForm, [m.id]: { ...bf, ref: e.target.value } })} aria-label="HSBC reference" />
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <BondField id={`isin-${m.id}`} label="ISIN *" hint="12 characters, from HSBC's confirmation">
+                              <Input id={`isin-${m.id}`} className="h-11 font-mono text-base" maxLength={12} value={bf.isin} onChange={(e) => setBf({ isin: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "") })} autoComplete="off" />
+                            </BondField>
+                            <BondField id={`ref-${m.id}`} label="HSBC issuance / custody reference *">
+                              <Input id={`ref-${m.id}`} className="h-11 text-base" value={bf.ref} onChange={(e) => setBf({ ref: e.target.value })} autoComplete="off" />
+                            </BondField>
+                            <BondField id={`issue-${m.id}`} label="Issue date" hint="Defaults to today">
+                              <Input id={`issue-${m.id}`} type="date" className="h-11 text-base" value={bf.issueDate} onChange={(e) => setBf({ issueDate: e.target.value })} />
+                            </BondField>
+                            <BondField id={`mat-${m.id}`} label="Maturity date *">
+                              <Input id={`mat-${m.id}`} type="date" className="h-11 text-base" value={bf.maturityDate} onChange={(e) => setBf({ maturityDate: e.target.value })} />
+                            </BondField>
+                            <BondField id={`cpn-${m.id}`} label="Coupon rate (% p.a.)">
+                              <Input id={`cpn-${m.id}`} inputMode="decimal" className="h-11 text-base" value={bf.couponRate} onChange={(e) => setBf({ couponRate: e.target.value.replace(/[^0-9.]/g, "") })} />
+                            </BondField>
+                            <BondField id={`rating-${m.id}`} label="Rating">
+                              <Select value={bf.rating} onValueChange={(v) => setBf({ rating: v })}>
+                                <SelectTrigger id={`rating-${m.id}`} className="h-11 text-base">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {BOND_RATINGS.map((r) => (
+                                    <SelectItem key={r} value={r}>{r}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </BondField>
+                            <BondField id={`cust-${m.id}`} label="Custody account">
+                              <Input id={`cust-${m.id}`} className="h-11 text-base" value={bf.custodyAccount} onChange={(e) => setBf({ custodyAccount: e.target.value })} autoComplete="off" />
+                            </BondField>
+                            <BondField id={`cc-${m.id}`} label="Common code">
+                              <Input id={`cc-${m.id}`} className="h-11 font-mono text-base" value={bf.commonCode} onChange={(e) => setBf({ commonCode: e.target.value })} autoComplete="off" />
+                            </BondField>
+                            <div className="sm:col-span-2">
+                              <BondField id={`notes-${m.id}`} label="Notes (shown to client)">
+                                <Textarea id={`notes-${m.id}`} rows={2} className="text-base" value={bf.notes} onChange={(e) => setBf({ notes: e.target.value })} />
+                              </BondField>
+                            </div>
                           </div>
+                          {bf.issueDate && bf.maturityDate && bf.maturityDate <= bf.issueDate && (
+                            <p className="text-xs text-destructive">Maturity date must be after the issue date.</p>
+                          )}
                           <Button
                             className="h-11"
-                            disabled={busy === `bond-${m.id}` || bf.isin.trim().length !== 12 || !bf.ref.trim()}
-                            onClick={() => run(`bond-${m.id}`, { op: "issue_bond", id: m.id, isin: bf.isin, bondReference: bf.ref }, "Treasury bond lodged in client's Bank Instruments")}
+                            disabled={busy === `bond-${m.id}` || !bondReady}
+                            onClick={() =>
+                              run(
+                                `bond-${m.id}`,
+                                {
+                                  op: "issue_bond",
+                                  id: m.id,
+                                  isin: bf.isin,
+                                  bondReference: bf.ref,
+                                  issueDate: bf.issueDate || undefined,
+                                  maturityDate: bf.maturityDate,
+                                  couponRate: bf.couponRate,
+                                  rating: bf.rating,
+                                  custodyAccount: bf.custodyAccount,
+                                  commonCode: bf.commonCode,
+                                  notes: bf.notes,
+                                },
+                                "Treasury bond lodged in client's Bank Instruments",
+                              )
+                            }
                           >
                             {busy === `bond-${m.id}` && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
                             Issue &amp; lodge bond
