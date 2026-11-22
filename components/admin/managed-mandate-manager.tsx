@@ -105,6 +105,7 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
   const [attest, setAttest] = useState<Record<string, boolean>>({})
   const [availableById, setAvailableById] = useState<Record<string, number>>({})
   const [resizeVal, setResizeVal] = useState<Record<string, string>>({})
+  const [fundTreasury, setFundTreasury] = useState<Record<string, boolean>>({})
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ userId: "", title: "", currency: "EUR", deposit: "", leverageRatio: "1", targetNote: "" })
   const [bondForm, setBondForm] = useState<Record<string, BondForm>>({})
@@ -312,9 +313,27 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
                         <span className={`font-mono tabular-nums ${short ? "text-destructive" : ""}`}>{fmt(avail, m.currency)}</span>
                       </div>
                       {short ? (
-                        <p className="text-pretty text-xs leading-relaxed text-destructive">
-                          Short by {fmt(m.deposit - avail, m.currency)}. Fund the client&apos;s account, or reduce the deposit to what they hold.
-                        </p>
+                        <>
+                          <p className="text-pretty text-xs leading-relaxed text-destructive">
+                            Short by {fmt(m.deposit - avail, m.currency)}. Fund it from Treasury, or reduce the deposit to what the client holds.
+                          </p>
+                          <label
+                            htmlFor={`ft-${m.id}`}
+                            className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-primary/40 bg-primary/5 p-3"
+                          >
+                            <input
+                              id={`ft-${m.id}`}
+                              type="checkbox"
+                              className="mt-1 h-5 w-5 shrink-0 accent-primary"
+                              checked={!!fundTreasury[m.id]}
+                              onChange={(e) => setFundTreasury((s) => ({ ...s, [m.id]: e.target.checked }))}
+                            />
+                            <span className="text-pretty text-sm leading-relaxed">
+                              Fund the {fmt(m.deposit - avail, m.currency)} shortfall from Treasury (admin@mccgva.ch). It&apos;s booked as MCC financing: added to the
+                              borrowed amount, accrues interest, and is repaid when the mandate closes.
+                            </span>
+                          </label>
+                        </>
                       ) : (
                         <p className="text-xs leading-relaxed text-muted-foreground">The deposit is fully covered and can be reserved.</p>
                       )}
@@ -376,7 +395,13 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
                     <Button
                       className="h-11 flex-1"
                       disabled={busy === `act-${m.id}` || (m.createdBy === actor && !attest[`act-${m.id}`])}
-                      onClick={() => run(`act-${m.id}`, { op: "activate", id: m.id, selfAttest: !!attest[`act-${m.id}`] }, "Financing confirmed — capital reserved")}
+                      onClick={() =>
+                        run(
+                          `act-${m.id}`,
+                          { op: "activate", id: m.id, selfAttest: !!attest[`act-${m.id}`], fundFromTreasury: !!fundTreasury[m.id] },
+                          "Financing confirmed — capital reserved",
+                        )
+                      }
                     >
                       {busy === `act-${m.id}` && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
                       Confirm financing &amp; activate
