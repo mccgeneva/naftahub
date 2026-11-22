@@ -246,6 +246,8 @@ export default function TreasuryPage() {
         </span>
       </div>
 
+      <ManagedMandatesCard />
+
       {!established ? (
         <Card className="bg-card border-border">
           <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
@@ -535,7 +537,6 @@ export default function TreasuryPage() {
           {/* Internal lending — a standalone loan (any amount, admin-approved),
               credited to the master account. Independent of the security-deposit
               financing above and of AES/Treuhand investment. */}
-          <ManagedMandatesCard />
           <InternalLoanCard />
 
           {/* Transaction history */}

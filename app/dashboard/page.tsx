@@ -1,4 +1,5 @@
 import { PortfolioOverview } from "@/components/dashboard/portfolio-overview"
+import { ManagedMandatesCard } from "@/components/dashboard/treasury/managed-mandates-card"
 import { PortfolioChart } from "@/components/dashboard/portfolio-chart"
 import { LiveRates } from "@/components/dashboard/live-rates"
 import { RecentTransactions } from "@/components/dashboard/recent-transactions"
@@ -27,6 +28,9 @@ export default function DashboardPage() {
 
       {/* Portfolio Stats */}
       <PortfolioOverview />
+
+      {/* Managed mandates (hidden when none) */}
+      <ManagedMandatesCard />
 
       {/* PPI insurance cover the client has purchased (hidden when none) */}
       <InsuranceCoverCard compact />
