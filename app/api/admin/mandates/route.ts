@@ -86,7 +86,24 @@ export async function POST(req: Request) {
     const clients = users
       .filter((u) => u.status === "active")
       .map((u) => ({ id: u.id, label: [u.profile.fullName, u.profile.company].filter(Boolean).join(" — ") || u.email, email: u.email }))
-    return NextResponse.json({ ok: true, mandates, clients, actor })
+    // Live spendable balance per pending mandate so the admin can see up front
+    // whether the deposit can actually be reserved.
+    const availableById: Record<string, number> = {}
+    const pendingOwners = [...new Set(mandates.filter((m) => m.status === "pending_financing").map((m) => m.ownerId))]
+    const balances: Record<string, Record<string, number>> = {}
+    await Promise.all(
+      pendingOwners.map(async (ownerId) => {
+        try {
+          balances[ownerId] = availableByCurrency(await readLedgerEntries(ownerId))
+        } catch {
+          balances[ownerId] = {}
+        }
+      }),
+    )
+    for (const m of mandates) {
+      if (m.status === "pending_financing") availableById[m.id] = round2(Math.max(0, balances[m.ownerId]?.[m.currency] ?? 0))
+    }
+    return NextResponse.json({ ok: true, mandates, clients, actor, availableById })
   }
 
   if (op === "create") {
@@ -144,6 +161,24 @@ export async function POST(req: Request) {
   const id = String(body.id ?? "")
   const m = await getMandate(id)
   if (!m) return fail("Mandate not found.", 404)
+
+  if (op === "resize") {
+    if (m.status !== "pending_financing") return fail("Only a mandate pending financing can be resized.")
+    const deposit = round2(Number(body.deposit))
+    if (!(deposit > 0)) return fail("Enter a deposit greater than zero.")
+    const ratio = m.leverageRatio
+    await updateMandate(m.id, {
+      deposit,
+      borrowed: ratio > 1 ? round2(deposit * (ratio - 1)) : 0,
+    })
+    await audit("Mandate resized", { mandate: m.id, from: m.deposit, to: deposit, currency: m.currency }, m.userId)
+    await notify(
+      m.userId,
+      "Managed mandate updated",
+      `"${m.title}" now reserves ${m.currency} ${deposit.toLocaleString("en-US")}${ratio > 1 ? ` (bond face value ${m.currency} ${round2(deposit * ratio).toLocaleString("en-US")})` : ""}. It is still pending financing.`,
+    )
+    return NextResponse.json({ ok: true })
+  }
 
   if (op === "activate") {
     if (m.status !== "pending_financing") return fail("Only a mandate pending financing can be activated.")
