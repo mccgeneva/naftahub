@@ -84,7 +84,7 @@ export async function listSofLinksForIncomingSwiftAdmin(
 import { incomingTransactionFee } from "@/lib/incoming-fees"
 import { applyCashbackForOwner } from "@/lib/fee-cashback-db"
 import { cashbackNote, applyCashback } from "@/lib/fee-cashback"
-import { getFeeTiers } from "@/lib/tiered-fees-db"
+import { getFeeTiersForOwner } from "@/lib/tiered-fees-db"
 import { upsertLedgerEntry, readLedgerEntries, availableByCurrency } from "@/lib/ledger-db"
 import { getOverdraftStatusForOwner } from "@/lib/overdraft"
 import { listAllSubAccounts, getSubAccountById } from "@/lib/sub-account-db"
@@ -944,7 +944,7 @@ export async function creditIncomingSwiftAdmin(passcode: string, id: string): Pr
     // Tiered incoming-transaction fee on the converted amount, deducted from
     // the credit (in ADDITION to any FX fee). Same-currency credits get only this.
     // Admin-set SWIFT cashback reduces it.
-    const standardIncomingFee = incomingTransactionFee(grossConverted, await getFeeTiers())
+    const standardIncomingFee = incomingTransactionFee(grossConverted, await getFeeTiersForOwner((await resolveDataOwnerIdFor(message.userId)) ?? message.userId))
     const incomingCashback = await applyCashbackForOwner(
       (await resolveDataOwnerIdFor(message.userId)) ?? message.userId,
       "swift",

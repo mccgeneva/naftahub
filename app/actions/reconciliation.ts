@@ -23,7 +23,7 @@ import { incomingTransactionFee } from "@/lib/incoming-fees"
 import { issuerBankDisplay } from "@/lib/issuer-bank"
 import { applyCashbackForOwner } from "@/lib/fee-cashback-db"
 import { cashbackNote } from "@/lib/fee-cashback"
-import { getFeeTiers } from "@/lib/tiered-fees-db"
+import { getFeeTiersForOwner } from "@/lib/tiered-fees-db"
 import { listDynamicUsers } from "@/lib/admin-users-db"
 import { extractCurrencyBankingCoordinates, currenciesWithBankingRows } from "@/lib/banking-coordinates"
 import { listAllSubAccounts } from "@/lib/sub-account-db"
@@ -218,7 +218,7 @@ async function creditMatchedAccount(
 
   // Tiered incoming-transaction fee, deducted from the credit (same currency).
   // Admin-set cashback reduces the fee so the customer keeps more.
-  const standardIncomingFee = incomingTransactionFee(payment.amount, await getFeeTiers())
+  const standardIncomingFee = incomingTransactionFee(payment.amount, await getFeeTiersForOwner(ledgerOwnerId))
   const incomingCashback = await applyCashbackForOwner(ledgerOwnerId, "transaction", standardIncomingFee)
   const incomingFee = incomingCashback.netFee
   const netAmount = round2(payment.amount - incomingFee)
@@ -381,7 +381,7 @@ export async function recordGatewayDepositForApproval(
     const fxFee = isFx ? round2(grossConverted * GATEWAY_FX_FEE_RATE) : 0
     // Tiered incoming-transaction fee on the converted amount, deducted from
     // the credit (in ADDITION to any FX fee). Admin-set cashback reduces it.
-    const standardIncomingFee = incomingTransactionFee(grossConverted, await getFeeTiers())
+    const standardIncomingFee = incomingTransactionFee(grossConverted, await getFeeTiersForOwner(await resolveDataOwnerIdFor(account.userId)))
     const incomingCashback = await applyCashbackForOwner(
       await resolveDataOwnerIdFor(account.userId),
       "transaction",
@@ -749,7 +749,7 @@ export async function recordRegisteredAccountDepositForApproval(
     const fxFee = isFx ? round2(grossConverted * GATEWAY_FX_FEE_RATE) : 0
     // 2% incoming-transaction fee on the converted amount, deducted from the
     // credit (in ADDITION to any FX fee). Admin-set cashback reduces it.
-    const standardIncomingFee = incomingTransactionFee(grossConverted, await getFeeTiers())
+    const standardIncomingFee = incomingTransactionFee(grossConverted, await getFeeTiersForOwner(recipientOwnerId))
     const incomingCashback = await applyCashbackForOwner(recipientOwnerId, "transaction", standardIncomingFee)
     const incomingFee = incomingCashback.netFee
     const feeTotal = round2(fxFee + incomingFee)
@@ -1019,7 +1019,7 @@ export async function recordMasterBankingDepositForApproval(
     // Master Account is multi-currency: credit the SENT currency directly, no FX.
   // Tiered incoming-transaction fee, deducted from the credit. Admin-set
   // cashback reduces it.
-  const standardIncomingFee = incomingTransactionFee(sentAmount, await getFeeTiers())
+  const standardIncomingFee = incomingTransactionFee(sentAmount, await getFeeTiersForOwner(recipientOwnerId))
   const incomingCashback = await applyCashbackForOwner(recipientOwnerId, "transaction", standardIncomingFee)
   const incomingFee = incomingCashback.netFee
   const feeTotal = round2(incomingFee)
@@ -1213,7 +1213,7 @@ export async function recordSubAccountDepositForApproval(
     const grossConverted = isFx ? convertCurrency(sentAmount, sentCurrency, compartmentCurrency) : sentAmount
     const fxRate = isFx ? grossConverted / sentAmount : 1
     const fxFee = isFx ? round2(grossConverted * GATEWAY_FX_FEE_RATE) : 0
-    const standardIncomingFee = incomingTransactionFee(grossConverted, await getFeeTiers())
+    const standardIncomingFee = incomingTransactionFee(grossConverted, await getFeeTiersForOwner(ownerId))
     const incomingCashback = await applyCashbackForOwner(ownerId, "transaction", standardIncomingFee)
     const incomingFee = incomingCashback.netFee
     const feeTotal = round2(fxFee + incomingFee)

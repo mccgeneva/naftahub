@@ -61,6 +61,74 @@ export async function getFeeTiers(): Promise<FeeTier[]> {
   }
 }
 
+// Per-customer overrides live in the same table under id `user:<dataOwnerId>`.
+const customerId = (ownerId: string) => `user:${ownerId}`
+
+/** A customer's own tier table, or null when they are on the standard table. */
+export async function getCustomerFeeTiers(ownerId: string): Promise<FeeTier[] | null> {
+  if (!ownerId) return null
+  try {
+    await ensureTable()
+    const { rows } = await query(`SELECT tiers FROM fee_tier_config WHERE id = $1`, [customerId(ownerId)])
+    if (!rows.length) return null
+    return sanitizeTiers((rows[0] as Record<string, unknown>).tiers)
+  } catch {
+    return null
+  }
+}
+
+/** The tier table that applies to a data owner: their override if set, else the global table. */
+export async function getFeeTiersForOwner(ownerId: string | null | undefined): Promise<FeeTier[]> {
+  if (ownerId) {
+    const custom = await getCustomerFeeTiers(ownerId)
+    if (custom) return custom
+  }
+  return getFeeTiers()
+}
+
+export async function saveCustomerFeeTiers(ownerId: string, tiers: FeeTier[], updatedBy?: string): Promise<FeeTier[]> {
+  if (!ownerId) throw new Error("Missing customer")
+  const clean = sanitizeTiers(tiers)
+  if (!clean) throw new Error("Invalid tier table")
+  await ensureTable()
+  await query(
+    `INSERT INTO fee_tier_config (id, tiers, updated_at, updated_by)
+     VALUES ($1, $2::jsonb, now(), $3)
+     ON CONFLICT (id) DO UPDATE SET tiers = EXCLUDED.tiers, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+    [customerId(ownerId), JSON.stringify(clean), updatedBy ?? null],
+  )
+  return clean
+}
+
+export async function deleteCustomerFeeTiers(ownerId: string): Promise<void> {
+  if (!ownerId) return
+  await ensureTable()
+  await query(`DELETE FROM fee_tier_config WHERE id = $1`, [customerId(ownerId)])
+}
+
+/** Every customer with a custom table (owner id + their first-tier rate for a quick summary). */
+export async function listCustomerFeeTierOverrides(): Promise<{ userId: string; tiers: FeeTier[]; updatedAt: string }[]> {
+  try {
+    await ensureTable()
+    const { rows } = await query(
+      `SELECT id, tiers, updated_at FROM fee_tier_config WHERE id LIKE 'user:%' ORDER BY updated_at DESC`,
+    )
+    const out: { userId: string; tiers: FeeTier[]; updatedAt: string }[] = []
+    for (const r of rows as Record<string, unknown>[]) {
+      const tiers = sanitizeTiers(r.tiers)
+      if (!tiers) continue
+      out.push({
+        userId: String(r.id).slice(5),
+        tiers,
+        updatedAt: new Date(r.updated_at as string).toISOString(),
+      })
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
 /** Upsert the global tier table. Returns the sanitized tiers actually stored. */
 export async function saveFeeTiers(tiers: FeeTier[], updatedBy?: string): Promise<FeeTier[]> {
   const clean = sanitizeTiers(tiers)
