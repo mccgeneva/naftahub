@@ -762,8 +762,20 @@ export async function submitApproval(input: SubmitApprovalInput): Promise<Submit
     try {
       const config = await getGuaranteeConfig()
       const { score } = await gatherGuaranteeProfile(session.id, config)
-      const leverageFunded = (score.inputs.totalExposure ?? 0) > 0.01
       const payloadObj = (input.payload ?? {}) as Record<string, unknown>
+      const recIn = (payloadObj.record ?? {}) as Record<string, unknown>
+      // An existing loan elsewhere on the account must not lock ROI on a program
+      // paid with the client's own money. ROI is locked only when this investment
+      // exceeds the client's own unborrowed funds (available − outstanding exposure),
+      // i.e. it can only be funded with borrowed money. Instrument-funded programs
+      // are collateral-backed, not borrowed cash, so they are never locked.
+      const instrumentFunded = Boolean(recIn.fundingInstrumentId)
+      const rawAmount = Number(recIn.amount ?? payloadObj.amount ?? input.amount ?? 0)
+      const currency = String(recIn.currency ?? payloadObj.currency ?? input.currency ?? "EUR")
+      const amountEur = rawAmount > 0 ? convertCurrency(rawAmount, currency, "EUR") : 0
+      const exposureEur = score.inputs.totalExposure ?? 0
+      const freeEur = Math.max(0, (score.inputs.availableBalance ?? 0) - exposureEur)
+      const leverageFunded = !instrumentFunded && exposureEur > 0.01 && amountEur > freeEur + 0.01
       if (input.kind === "ppp") {
         // PPP stores the investment under payload.record.
         const rec = (payloadObj.record ?? {}) as Record<string, unknown>
