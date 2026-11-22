@@ -1435,6 +1435,24 @@ export async function adminConfirmYieldTermination(
       }
     }
 
+    // 3b) Release any ROI that was credited-but-locked (leverage-funded programs).
+    //     The lock only applied while the program was running; once it has exited,
+    //     the earned ROI becomes withdrawable immediately.
+    try {
+      const prefix = `PPP-ROI-${approvalId}-`
+      for (const row of await readLedgerEntries(ownerId)) {
+        if (row.id.startsWith(prefix) && row.status === "hold") {
+          await upsertLedgerEntry(ownerId, {
+            ...row,
+            status: "completed",
+            comment: `${row.comment ?? ""} Released on early exit — now withdrawable.`.trim(),
+          })
+        }
+      }
+    } catch (err) {
+      console.log("[v0] yield termination ROI release failed:", (err as Error).message)
+    }
+
     // 4) Charge the agreed exit cost (deterministic id → idempotent).
     if (exitCost > 0) {
       try {
@@ -3448,6 +3466,26 @@ export async function reconcileMyApprovedCredits(): Promise<{ ok: boolean; appli
     // leg here means an ALREADY-approved cash program self-heals: its principal
     // debit appears on the next ledger read even though approval predated the fix.
     // Deterministic ids keep it idempotent.
+    // Exited / cancelled programs: any ROI still held from a leverage-funded lock
+    // is released (the lock only applies while the program runs). Self-heals
+    // programs that exited before this release existed.
+    for (const req of mine.filter((r) => r.kind === "ppp" && r.status === "cancelled")) {
+      const ownerId = await resolveDataOwnerIdFor(req.userId)
+      const rows = await loadOwnerRows(ownerId)
+      const prefix = `PPP-ROI-${req.id}-`
+      for (const [id, row] of rows) {
+        if (!id.startsWith(prefix) || row.status !== "hold") continue
+        const released = {
+          ...row,
+          status: "completed" as const,
+          comment: `${row.comment ?? ""} Released on early exit — now withdrawable.`.trim(),
+        }
+        await upsertLedgerEntry(ownerId, released)
+        rows.set(id, released)
+        applied += 1
+      }
+    }
+
     const pppReqs = mine.filter((r) => r.kind === "ppp" && r.status === "approved")
     for (const req of pppReqs) {
       const ownerId = await resolveDataOwnerIdFor(req.userId)
