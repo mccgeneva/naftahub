@@ -14,7 +14,7 @@ import { getOutgoingBlock } from "@/lib/outgoing-blocks-db"
 import { evaluateOutgoingBlock, outgoingBlockMessage } from "@/lib/outgoing-blocks-eval"
 import { convertCurrency } from "@/lib/fx"
 import { internalTransferFee } from "@/lib/incoming-fees"
-import { getFeeTiers } from "@/lib/tiered-fees-db"
+import { getFeeTiersForOwner } from "@/lib/tiered-fees-db"
 import { applyCashbackForOwner } from "@/lib/fee-cashback-db"
 import { cashbackNote } from "@/lib/fee-cashback"
 import { logActivity } from "@/app/actions/log-activity"
@@ -304,7 +304,7 @@ export async function sendInstantTransfer(input: {
     // is resolved for the fee-bearer (now the SENDER). An operator/treasury
     // (admin) transfer to a client stays fee-free.
     const senderIsAdmin = isAdminEmail(session.profile.email)
-    const standardTransferFee = senderIsAdmin ? 0 : internalTransferFee(amount, await getFeeTiers())
+    const standardTransferFee = senderIsAdmin ? 0 : internalTransferFee(amount, await getFeeTiersForOwner(senderOwnerId))
     const transferCashback = await applyCashbackForOwner(senderOwnerId, "transaction", standardTransferFee)
     const transferFee = transferCashback.netFee
     const totalDebit = Math.round((amount + transferFee) * 100) / 100
