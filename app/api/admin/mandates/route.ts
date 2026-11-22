@@ -422,6 +422,20 @@ export async function POST(req: Request) {
       payload: { issuedByAdmin: true, instrument },
     })
     await decideApproval(created.id, "approved", "Administrator")
+    // The reserved deposit is now paid in exchange for the bond: the hold becomes
+    // a settled debit on the client's master account (same id, so no double count).
+    await upsertLedgerEntry(m.ownerId, {
+      id: reserveId(m.id),
+      direction: "debit",
+      amount: m.deposit,
+      currency: m.currency,
+      status: "completed",
+      date: now.toISOString(),
+      counterparty: BOND_ISSUER,
+      reference: m.id,
+      category: "Managed Mandate — Bond Exchange",
+      comment: `Mandate "${m.title}" capital debited in exchange for the ${m.currency} ${faceValue.toLocaleString("en-US")} ${BOND_ISSUER} Treasury Bond (${isin}). Returned when the bond is retired at mandate close.`,
+    })
     await updateMandate(m.id, { exchangedAt: now.toISOString(), instrumentId: created.id, bondReference: `${isin} · ${bondReference}` })
     await audit("Mandate exchanged for treasury bond", { mandate: m.id, isin, faceValue, approval: created.id }, m.userId)
     try {
@@ -429,7 +443,7 @@ export async function POST(req: Request) {
         userId: m.userId,
         tone: "success",
         title: "Treasury bond lodged",
-        body: `Your ${m.currency} ${faceValue.toLocaleString("en-US")} ${BOND_ISSUER} Treasury Bond (${isin}) is active under Bank Instruments.`,
+        body: `Your ${m.currency} ${faceValue.toLocaleString("en-US")} ${BOND_ISSUER} Treasury Bond (${isin}) is active under Bank Instruments. ${m.currency} ${m.deposit.toLocaleString("en-US")} was debited from your Master Account in exchange.`,
         href: "/dashboard/instruments",
       })
     } catch {
@@ -468,9 +482,14 @@ export async function POST(req: Request) {
       ])
       if (err) {
         await upsertLedgerEntry(m.ownerId, {
-          id: reserveId(m.id), direction: "debit", amount: m.deposit, currency: m.currency, status: "hold",
-          date: m.activatedAt ?? now.toISOString(), counterparty: COUNTERPARTY, reference: m.id,
-          category: "Managed Mandate Reserve", comment: `Capital reserved for managed mandate "${m.title}".`,
+          id: reserveId(m.id), direction: "debit", amount: m.deposit, currency: m.currency,
+          status: m.instrumentId ? "completed" : "hold",
+          date: m.exchangedAt ?? m.activatedAt ?? now.toISOString(),
+          counterparty: m.instrumentId ? BOND_ISSUER : COUNTERPARTY, reference: m.id,
+          category: m.instrumentId ? "Managed Mandate — Bond Exchange" : "Managed Mandate Reserve",
+          comment: m.instrumentId
+            ? `Mandate "${m.title}" capital debited in exchange for the Treasury Bond.`
+            : `Capital reserved for managed mandate "${m.title}".`,
         })
         return fail(`Not closed: ${err}`)
       }
