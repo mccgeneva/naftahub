@@ -86,6 +86,23 @@ export function ApiKeysManager({ passcode }: { passcode: string }) {
     }
   }
 
+  const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null)
+
+  // Only the SHA-256 hash of a key is stored, so the full secret is unrecoverable
+  // after creation; the prefix is what identifies the key to its holder.
+  const copyKeyId = async (id: string, prefix: string) => {
+    try {
+      await navigator.clipboard.writeText(prefix)
+      setCopiedKeyId(id)
+      toast.success("Key ID copied", {
+        description: "The full secret is only shown once, when the key is created.",
+      })
+      setTimeout(() => setCopiedKeyId((cur) => (cur === id ? null : cur)), 2000)
+    } catch {
+      toast.error("Could not copy to clipboard")
+    }
+  }
+
   const handleRevoke = async (id: string) => {
     const res = await adminRevokeApiKey(passcode, id)
     if (res.ok) {
@@ -292,6 +309,19 @@ export function ApiKeysManager({ passcode }: { passcode: string }) {
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => copyKeyId(k.id, k.keyPrefix)}
+                      aria-label={`Copy key ID for ${k.name}`}
+                    >
+                      {copiedKeyId === k.id ? (
+                        <Check className="mr-2 h-4 w-4" />
+                      ) : (
+                        <Copy className="mr-2 h-4 w-4" />
+                      )}
+                      {copiedKeyId === k.id ? "Copied" : "Copy ID"}
+                    </Button>
                     {k.status === "active" && (
                       <Button variant="outline" size="sm" onClick={() => handleRevoke(k.id)}>
                         <Ban className="mr-2 h-4 w-4" />
