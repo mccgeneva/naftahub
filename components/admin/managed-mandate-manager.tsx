@@ -103,6 +103,8 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [actor, setActor] = useState("")
   const [attest, setAttest] = useState<Record<string, boolean>>({})
+  const [availableById, setAvailableById] = useState<Record<string, number>>({})
+  const [resizeVal, setResizeVal] = useState<Record<string, string>>({})
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ userId: "", title: "", currency: "EUR", deposit: "", leverageRatio: "1", targetNote: "" })
   const [bondForm, setBondForm] = useState<Record<string, BondForm>>({})
@@ -126,6 +128,7 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
       setMandates(data.mandates as Mandate[])
       setClients(data.clients as typeof clients)
       setActor(String(data.actor ?? ""))
+      setAvailableById((data.availableById as Record<string, number>) ?? {})
     } else toast.error(String(data.error ?? "Could not load mandates"))
     setLoading(false)
   }, [call])
@@ -294,6 +297,71 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
                   )}
                 </dl>
                 {m.targetNote && <p className="rounded-md bg-muted p-2 text-xs leading-relaxed text-muted-foreground">Internal note: {m.targetNote}</p>}
+
+                {m.status === "pending_financing" && (() => {
+                  const avail = availableById[m.id] ?? 0
+                  const short = avail + 0.01 < m.deposit
+                  const rv = resizeVal[m.id] ?? ""
+                  const newDep = Number(rv)
+                  return (
+                    <div
+                      className={`flex flex-col gap-3 rounded-md border p-3 ${short ? "border-destructive/40 bg-destructive/5" : "border-border bg-muted/40"}`}
+                    >
+                      <div className="flex items-center justify-between gap-2 text-sm">
+                        <span className="text-muted-foreground">Client available</span>
+                        <span className={`font-mono tabular-nums ${short ? "text-destructive" : ""}`}>{fmt(avail, m.currency)}</span>
+                      </div>
+                      {short ? (
+                        <p className="text-pretty text-xs leading-relaxed text-destructive">
+                          Short by {fmt(m.deposit - avail, m.currency)}. Fund the client&apos;s account, or reduce the deposit to what they hold.
+                        </p>
+                      ) : (
+                        <p className="text-xs leading-relaxed text-muted-foreground">The deposit is fully covered and can be reserved.</p>
+                      )}
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor={`rs-${m.id}`}>Adjust deposit</Label>
+                        <div className="flex gap-2">
+                          <MoneyInput
+                            id={`rs-${m.id}`}
+                            className="h-11 min-w-0 flex-1 text-base"
+                            value={rv}
+                            onValueChange={(v) => setResizeVal((s) => ({ ...s, [m.id]: v }))}
+                            placeholder={m.deposit.toLocaleString("en-US")}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-11 shrink-0"
+                            disabled={!(avail > 0)}
+                            onClick={() => setResizeVal((s) => ({ ...s, [m.id]: String(Math.floor(avail * 100) / 100) }))}
+                          >
+                            Use max
+                          </Button>
+                        </div>
+                        {newDep > 0 && (
+                          <p className="text-xs leading-relaxed text-muted-foreground">
+                            {m.leverageRatio > 1
+                              ? `Borrowed ${fmt(newDep * (m.leverageRatio - 1), m.currency)} · bond face value ${fmt(newDep * m.leverageRatio, m.currency)}`
+                              : `Bond face value ${fmt(newDep, m.currency)}`}
+                            {newDep > avail + 0.01 && " — still above the available balance"}
+                          </p>
+                        )}
+                        <Button
+                          variant="secondary"
+                          className="h-11"
+                          disabled={busy === `rs-${m.id}` || !(newDep > 0) || Math.abs(newDep - m.deposit) < 0.01}
+                          onClick={async () => {
+                            const ok = await run(`rs-${m.id}`, { op: "resize", id: m.id, deposit: newDep }, "Deposit updated")
+                            if (ok) setResizeVal((s) => ({ ...s, [m.id]: "" }))
+                          }}
+                        >
+                          {busy === `rs-${m.id}` && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+                          Save new deposit
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                })()}
 
                 {m.status === "pending_financing" && m.createdBy === actor && (
                   <SoleAdminAttest

@@ -167,6 +167,10 @@ export async function updateMandate(
       | "exchangedAt"
       | "instrumentId"
       | "bondReference"
+      | "deposit"
+      | "borrowed"
+      | "leverageRatio"
+      | "annualInterestRate"
     >
   >,
 ): Promise<void> {
@@ -177,11 +181,13 @@ export async function updateMandate(
   await query(
     `UPDATE managed_mandates SET status=$2, distributions=$3::jsonb, activated_at=$4, activated_by=$5,
        last_interest_at=$6, closed_at=$7, exchange_requested_at=$8, exchanged_at=$9,
-       instrument_id=$10, bond_reference=$11 WHERE id=$1`,
+       instrument_id=$10, bond_reference=$11, deposit=$12, borrowed=$13, leverage_ratio=$14,
+       annual_interest_rate=$15 WHERE id=$1`,
     [
       id, next.status, JSON.stringify(next.distributions), next.activatedAt, next.activatedBy,
       next.lastInterestAt, next.closedAt, next.exchangeRequestedAt, next.exchangedAt,
-      next.instrumentId, next.bondReference,
+      next.instrumentId, next.bondReference, next.deposit, next.borrowed, next.leverageRatio,
+      next.annualInterestRate,
     ],
   )
 }
