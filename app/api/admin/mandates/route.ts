@@ -12,6 +12,10 @@ import {
 import { insertNotification } from "@/lib/notifications-db"
 import { persistActivityEvent } from "@/lib/activity-persist"
 import { debitInterestRateFor, STANDARD_MAX_LEVERAGE } from "@/lib/leverage-rates"
+import { decideApproval, deleteApprovalForUser, insertApproval } from "@/lib/approvals-db"
+import { isValidIsin } from "@/lib/instrument-identifiers"
+
+const BOND_ISSUER = "HSBC Hong Kong"
 import {
   getMandate,
   insertMandate,
@@ -116,6 +120,10 @@ export async function POST(req: Request) {
       activatedBy: null,
       lastInterestAt: null,
       closedAt: null,
+      exchangeRequestedAt: null,
+      exchangedAt: null,
+      instrumentId: null,
+      bondReference: null,
     }
     await insertMandate(mandate)
     await audit("Mandate created", { mandate: mandate.id, deposit, currency, ratio }, userId)
@@ -244,6 +252,68 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true })
   }
 
+  if (op === "issue_bond") {
+    if (m.status !== "active") return fail("The bond can only be issued once financing is confirmed and the mandate is active.")
+    if (m.instrumentId) return fail("A bond has already been issued for this mandate.")
+    const isin = String(body.isin ?? "").trim().toUpperCase()
+    const bondReference = String(body.bondReference ?? "").trim()
+    if (!isValidIsin(isin)) return fail("Enter the valid ISIN of the bond issued by HSBC Hong Kong.")
+    if (!bondReference) return fail("Enter HSBC Hong Kong's issuance / custody reference.")
+    const faceValue = round2(m.deposit * m.leverageRatio)
+    const now = new Date()
+    const maturity = new Date(now)
+    maturity.setFullYear(maturity.getFullYear() + 1)
+    const instrumentId = `TBOND-${m.id}`
+    const instrument = {
+      id: instrumentId,
+      type: "TBOND",
+      typeFull: "Treasury Bond",
+      issuer: BOND_ISSUER,
+      faceValue,
+      currency: m.currency,
+      rating: "AA-",
+      issuedDate: now.toISOString(),
+      expiryDate: maturity.toISOString(),
+      status: "active",
+      owner: m.holderLabel,
+      isin,
+      serialNumber: bondReference,
+      // Backed by the reserved mandate capital plus the MCC financing, so it
+      // stays lodged with the client and cannot be sold or monetized.
+      assignable: false,
+      monetizable: false,
+      blocked: false,
+      deliveryMethod: "Custody — HSBC Hong Kong",
+      tradeType: `Exchanged from managed mandate "${m.title}" (${m.currency} ${m.deposit.toLocaleString("en-US")} × 1:${m.leverageRatio})`,
+      mandateId: m.id,
+    }
+    const created = await insertApproval({
+      id: `INST-${instrumentId}`,
+      userId: m.userId,
+      kind: "instrument",
+      title: `Treasury Bond · ${BOND_ISSUER}`,
+      summary: `${m.currency} ${faceValue.toLocaleString("en-US")} Treasury Bond (${isin}) issued by ${BOND_ISSUER} in exchange for mandate ${m.id}.`,
+      amount: faceValue,
+      currency: m.currency,
+      payload: { issuedByAdmin: true, instrument },
+    })
+    await decideApproval(created.id, "approved", "Administrator")
+    await updateMandate(m.id, { exchangedAt: now.toISOString(), instrumentId: created.id, bondReference: `${isin} · ${bondReference}` })
+    await audit("Mandate exchanged for treasury bond", { mandate: m.id, isin, faceValue, approval: created.id }, m.userId)
+    try {
+      await insertNotification({
+        userId: m.userId,
+        tone: "success",
+        title: "Treasury bond lodged",
+        body: `Your ${m.currency} ${faceValue.toLocaleString("en-US")} ${BOND_ISSUER} Treasury Bond (${isin}) is active under Bank Instruments.`,
+        href: "/dashboard/instruments",
+      })
+    } catch {
+      /* best-effort */
+    }
+    return NextResponse.json({ ok: true, faceValue })
+  }
+
   if (op === "close" || op === "cancel") {
     if (op === "cancel") {
       if (m.status !== "pending_financing") return fail("Only a mandate pending financing can be cancelled.")
@@ -282,6 +352,10 @@ export async function POST(req: Request) {
       }
     } else {
       await deleteLedgerEntry(m.ownerId, reserveId(m.id))
+    }
+    if (m.instrumentId) {
+      // The bond is backed by this mandate, so it is retired when the mandate unwinds.
+      await deleteApprovalForUser(m.instrumentId, m.userId).catch(() => false)
     }
     await updateMandate(m.id, { status: "closed", closedAt: now.toISOString(), lastInterestAt: now.toISOString() })
     await audit("Mandate closed", { mandate: m.id, finalInterest: interest }, m.userId)

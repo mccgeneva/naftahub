@@ -2302,6 +2302,9 @@ async function instrumentEngagementReason(
  */
 async function instrumentPledgedElsewhere(instrumentId: string, userId: string): Promise<string | null> {
   if (!instrumentId) return null
+  if (instrumentId.startsWith("TBOND-MAN-")) {
+    return "a managed mandate (this treasury bond is already backed by that mandate's financing)"
+  }
   let ids = [userId]
   try {
     ids = Array.from(new Set([userId, ...(await resolveEnvironmentMemberIds(userId))]))

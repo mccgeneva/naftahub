@@ -38,6 +38,10 @@ export interface ManagedMandate {
   activatedBy: string | null
   lastInterestAt: string | null
   closedAt: string | null
+  exchangeRequestedAt: string | null
+  exchangedAt: string | null
+  instrumentId: string | null
+  bondReference: string | null
 }
 
 let ensured = false
@@ -68,6 +72,13 @@ async function ensureTable(): Promise<void> {
      )`,
   )
   await query(`CREATE INDEX IF NOT EXISTS managed_mandates_user_idx ON managed_mandates (user_id)`)
+  await query(
+    `ALTER TABLE managed_mandates
+       ADD COLUMN IF NOT EXISTS exchange_requested_at timestamptz,
+       ADD COLUMN IF NOT EXISTS exchanged_at timestamptz,
+       ADD COLUMN IF NOT EXISTS instrument_id text,
+       ADD COLUMN IF NOT EXISTS bond_reference text`,
+  )
   ensured = true
 }
 
@@ -97,6 +108,10 @@ function rowToMandate(r: Record<string, unknown>): ManagedMandate {
     activatedBy: (r.activated_by as string | null) ?? null,
     lastInterestAt: iso(r.last_interest_at),
     closedAt: iso(r.closed_at),
+    exchangeRequestedAt: iso(r.exchange_requested_at),
+    exchangedAt: iso(r.exchanged_at),
+    instrumentId: (r.instrument_id as string | null) ?? null,
+    bondReference: (r.bond_reference as string | null) ?? null,
   }
 }
 
@@ -139,7 +154,21 @@ export async function insertMandate(m: ManagedMandate): Promise<void> {
 
 export async function updateMandate(
   id: string,
-  patch: Partial<Pick<ManagedMandate, "status" | "distributions" | "activatedAt" | "activatedBy" | "lastInterestAt" | "closedAt">>,
+  patch: Partial<
+    Pick<
+      ManagedMandate,
+      | "status"
+      | "distributions"
+      | "activatedAt"
+      | "activatedBy"
+      | "lastInterestAt"
+      | "closedAt"
+      | "exchangeRequestedAt"
+      | "exchangedAt"
+      | "instrumentId"
+      | "bondReference"
+    >
+  >,
 ): Promise<void> {
   await ensureTable()
   const current = await getMandate(id)
@@ -147,7 +176,12 @@ export async function updateMandate(
   const next = { ...current, ...patch }
   await query(
     `UPDATE managed_mandates SET status=$2, distributions=$3::jsonb, activated_at=$4, activated_by=$5,
-       last_interest_at=$6, closed_at=$7 WHERE id=$1`,
-    [id, next.status, JSON.stringify(next.distributions), next.activatedAt, next.activatedBy, next.lastInterestAt, next.closedAt],
+       last_interest_at=$6, closed_at=$7, exchange_requested_at=$8, exchanged_at=$9,
+       instrument_id=$10, bond_reference=$11 WHERE id=$1`,
+    [
+      id, next.status, JSON.stringify(next.distributions), next.activatedAt, next.activatedBy,
+      next.lastInterestAt, next.closedAt, next.exchangeRequestedAt, next.exchangedAt,
+      next.instrumentId, next.bondReference,
+    ],
   )
 }
