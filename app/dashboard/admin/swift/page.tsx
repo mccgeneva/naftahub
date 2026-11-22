@@ -155,6 +155,12 @@ export default function AdminSwiftPage() {
 
   return (
     <div className="flex flex-col gap-8">
+      <Button asChild variant="outline" className="h-11 w-full">
+        <Link href="/dashboard/admin">
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to Admin Menu
+        </Link>
+      </Button>
       <SwiftRoutingQueue />
       <AdminSwiftInspector />
     </div>
