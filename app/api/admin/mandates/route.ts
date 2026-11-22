@@ -261,8 +261,24 @@ export async function POST(req: Request) {
     if (!bondReference) return fail("Enter HSBC Hong Kong's issuance / custody reference.")
     const faceValue = round2(m.deposit * m.leverageRatio)
     const now = new Date()
-    const maturity = new Date(now)
-    maturity.setFullYear(maturity.getFullYear() + 1)
+    const parseDate = (v: unknown) => {
+      const d = new Date(String(v ?? ""))
+      return Number.isNaN(d.getTime()) ? null : d
+    }
+    const issueDate = parseDate(body.issueDate) ?? now
+    const maturity = parseDate(body.maturityDate)
+    if (!maturity) return fail("Enter the bond's maturity date.")
+    if (maturity.getTime() <= issueDate.getTime()) return fail("Maturity date must be after the issue date.")
+    const couponRaw = String(body.couponRate ?? "").trim()
+    const couponRate = couponRaw === "" ? null : Number(couponRaw)
+    if (couponRate !== null && (!Number.isFinite(couponRate) || couponRate < 0 || couponRate > 50)) {
+      return fail("Coupon rate must be a percentage between 0 and 50.")
+    }
+    const ALLOWED_RATINGS = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB"]
+    const rating = ALLOWED_RATINGS.includes(String(body.rating)) ? String(body.rating) : "AA-"
+    const custodyAccount = String(body.custodyAccount ?? "").trim().slice(0, 80)
+    const commonCode = String(body.commonCode ?? "").trim().slice(0, 20)
+    const bondNotes = String(body.notes ?? "").trim().slice(0, 500)
     const instrumentId = `TBOND-${m.id}`
     const instrument = {
       id: instrumentId,
@@ -271,13 +287,17 @@ export async function POST(req: Request) {
       issuer: BOND_ISSUER,
       faceValue,
       currency: m.currency,
-      rating: "AA-",
-      issuedDate: now.toISOString(),
+      rating,
+      issuedDate: issueDate.toISOString(),
       expiryDate: maturity.toISOString(),
       status: "active",
       owner: m.holderLabel,
       isin,
       serialNumber: bondReference,
+      ...(commonCode ? { commonCode } : {}),
+      ...(couponRate !== null ? { couponRate } : {}),
+      ...(custodyAccount ? { custodyAccount } : {}),
+      ...(bondNotes ? { notes: bondNotes } : {}),
       // Backed by the reserved mandate capital plus the MCC financing, so it
       // stays lodged with the client and cannot be sold or monetized.
       assignable: false,
