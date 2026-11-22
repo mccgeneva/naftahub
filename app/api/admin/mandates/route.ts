@@ -119,6 +119,17 @@ export async function POST(req: Request) {
     }
     await insertMandate(mandate)
     await audit("Mandate created", { mandate: mandate.id, deposit, currency, ratio }, userId)
+    try {
+      await insertNotification({
+        userId,
+        tone: "info",
+        title: `Managed mandate opened — ${title}`,
+        body: `MCC Capital opened a managed mandate for ${currency} ${deposit.toLocaleString("en-US")}. It is pending financing; nothing is reserved until it is activated.`,
+        href: "/dashboard/treasury",
+      })
+    } catch (err) {
+      console.log("[v0] mandate create notification failed:", err)
+    }
     return NextResponse.json({ ok: true, mandate })
   }
 
