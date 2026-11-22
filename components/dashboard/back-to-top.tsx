@@ -30,6 +30,12 @@ export function BackToTop() {
     setScroller(el instanceof HTMLElement ? el : null)
   }, [])
 
+  // Every page change opens at the top, instead of keeping the previous
+  // page's scroll offset in the shared scroll container.
+  useEffect(() => {
+    scroller?.scrollTo({ top: 0, behavior: "auto" })
+  }, [pathname, scroller])
+
   useEffect(() => {
     if (!scroller) return
     const onScroll = () => {

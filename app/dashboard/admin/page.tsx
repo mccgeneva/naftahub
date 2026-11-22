@@ -226,6 +226,7 @@ import { SecurityAudit } from "@/components/admin/security-audit"
 import { CustomerInvestigation } from "@/components/admin/customer-investigation"
 import { ProjectFinanceAdmin } from "@/components/admin/project-finance-admin"
 import { toast } from "sonner"
+import { scrollDashboardToTop } from "@/lib/scroll-dashboard"
 
 const MASTER_ACCOUNT_CURRENCY = "EUR"
 
@@ -262,7 +263,7 @@ export default function AdminPage() {
       const view = (e as CustomEvent<{ view?: string }>).detail?.view
       if (!view) return
       setActiveView(view)
-      window.scrollTo({ top: 0, behavior: "smooth" })
+      scrollDashboardToTop()
     }
     window.addEventListener("admin:open-view", onOpenView)
     return () => window.removeEventListener("admin:open-view", onOpenView)
@@ -2565,7 +2566,7 @@ export default function AdminPage() {
 
   const openView = (id: string) => {
     setActiveView(id)
-    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" })
+    scrollDashboardToTop()
   }
 
   const scrollToSection = (id: string) => {
