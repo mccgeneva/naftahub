@@ -19,8 +19,42 @@
 // ---------------------------------------------------------------------------
 
 import "server-only"
-import { randomBytes, createHash, timingSafeEqual } from "node:crypto"
+import { randomBytes, createHash, timingSafeEqual, createCipheriv, createDecipheriv } from "node:crypto"
 import { query } from "@/lib/db"
+
+// Authentication still runs on the SHA-256 hash. The AES-256-GCM copy exists
+// only so an administrator can re-copy the full key from the admin panel; the
+// encryption key is derived from a server secret, so a database dump alone
+// cannot reveal a usable key.
+function cipherKey(): Buffer | null {
+  const secret = process.env.API_KEY_ENCRYPTION_SECRET || process.env.BETTER_AUTH_SECRET
+  if (!secret) return null
+  return createHash("sha256").update(`nqai-api-key-enc:${secret}`, "utf8").digest()
+}
+
+function encryptSecret(plaintext: string): string | null {
+  const key = cipherKey()
+  if (!key) return null
+  const iv = randomBytes(12)
+  const cipher = createCipheriv("aes-256-gcm", key, iv)
+  const enc = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()])
+  const tag = cipher.getAuthTag()
+  return `v1:${iv.toString("base64")}:${tag.toString("base64")}:${enc.toString("base64")}`
+}
+
+function decryptSecret(payload: string): string | null {
+  const key = cipherKey()
+  if (!key) return null
+  const [version, ivB64, tagB64, encB64] = payload.split(":")
+  if (version !== "v1" || !ivB64 || !tagB64 || !encB64) return null
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64"))
+    decipher.setAuthTag(Buffer.from(tagB64, "base64"))
+    return Buffer.concat([decipher.update(Buffer.from(encB64, "base64")), decipher.final()]).toString("utf8")
+  } catch {
+    return null
+  }
+}
 
 // "read"   — retrieve a customer's data.
 // "write"  — update a customer's contact details (phone, address, name).
@@ -52,11 +86,14 @@ export interface ApiKeyRecord {
   lastUsedAt: string | null
   revokedAt: string | null
   requestCount: number
+  /** True when an encrypted copy exists, so the full key can be re-copied. */
+  revealable: boolean
 }
 
 /** Internal shape that additionally carries the stored hash for verification. */
 interface ApiKeyRow extends ApiKeyRecord {
   keyHash: string
+  keyCipher: string | null
 }
 
 const KEY_PLAINTEXT_PREFIX = "nqai_live_"
@@ -83,6 +120,7 @@ async function ensureTable(): Promise<void> {
   // (admin/global) keys keep owner_user_id NULL and behave exactly as before.
   await query(`ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS owner_user_id text`)
   await query(`CREATE INDEX IF NOT EXISTS api_keys_owner_idx ON api_keys (owner_user_id)`)
+  await query(`ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS key_cipher text`)
   ensured = true
 }
 
@@ -105,13 +143,51 @@ function rowToRecord(row: Record<string, unknown>): ApiKeyRow {
     lastUsedAt: row.last_used_at ? ((row.last_used_at as Date)?.toISOString?.() ?? String(row.last_used_at)) : null,
     revokedAt: row.revoked_at ? ((row.revoked_at as Date)?.toISOString?.() ?? String(row.revoked_at)) : null,
     requestCount: Number(row.request_count ?? 0),
+    keyCipher: (row.key_cipher as string) ?? null,
+    revealable: Boolean(row.key_cipher),
   }
 }
 
-/** Strip the internal hash before returning to any caller that renders it. */
+/** Strip the internal hash and ciphertext before returning to any caller. */
 function toPublic(row: ApiKeyRow): ApiKeyRecord {
-  const { keyHash: _keyHash, ...pub } = row
+  const { keyHash: _keyHash, keyCipher: _keyCipher, ...pub } = row
   return pub
+}
+
+function generateSecret() {
+  const secret = randomBytes(24).toString("hex")
+  const plaintext = `${KEY_PLAINTEXT_PREFIX}${secret}`
+  return {
+    plaintext,
+    keyHash: sha256(plaintext),
+    keyPrefix: `${KEY_PLAINTEXT_PREFIX}${secret.slice(0, 8)}`,
+    keyCipher: encryptSecret(plaintext),
+  }
+}
+
+/** Decrypt the full key for an administrator. Null for legacy hash-only keys. */
+export async function revealApiKey(id: string): Promise<string | null> {
+  await ensureTable()
+  const { rows } = await query(`SELECT key_cipher FROM api_keys WHERE id = $1`, [id])
+  const payload = rows[0]?.key_cipher as string | undefined
+  return payload ? decryptSecret(payload) : null
+}
+
+/**
+ * Replace a key's secret while keeping its id, name, scopes and owner. The old
+ * secret stops authenticating immediately; the new one is returned in full.
+ */
+export async function regenerateApiKey(id: string): Promise<CreatedApiKey | null> {
+  await ensureTable()
+  const fresh = generateSecret()
+  const { rows } = await query(
+    `UPDATE api_keys
+        SET key_prefix = $2, key_hash = $3, key_cipher = $4,
+            status = 'active', revoked_at = NULL, last_used_at = NULL, request_count = 0
+      WHERE id = $1 RETURNING *`,
+    [id, fresh.keyPrefix, fresh.keyHash, fresh.keyCipher],
+  )
+  return rows[0] ? { record: toPublic(rowToRecord(rows[0])), plaintext: fresh.plaintext } : null
 }
 
 export interface CreateApiKeyInput {
@@ -138,17 +214,12 @@ export async function createApiKey(input: CreateApiKeyInput): Promise<CreatedApi
   const scopes = ALL_SCOPES.filter((s) => input.scopes.includes(s))
   if (scopes.length === 0) throw new Error("At least one scope is required.")
 
-  const secret = randomBytes(24).toString("hex") // 48 hex chars
-  const plaintext = `${KEY_PLAINTEXT_PREFIX}${secret}`
-  const keyHash = sha256(plaintext)
-  // Prefix shown in the UI so a key stays recognizable without exposing it:
-  // "nqai_live_" + first 8 chars of the secret.
-  const keyPrefix = `${KEY_PLAINTEXT_PREFIX}${secret.slice(0, 8)}`
+  const { plaintext, keyHash, keyPrefix, keyCipher } = generateSecret()
   const id = `ak_${randomBytes(6).toString("hex")}`
 
   const { rows } = await query(
-    `INSERT INTO api_keys (id, name, key_prefix, key_hash, scopes, status, created_by, owner_user_id)
-     VALUES ($1,$2,$3,$4,$5::jsonb,'active',$6,$7)
+    `INSERT INTO api_keys (id, name, key_prefix, key_hash, scopes, status, created_by, owner_user_id, key_cipher)
+     VALUES ($1,$2,$3,$4,$5::jsonb,'active',$6,$7,$8)
      RETURNING *`,
     [
       id,
@@ -158,6 +229,7 @@ export async function createApiKey(input: CreateApiKeyInput): Promise<CreatedApi
       JSON.stringify(scopes),
       input.createdBy ?? "",
       input.ownerUserId ?? null,
+      keyCipher,
     ],
   )
   return { record: toPublic(rowToRecord(rows[0])), plaintext }

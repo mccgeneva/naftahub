@@ -16,6 +16,8 @@ import {
   listApiKeys,
   revokeApiKey,
   deleteApiKey,
+  revealApiKey,
+  regenerateApiKey,
   ALL_SCOPES,
   type ApiKeyRecord,
   type ApiKeyScope,
@@ -68,6 +70,32 @@ export async function adminRevokeApiKey(passcode: string, id: string): Promise<M
   } catch (err) {
     console.log("[v0] adminRevokeApiKey failed:", (err as Error).message)
     return { ok: false, error: "The key could not be revoked." }
+  }
+}
+
+export type RevealApiKeyResult = { ok: true; plaintext: string } | { ok: false; error: string }
+
+export async function adminRevealApiKey(passcode: string, id: string): Promise<RevealApiKeyResult> {
+  if (!(await adminActionAuthorized(passcode))) return { ok: false, error: FORBIDDEN }
+  try {
+    const plaintext = await revealApiKey(id)
+    return plaintext
+      ? { ok: true, plaintext }
+      : { ok: false, error: "This older key was stored as a hash only. Regenerate it to get a copyable key." }
+  } catch (err) {
+    console.log("[v0] adminRevealApiKey failed:", (err as Error).message)
+    return { ok: false, error: "The key could not be retrieved." }
+  }
+}
+
+export async function adminRegenerateApiKey(passcode: string, id: string): Promise<CreateApiKeyResult> {
+  if (!(await adminActionAuthorized(passcode))) return { ok: false, error: FORBIDDEN }
+  try {
+    const res = await regenerateApiKey(id)
+    return res ? { ok: true, key: res.record, plaintext: res.plaintext } : { ok: false, error: "Key not found." }
+  } catch (err) {
+    console.log("[v0] adminRegenerateApiKey failed:", (err as Error).message)
+    return { ok: false, error: "The key could not be regenerated." }
   }
 }
 

@@ -1,7 +1,19 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { KeyRound, Plus, Copy, Check, Ban, Trash2, ShieldCheck, Eye, RefreshCw, AlertTriangle } from "lucide-react"
+import {
+  KeyRound,
+  Plus,
+  Copy,
+  Check,
+  Ban,
+  Trash2,
+  ShieldCheck,
+  Eye,
+  RefreshCw,
+  RotateCw,
+  AlertTriangle,
+} from "lucide-react"
 import { toast } from "sonner"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -22,6 +34,8 @@ import {
   adminCreateApiKey,
   adminRevokeApiKey,
   adminDeleteApiKey,
+  adminRevealApiKey,
+  adminRegenerateApiKey,
 } from "@/app/actions/api-keys"
 import type { ApiKeyRecord, ApiKeyScope } from "@/lib/api-keys-db"
 
@@ -87,19 +101,63 @@ export function ApiKeysManager({ passcode }: { passcode: string }) {
   }
 
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null)
+  const [busyKeyId, setBusyKeyId] = useState<string | null>(null)
+  const [regenTarget, setRegenTarget] = useState<ApiKeyRecord | null>(null)
+  const [regenerating, setRegenerating] = useState(false)
 
-  // Only the SHA-256 hash of a key is stored, so the full secret is unrecoverable
-  // after creation; the prefix is what identifies the key to its holder.
-  const copyKeyId = async (id: string, prefix: string) => {
+  const copyFullKey = async (k: ApiKeyRecord) => {
+    setBusyKeyId(k.id)
+    const pending = adminRevealApiKey(passcode, k.id)
+    let copiedOk = false
     try {
-      await navigator.clipboard.writeText(prefix)
-      setCopiedKeyId(id)
-      toast.success("Key ID copied", {
-        description: "The full secret is only shown once, when the key is created.",
-      })
-      setTimeout(() => setCopiedKeyId((cur) => (cur === id ? null : cur)), 2000)
+      // iOS Safari drops the tap gesture across an await, so hand the clipboard
+      // a pending ClipboardItem that resolves once the server returns the key.
+      if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "text/plain": pending.then((res) => {
+              if (!res.ok) throw new Error(res.error)
+              return new Blob([res.plaintext], { type: "text/plain" })
+            }),
+          }),
+        ])
+        copiedOk = true
+      }
     } catch {
-      toast.error("Could not copy to clipboard")
+      copiedOk = false
+    }
+
+    const res = await pending
+    setBusyKeyId(null)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    if (!copiedOk) {
+      try {
+        await navigator.clipboard.writeText(res.plaintext)
+        copiedOk = true
+      } catch {
+        setNewSecret({ name: k.name, plaintext: res.plaintext })
+        return
+      }
+    }
+    setCopiedKeyId(k.id)
+    toast.success("Full API key copied")
+    setTimeout(() => setCopiedKeyId((cur) => (cur === k.id ? null : cur)), 2000)
+  }
+
+  const handleRegenerate = async () => {
+    if (!regenTarget) return
+    setRegenerating(true)
+    const res = await adminRegenerateApiKey(passcode, regenTarget.id)
+    setRegenerating(false)
+    setRegenTarget(null)
+    if (res.ok) {
+      setNewSecret({ name: res.key.name, plaintext: res.plaintext })
+      await load()
+    } else {
+      toast.error(res.error)
     }
   }
 
@@ -308,20 +366,37 @@ export function ApiKeysManager({ passcode }: { passcode: string }) {
                       {k.lastUsedAt ? ` · last used ${new Date(k.lastUsedAt).toLocaleString()}` : " · never used"}
                     </p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => copyKeyId(k.id, k.keyPrefix)}
-                      aria-label={`Copy key ID for ${k.name}`}
-                    >
-                      {copiedKeyId === k.id ? (
-                        <Check className="mr-2 h-4 w-4" />
-                      ) : (
-                        <Copy className="mr-2 h-4 w-4" />
-                      )}
-                      {copiedKeyId === k.id ? "Copied" : "Copy ID"}
-                    </Button>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    {k.revealable ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="min-h-11 sm:min-h-9"
+                        onClick={() => copyFullKey(k)}
+                        disabled={busyKeyId === k.id}
+                        aria-label={`Copy full API key for ${k.name}`}
+                      >
+                        {busyKeyId === k.id ? (
+                          <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                        ) : copiedKeyId === k.id ? (
+                          <Check className="mr-2 h-4 w-4" />
+                        ) : (
+                          <Copy className="mr-2 h-4 w-4" />
+                        )}
+                        {copiedKeyId === k.id ? "Copied" : "Copy key"}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="min-h-11 sm:min-h-9"
+                        onClick={() => setRegenTarget(k)}
+                        aria-label={`Regenerate ${k.name} to get a copyable key`}
+                      >
+                        <RotateCw className="mr-2 h-4 w-4" />
+                        Regenerate
+                      </Button>
+                    )}
                     {k.status === "active" && (
                       <Button variant="outline" size="sm" onClick={() => handleRevoke(k.id)}>
                         <Ban className="mr-2 h-4 w-4" />
@@ -345,6 +420,31 @@ export function ApiKeysManager({ passcode }: { passcode: string }) {
         </CardContent>
       </Card>
 
+      <Dialog open={!!regenTarget} onOpenChange={(open) => !open && !regenerating && setRegenTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RotateCw className="h-5 w-5 text-primary" />
+              Regenerate this key?
+            </DialogTitle>
+            <DialogDescription>
+              <strong>{regenTarget?.name}</strong> was created before full keys were stored, so it can&apos;t be
+              copied. Regenerating issues a new key with the same scopes that you can copy anytime. The current key
+              stops working immediately, so update the integration with the new one.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col gap-2 sm:flex-row">
+            <Button variant="outline" onClick={() => setRegenTarget(null)} disabled={regenerating}>
+              Cancel
+            </Button>
+            <Button onClick={handleRegenerate} disabled={regenerating}>
+              {regenerating ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <RotateCw className="mr-2 h-4 w-4" />}
+              Regenerate key
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* One-time secret reveal */}
       <Dialog open={!!newSecret} onOpenChange={(open) => !open && setNewSecret(null)}>
         <DialogContent>
@@ -354,8 +454,8 @@ export function ApiKeysManager({ passcode }: { passcode: string }) {
               Copy your API key now
             </DialogTitle>
             <DialogDescription>
-              This is the only time the full secret for <strong>{newSecret?.name}</strong> is shown. Store it securely —
-              it cannot be retrieved again.
+              Full key for <strong>{newSecret?.name}</strong>. You can copy it again later from the Issued keys list.
+              Keep it secure.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
