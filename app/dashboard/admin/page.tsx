@@ -2662,7 +2662,7 @@ export default function AdminPage() {
 
       {/* Breadcrumb / back bar — shown inside any section */}
       {activeView !== "menu" && activeNav && (
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="sticky top-0 z-30 -mx-1 flex flex-col gap-3 bg-background/95 px-1 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <button
               type="button"
