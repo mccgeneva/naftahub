@@ -5,6 +5,75 @@ import { createPortal } from "react-dom"
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport, type UIMessage } from "ai"
 import { Streamdown } from "streamdown"
+import { toast } from "sonner"
+
+type TableFormat = "md" | "csv" | "tsv"
+
+const TABLE_MENU_FORMATS: Record<string, TableFormat> = { markdown: "md", csv: "csv", tsv: "tsv" }
+
+function readTable(table: HTMLTableElement): string[][] {
+  return Array.from(table.querySelectorAll("tr")).map((row) =>
+    Array.from(row.querySelectorAll("th,td")).map((cell) => (cell.textContent ?? "").replace(/\s+/g, " ").trim()),
+  )
+}
+
+function serializeTable(rows: string[][], format: TableFormat): string {
+  if (format === "tsv") return rows.map((r) => r.map((c) => c.replace(/\t/g, " ")).join("\t")).join("\n")
+  if (format === "csv") {
+    return rows.map((r) => r.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(",")).join("\n")
+  }
+  if (rows.length === 0) return ""
+  const [head, ...body] = rows
+  const line = (r: string[]) => `| ${head.map((_, i) => (r[i] ?? "").replace(/\|/g, "\\|")).join(" | ")} |`
+  return [line(head), `| ${head.map(() => "---").join(" | ")} |`, ...body.map(line)].join("\n")
+}
+
+function copyPlainText(value: string): boolean {
+  const ta = document.createElement("textarea")
+  ta.value = value
+  ta.setAttribute("readonly", "")
+  ta.style.position = "fixed"
+  ta.style.top = "0"
+  ta.style.opacity = "0"
+  ta.style.fontSize = "16px"
+  document.body.appendChild(ta)
+  ta.select()
+  ta.setSelectionRange(0, value.length)
+  let ok = false
+  try {
+    ok = document.execCommand("copy")
+  } catch {
+    ok = false
+  }
+  document.body.removeChild(ta)
+  return ok
+}
+
+// Streamdown's table "Copy → Markdown / CSV / TSV" writes a rich ClipboardItem, which iOS
+// Safari and the installed PWA reject silently. Intercept those three options and copy plain
+// text in the same tap instead, which iOS allows.
+function handleTableMenuClick(event: React.MouseEvent<HTMLDivElement>) {
+  const button = (event.target as HTMLElement).closest("button")
+  if (!button || !/copy/i.test(button.title)) return
+  const wrapper = button.closest('[data-streamdown="table-wrapper"]')
+  const format = TABLE_MENU_FORMATS[(button.textContent ?? "").trim().toLowerCase()]
+  if (!wrapper || !format) return
+  const table = wrapper.querySelector("table")
+  if (!table) return
+
+  event.preventDefault()
+  event.stopPropagation()
+  const text = serializeTable(readTable(table), format)
+  const label = format === "md" ? "Markdown" : format.toUpperCase()
+  const done = (ok: boolean) =>
+    ok ? toast.success(`Table copied as ${label}`) : toast.error("Could not copy the table on this device")
+
+  if (copyPlainText(text)) done(true)
+  else if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => done(true), () => done(false))
+  else done(false)
+
+  document.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }))
+}
 import {
   Cpu,
   ArrowUp,
@@ -1622,6 +1691,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                   isUser ? (
                     <p className="whitespace-pre-wrap text-pretty break-words [overflow-wrap:anywhere]">{text}</p>
                   ) : (
+                    <div className="min-w-0" onClickCapture={handleTableMenuClick}>
                     <Streamdown
                       className={cn(
                         "max-w-none min-w-0 break-words text-[15px] leading-relaxed sm:text-[13px]",
@@ -1647,6 +1717,7 @@ export function NqaiChat({ variant = "page" }: { variant?: "page" | "panel" }) {
                     >
                       {text}
                     </Streamdown>
+                    </div>
                   )
                 ) : isLive && files.length === 0 && docs.length === 0 ? (
                   <span className="inline-flex items-center gap-1 text-muted-foreground">
