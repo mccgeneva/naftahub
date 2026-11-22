@@ -43,11 +43,19 @@ export function PasscodePad({
     onChange(next)
   }
 
+  const clear = () => {
+    if (disabled) return
+    valueRef.current = ""
+    onChange("")
+  }
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (disabled) return
       if (/^\d$/.test(e.key)) {
         press(e.key)
+      } else if (e.key === "Escape") {
+        clear()
       } else if (e.key === "Backspace") {
         backspace()
       } else if (e.key === "Enter") {
@@ -82,7 +90,15 @@ export function PasscodePad({
             {k}
           </PadKey>
         ))}
-        <span aria-hidden="true" />
+        <PadKey
+          onClick={clear}
+          disabled={disabled || value.length === 0}
+          aria-label="Clear passcode and start again"
+          variant="ghost"
+          className="text-base font-semibold"
+        >
+          Clear
+        </PadKey>
         <PadKey onClick={() => press("0")} disabled={disabled} aria-label="0">
           0
         </PadKey>

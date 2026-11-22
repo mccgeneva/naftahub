@@ -869,6 +869,7 @@ export default function AdminPage() {
           window.location.href = "/login?expired=inactivity"
         }, 1400)
       } else if (data.reason === "pin") {
+        setPasscode("")
         setGateError("Incorrect administrator passcode. Please try again.")
       } else {
         setGateError("Could not verify administrator access. Please try again.")
