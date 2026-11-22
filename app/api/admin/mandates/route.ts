@@ -147,8 +147,9 @@ export async function POST(req: Request) {
 
   if (op === "activate") {
     if (m.status !== "pending_financing") return fail("Only a mandate pending financing can be activated.")
-    if (m.createdBy !== "admin" && actor !== "admin" && m.createdBy === actor) {
-      return fail("A second administrator must confirm financing — the creator cannot activate their own mandate.")
+    const selfActivation = m.createdBy === actor
+    if (selfActivation && body.selfAttest !== true) {
+      return fail("You created this mandate — tick the sole-administrator attestation to confirm financing yourself.")
     }
     const available = availableByCurrency(await readLedgerEntries(m.ownerId))[m.currency] ?? 0
     if (available + 0.01 < m.deposit) {
@@ -171,7 +172,7 @@ export async function POST(req: Request) {
     ])
     if (err) return fail(err)
     await updateMandate(m.id, { status: "active", activatedAt: now, activatedBy: actor, lastInterestAt: now })
-    await audit("Mandate activated", { mandate: m.id, deposit: m.deposit }, m.userId)
+    await audit("Mandate activated", { mandate: m.id, deposit: m.deposit, singleAdminOverride: selfActivation ? "yes" : "no" }, m.userId)
     await notify(m.userId, "Managed mandate active", `${m.currency} ${m.deposit.toLocaleString("en-US")} is now reserved for "${m.title}".`, "success")
     return NextResponse.json({ ok: true })
   }
@@ -199,8 +200,12 @@ export async function POST(req: Request) {
     const distId = String(body.distributionId ?? "")
     const d = m.distributions.find((x) => x.id === distId)
     if (!d || d.status !== "pending") return fail("Distribution is not pending.")
-    if (actor !== "admin" && d.recordedBy === actor) {
-      return fail("A second administrator must approve — you recorded this distribution.")
+    const selfApproval = d.recordedBy === actor
+    if (selfApproval && body.selfAttest !== true) {
+      return fail("You recorded this distribution — tick the sole-administrator attestation to approve it yourself.")
+    }
+    if (selfApproval) {
+      await audit("Mandate distribution self-approved (sole administrator)", { mandate: m.id, distribution: distId, decision: op }, m.userId)
     }
     const now = new Date()
     if (op === "reject") {

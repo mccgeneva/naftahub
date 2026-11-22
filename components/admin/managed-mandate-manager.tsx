@@ -101,6 +101,8 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
   const [clients, setClients] = useState<{ id: string; label: string; email: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
+  const [actor, setActor] = useState("")
+  const [attest, setAttest] = useState<Record<string, boolean>>({})
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ userId: "", title: "", currency: "EUR", deposit: "", leverageRatio: "1", targetNote: "" })
   const [bondForm, setBondForm] = useState<Record<string, BondForm>>({})
@@ -123,6 +125,7 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
     if (data.ok) {
       setMandates(data.mandates as Mandate[])
       setClients(data.clients as typeof clients)
+      setActor(String(data.actor ?? ""))
     } else toast.error(String(data.error ?? "Could not load mandates"))
     setLoading(false)
   }, [call])
@@ -292,9 +295,21 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
                 </dl>
                 {m.targetNote && <p className="rounded-md bg-muted p-2 text-xs leading-relaxed text-muted-foreground">Internal note: {m.targetNote}</p>}
 
+                {m.status === "pending_financing" && m.createdBy === actor && (
+                  <SoleAdminAttest
+                    id={`att-act-${m.id}`}
+                    checked={!!attest[`act-${m.id}`]}
+                    onChange={(v) => setAttest((s) => ({ ...s, [`act-${m.id}`]: v }))}
+                    text="I am the sole administrator and I confirm the financing for this mandate is secured. This self-confirmation is recorded in the audit log."
+                  />
+                )}
                 {m.status === "pending_financing" && (
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <Button className="h-11 flex-1" disabled={busy === `act-${m.id}`} onClick={() => run(`act-${m.id}`, { op: "activate", id: m.id }, "Financing confirmed — capital reserved")}>
+                    <Button
+                      className="h-11 flex-1"
+                      disabled={busy === `act-${m.id}` || (m.createdBy === actor && !attest[`act-${m.id}`])}
+                      onClick={() => run(`act-${m.id}`, { op: "activate", id: m.id, selfAttest: !!attest[`act-${m.id}`] }, "Financing confirmed — capital reserved")}
+                    >
                       {busy === `act-${m.id}` && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
                       Confirm financing &amp; activate
                     </Button>
@@ -409,14 +424,31 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
                 {pending.map((d) => (
                   <div key={d.id} className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
                     <p className="text-sm">
-                      <span className="font-medium">{d.periodLabel}</span> · {fmt(d.amount, m.currency)} awaiting second approval
+                      <span className="font-medium">{d.periodLabel}</span> · {fmt(d.amount, m.currency)} awaiting approval
                     </p>
                     {d.note && <p className="text-xs text-muted-foreground">{d.note}</p>}
+                    {d.recordedBy === actor && (
+                      <SoleAdminAttest
+                        id={`att-ap-${d.id}`}
+                        checked={!!attest[`ap-${d.id}`]}
+                        onChange={(v) => setAttest((s) => ({ ...s, [`ap-${d.id}`]: v }))}
+                        text="I am the sole administrator and I confirm this amount reflects realised performance. This self-approval is recorded in the audit log."
+                      />
+                    )}
                     <div className="flex gap-2">
-                      <Button className="h-11 flex-1" disabled={busy === `ap-${d.id}`} onClick={() => run(`ap-${d.id}`, { op: "approve", id: m.id, distributionId: d.id }, "Distribution credited")}>
+                      <Button
+                        className="h-11 flex-1"
+                        disabled={busy === `ap-${d.id}` || (d.recordedBy === actor && !attest[`ap-${d.id}`])}
+                        onClick={() => run(`ap-${d.id}`, { op: "approve", id: m.id, distributionId: d.id, selfAttest: !!attest[`ap-${d.id}`] }, "Distribution credited")}
+                      >
                         <Check className="h-4 w-4" aria-hidden="true" /> Approve &amp; credit
                       </Button>
-                      <Button variant="outline" className="h-11" disabled={busy === `rj-${d.id}`} onClick={() => run(`rj-${d.id}`, { op: "reject", id: m.id, distributionId: d.id }, "Distribution rejected")}>
+                      <Button
+                        variant="outline"
+                        className="h-11"
+                        disabled={busy === `rj-${d.id}` || (d.recordedBy === actor && !attest[`ap-${d.id}`])}
+                        onClick={() => run(`rj-${d.id}`, { op: "reject", id: m.id, distributionId: d.id, selfAttest: !!attest[`ap-${d.id}`] }, "Distribution rejected")}
+                      >
                         Reject
                       </Button>
                     </div>
@@ -455,5 +487,14 @@ export function ManagedMandateManager({ passcode }: { passcode: string }) {
         )}
       </CardContent>
     </Card>
+  )
+}
+
+function SoleAdminAttest({ id, checked, onChange, text }: { id: string; checked: boolean; onChange: (v: boolean) => void; text: string }) {
+  return (
+    <label htmlFor={id} className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm leading-relaxed">
+      <input id={id} type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-primary" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span className="min-w-0 text-pretty">{text}</span>
+    </label>
   )
 }
