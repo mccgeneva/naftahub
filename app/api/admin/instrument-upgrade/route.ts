@@ -272,6 +272,15 @@ export async function POST(req: Request) {
       // transformed, even by the administrator: upgrading it would swap out
       // collateral that is actively securing borrowed funds. Only blocks a NEW
       // proposal; an already-open negotiation may still be revised/withdrawn.
+      // A Treasury Bond issued in exchange for a managed mandate is backed by the
+      // mandate's MCC financing — it is non-assignable/non-monetizable by design
+      // and must never be transformed into a new (monetizable) instrument.
+      if (inst.mandateId || inst.type === "TBOND") {
+        return NextResponse.json(
+          { ok: false, error: "This Treasury Bond is backed by a managed mandate's financing and cannot be upgraded or transformed." },
+          { status: 200 },
+        )
+      }
       if (op === "start") {
         const engaged = await instrumentEngagementReason(String(inst.id ?? ""), existing.userId)
         if (engaged) {
