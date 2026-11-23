@@ -8205,6 +8205,12 @@ export async function acceptInstrumentUpgrade(approvalId: string): Promise<Instr
       }
     }
     const oldBase = (payload.issuedByAdmin ? payload.instrument : payload.record ?? payload.instrument) ?? {}
+    if ((oldBase as { mandateId?: unknown }).mandateId || (oldBase as { type?: unknown }).type === "TBOND") {
+      return {
+        ok: false,
+        error: "This Treasury Bond is backed by a managed mandate's financing and cannot be upgraded or transformed.",
+      }
+    }
 
     // Charge the one-time expertise & upgrade fee NOW (on confirm) unless a
     // legacy `proposed` deal already charged it. Balance verified first —
