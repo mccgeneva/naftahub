@@ -52,7 +52,7 @@ export function isGatewayCurrency(code: string): boolean {
  * in this server-safe module so both the client page and the server action can
  * import it (a "use server" file may only export async functions).
  */
-export const GATEWAY_ACCOUNT_FEE = 500
+export const GATEWAY_ACCOUNT_FEE = 950
 export const GATEWAY_FEE_CURRENCY = "EUR"
 
 /**
