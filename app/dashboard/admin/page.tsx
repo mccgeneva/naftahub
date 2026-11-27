@@ -588,7 +588,9 @@ export default function AdminPage() {
     return () => {
       cancelled = true
     }
-  }, [unlocked])
+    // Refetch on every view change so the tile clears right after the admin
+    // approves an account in the Payment Gateway view and navigates back.
+  }, [unlocked, activeView])
 
   // Count of INCOMING SWIFT messages awaiting credit/booking — customer-uploaded
   // printouts (e.g. an MT760) and matched inbound messages. Without surfacing
